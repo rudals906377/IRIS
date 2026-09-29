@@ -1,0 +1,345 @@
+{
+  "version": 1,
+  "products": [
+    {
+      "id": "tee-white",
+      "name": "화이트 반팔 티셔츠",
+      "category": "top",
+      "image": "tee-white.webp",
+      "thumb": "tee-white_thumb.webp",
+      "parts": "tee-white_parts.png",
+      "size": [
+        1000,
+        900
+      ],
+      "keypoints": {
+        "neckL": [
+          584.0,
+          96.0
+        ],
+        "neckR": [
+          416.0,
+          96.0
+        ],
+        "neckFront": [
+          500.0,
+          172.0
+        ],
+        "shoulderL": [
+          712.0,
+          142.0
+        ],
+        "shoulderR": [
+          288.0,
+          142.0
+        ],
+        "armpitL": [
+          742.0,
+          322.0
+        ],
+        "armpitR": [
+          258.0,
+          322.0
+        ],
+        "sleeveOuterL": [
+          905.0,
+          318.0
+        ],
+        "sleeveInnerL": [
+          832.0,
+          392.0
+        ],
+        "sleeveOuterR": [
+          95.0,
+          318.0
+        ],
+        "sleeveInnerR": [
+          168.0,
+          392.0
+        ],
+        "hemL": [
+          734.0,
+          852.0
+        ],
+        "hemR": [
+          266.0,
+          852.0
+        ]
+      },
+      "sleeve": "short",
+      "credit": "IRIS 자체 제작 이미지 (CC0)"
+    },
+    {
+      "id": "tee-navy-logo",
+      "name": "네이비 로고 반팔 티셔츠",
+      "category": "top",
+      "image": "tee-navy-logo.webp",
+      "thumb": "tee-navy-logo_thumb.webp",
+      "parts": "tee-navy-logo_parts.png",
+      "size": [
+        1000,
+        900
+      ],
+      "keypoints": {
+        "neckL": [
+          584.0,
+          96.0
+        ],
+        "neckR": [
+          416.0,
+          96.0
+        ],
+        "neckFront": [
+          500.0,
+          172.0
+        ],
+        "shoulderL": [
+          712.0,
+          142.0
+        ],
+        "shoulderR": [
+          288.0,
+          142.0
+        ],
+        "armpitL": [
+          742.0,
+          322.0
+        ],
+        "armpitR": [
+          258.0,
+          322.0
+        ],
+        "sleeveOuterL": [
+          905.0,
+          318.0
+        ],
+        "sleeveInnerL": [
+          832.0,
+          392.0
+        ],
+        "sleeveOuterR": [
+          95.0,
+          318.0
+        ],
+        "sleeveInnerR": [
+          168.0,
+          392.0
+        ],
+        "hemL": [
+          734.0,
+          852.0
+        ],
+        "hemR": [
+          266.0,
+          852.0
+        ]
+      },
+      "sleeve": "short",
+      "credit": "IRIS 자체 제작 이미지 (CC0)"
+    },
+    {
+      "id": "tee-stripe",
+      "name": "블루 스트라이프 반팔 티셔츠",
+      "category": "top",
+      "image": "tee-stripe.webp",
+      "thumb": "tee-stripe_thumb.webp",
+      "parts": "tee-stripe_parts.png",
+      "size": [
+        1000,
+        900
+      ],
+      "keypoints": {
+        "neckL": [
+          584.0,
+          96.0
+        ],
+        "neckR": [
+          416.0,
+          96.0
+        ],
+        "neckFront": [
+          500.0,
+          172.0
+        ],
+        "shoulderL": [
+          712.0,
+          142.0
+        ],
+        "shoulderR": [
+          288.0,
+          142.0
+        ],
+        "armpitL": [
+          742.0,
+          322.0
+        ],
+        "armpitR": [
+          258.0,
+          322.0
+        ],
+        "sleeveOuterL": [
+          905.0,
+          318.0
+        ],
+        "sleeveInnerL": [
+          832.0,
+          392.0
+        ],
+        "sleeveOuterR": [
+          95.0,
+          318.0
+        ],
+        "sleeveInnerR": [
+          168.0,
+          392.0
+        ],
+        "hemL": [
+          734.0,
+          852.0
+        ],
+        "hemR": [
+          266.0,
+          852.0
+        ]
+      },
+      "sleeve": "short",
+      "credit": "IRIS 자체 제작 이미지 (CC0)"
+    },
+    {
+      "id": "tee-red",
+      "name": "레드 반팔 티셔츠",
+      "category": "top",
+      "image": "tee-red.webp",
+      "thumb": "tee-red_thumb.webp",
+      "parts": "tee-red_parts.png",
+      "size": [
+        1000,
+        900
+      ],
+      "keypoints": {
+        "neckL": [
+          584.0,
+          96.0
+        ],
+        "neckR": [
+          416.0,
+          96.0
+        ],
+        "neckFront": [
+          500.0,
+          172.0
+        ],
+        "shoulderL": [
+          712.0,
+          142.0
+        ],
+        "shoulderR": [
+          288.0,
+          142.0
+        ],
+        "armpitL": [
+          742.0,
+          322.0
+        ],
+        "armpitR": [
+          258.0,
+          322.0
+        ],
+        "sleeveOuterL": [
+          905.0,
+          318.0
+        ],
+        "sleeveInnerL": [
+          832.0,
+          392.0
+        ],
+        "sleeveOuterR": [
+          95.0,
+          318.0
+        ],
+        "sleeveInnerR": [
+          168.0,
+          392.0
+        ],
+        "hemL": [
+          734.0,
+          852.0
+        ],
+        "hemR": [
+          266.0,
+          852.0
+        ]
+      },
+      "sleeve": "short",
+      "credit": "IRIS 자체 제작 이미지 (CC0)"
+    },
+    {
+      "id": "longsleeve-green",
+      "name": "그린 긴팔 티셔츠",
+      "category": "top",
+      "image": "longsleeve-green.webp",
+      "thumb": "longsleeve-green_thumb.webp",
+      "parts": "longsleeve-green_parts.png",
+      "size": [
+        1000,
+        900
+      ],
+      "keypoints": {
+        "neckL": [
+          584.0,
+          96.0
+        ],
+        "neckR": [
+          416.0,
+          96.0
+        ],
+        "neckFront": [
+          500.0,
+          172.0
+        ],
+        "shoulderL": [
+          712.0,
+          142.0
+        ],
+        "shoulderR": [
+          288.0,
+          142.0
+        ],
+        "armpitL": [
+          738.0,
+          330.0
+        ],
+        "armpitR": [
+          262.0,
+          330.0
+        ],
+        "sleeveOuterL": [
+          940.0,
+          700.0
+        ],
+        "sleeveInnerL": [
+          866.0,
+          722.0
+        ],
+        "sleeveOuterR": [
+          60.0,
+          700.0
+        ],
+        "sleeveInnerR": [
+          134.0,
+          722.0
+        ],
+        "hemL": [
+          734.0,
+          852.0
+        ],
+        "hemR": [
+          266.0,
+          852.0
+        ]
+      },
+      "sleeve": "long",
+      "credit": "IRIS 자체 제작 이미지 (CC0)"
+    }
+  ]
+}
