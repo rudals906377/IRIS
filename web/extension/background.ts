@@ -2,12 +2,16 @@
 // - 툴바 아이콘: 현재 쇼핑몰 페이지에서 상품 사진 후보(대표 이미지 + 큰 이미지)를 모아 착용 창을 연다.
 // - 이미지 우클릭 메뉴 "IRIS로 이 옷 입어보기": 그 사진을 첫 후보로 착용 창을 연다.
 // 착용 창은 확장 프로그램 안의 웹 앱(index.html)이며, 카메라 영상은 이 컴퓨터 밖으로 나가지 않는다.
-// 이 파일은 다른 모듈을 가져오지 않는다(서비스 워커 단독 번들).
+// 빌드 시 urls.ts와 함께 하나의 서비스 워커 파일(background.js)로 묶인다.
+
+import { upgradeImageUrl } from './urls.ts';
 
 const MENU_ID = 'iris-try-on';
 
 interface Candidates {
   urls: string[];
+  /** 고해상도로 바꾼 주소 → 원래 주소(바꾼 주소가 열리지 않을 때 대신 쓴다) */
+  alts?: Record<string, string>;
   title?: string;
   page?: string;
 }
@@ -22,14 +26,15 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     const found = tab?.id !== undefined ? await collect(tab.id) : null;
     const first = upgradeImageUrl(info.srcUrl!);
     const rest = (found?.urls ?? []).filter((u) => u !== first);
-    await openTryOn({ urls: [first, ...rest].slice(0, 12), title: found?.title ?? tab?.title, page: tab?.url });
+    const alts = { ...(found?.alts ?? {}), ...(first !== info.srcUrl ? { [first]: info.srcUrl! } : {}) };
+    await openTryOn({ urls: [first, ...rest].slice(0, 12), alts, title: found?.title ?? tab?.title, page: tab?.url });
   })();
 });
 
 chrome.action.onClicked.addListener((tab) => {
   void (async () => {
     const found = tab.id !== undefined ? await collect(tab.id) : null;
-    await openTryOn({ urls: found?.urls ?? [], title: found?.title ?? tab.title, page: tab.url });
+    await openTryOn({ urls: found?.urls ?? [], alts: found?.alts, title: found?.title ?? tab.title, page: tab.url });
   })();
 });
 
@@ -38,7 +43,15 @@ async function collect(tabId: number): Promise<Candidates | null> {
     const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: collectProductImages });
     const got = res?.result as Candidates | undefined;
     if (!got) return null;
-    return { ...got, urls: [...new Set(got.urls.map(upgradeImageUrl))] };
+    const alts: Record<string, string> = {};
+    const urls: string[] = [];
+    for (const u of got.urls) {
+      const up = upgradeImageUrl(u);
+      if (urls.includes(up)) continue;
+      urls.push(up);
+      if (up !== u) alts[up] = u;
+    }
+    return { ...got, urls, alts };
   } catch (err) {
     // chrome:// 같은 페이지에서는 스크립트를 넣을 수 없다
     console.warn('상품 사진 수집 실패', err);
@@ -48,59 +61,140 @@ async function collect(tabId: number): Promise<Candidates | null> {
 
 /**
  * 페이지 안에서 실행된다(다른 함수·변수를 참조하면 안 됨).
- * 대표 이미지(og:image)를 최우선으로, 화면에 크게 보이는 이미지 순으로 후보를 만든다.
+ * 상품 사진 후보를 모아 "옷만 찍힌 앞면 사진"일 가능성이 높은 순으로 돌려준다.
+ * - 구조화 데이터(JSON-LD Product.image)와 대표 이미지(og:image)
+ * - 상세 갤러리 이미지: 지연 로딩(data-src, srcset, <picture><source>)까지 포함
+ * - 추천 상품 영역(다른 상품으로 가는 링크 안, 페이지 아래쪽)은 낮은 점수
+ * - 나이키·아디다스 파일명 규칙(아디다스 _laydown = 옷만 찍은 사진, _model = 모델 착용 등)
+ * 최종 선택은 착용 창이 사진을 실제로 분석해 가장 알맞은 것을 고른다.
  */
-function collectProductImages(): Candidates {
-  const scores = new Map<string, number>();
+function collectProductImages(): { urls: string[]; title?: string } {
+  const found = new Map<string, { u: string; score: number; order: number }>();
+  let order = 0;
+  const sameImageKey = (u: URL): string => {
+    // 같은 사진의 다른 크기 변형을 하나로 묶는다(CDN 변환 인자 부분 무시).
+    if (u.hostname === 'static.nike.com' || u.hostname === 'assets.adidas.com') {
+      return u.hostname + '/' + u.pathname.split('/').slice(-2).join('/');
+    }
+    return u.hostname + u.pathname;
+  };
+  const nameHint = (u: URL): number => {
+    const p = decodeURIComponent(u.pathname).toLowerCase();
+    let k = 1;
+    if (/_laydown/.test(p)) k *= 3;
+    if (/_0?1_(laydown|standard)/.test(p)) k *= 2; // 앞면
+    if (/_0?2_(laydown|standard)/.test(p)) k *= 0.5; // 뒷면
+    if (/_(model|hover_model)/.test(p)) k *= 0.6;
+    if (/_(detail|41_|42_|43_)/.test(p)) k *= 0.2;
+    if (/(logo|icon|sprite|banner|swatch|avatar|badge|payment)/.test(p)) k *= 0.05;
+    if (/\.svg$|\.gif$/.test(p)) k *= 0.01;
+    return k;
+  };
   const add = (raw: string | null | undefined, score: number): void => {
-    if (!raw || raw.startsWith('data:')) return;
-    let u: string;
+    if (!raw) return;
+    raw = raw.trim();
+    if (!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return;
+    let url: URL;
     try {
-      u = new URL(raw, location.href).href;
+      url = new URL(raw, location.href);
     } catch {
       return;
     }
-    scores.set(u, Math.max(scores.get(u) ?? 0, score));
+    if (!/^https?:$/.test(url.protocol)) return;
+    const k = sameImageKey(url);
+    const s = score * nameHint(url);
+    const prev = found.get(k);
+    if (!prev) found.set(k, { u: url.href, score: s, order: order++ });
+    else if (s > prev.score) found.set(k, { ...prev, u: url.href, score: s });
   };
-  add(document.querySelector('meta[property="og:image"]')?.getAttribute('content'), 1e12);
-  for (const img of Array.from(document.images)) {
-    const r = img.getBoundingClientRect();
-    if (img.naturalWidth < 250 || img.naturalHeight < 250 || r.width < 120 || r.height < 120) continue;
-    let src = img.currentSrc || img.src;
-    // srcset 중 가장 큰 후보
-    if (img.srcset) {
-      const best = img.srcset
-        .split(',')
-        .map((s) => s.trim().split(/\s+/))
-        .map(([u, d]) => ({ u, w: parseFloat(d ?? '') || 0 }))
-        .sort((a, b) => b.w - a.w)[0];
-      if (best?.u) src = best.u;
-    }
-    const visible = r.bottom > 0 && r.top < innerHeight * 2;
-    add(src, r.width * r.height * (visible ? 2 : 1));
-  }
-  const urls = [...scores.entries()].sort((a, b) => b[1] - a[1]).map(([u]) => u).slice(0, 16);
-  return { urls, title: document.title };
-}
+  const bestOfSrcset = (srcset: string | null | undefined): string | null => {
+    if (!srcset) return null;
+    const list = srcset
+      .split(/,\s+(?=\S)/)
+      .map((s) => s.trim().split(/\s+/))
+      .map(([u, d]) => ({ u, w: parseFloat(d ?? '') || 1 }))
+      .filter((x) => x.u);
+    list.sort((a, b) => b.w - a.w);
+    return list[0]?.u ?? null;
+  };
 
-/** 쇼핑몰별로 더 큰 해상도의 이미지 주소로 바꾼다(모르는 사이트는 그대로). */
-function upgradeImageUrl(u: string): string {
-  try {
-    const url = new URL(u);
-    if (url.hostname === 'static.nike.com') {
-      // 예: /a/images/t_PDP_936_v1/f_auto,q_auto:eco/… → t_PDP_1728_v1
-      url.pathname = url.pathname.replace(/\/t_[A-Za-z0-9_]+_v\d+\//, '/t_PDP_1728_v1/');
-      return url.href;
+  // 1) 구조화 데이터
+  for (const el of Array.from(document.querySelectorAll('script[type="application/ld+json"]'))) {
+    try {
+      const visit = (node: unknown): void => {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) return node.forEach(visit);
+        const o = node as Record<string, unknown>;
+        const t = o['@type'];
+        if (t === 'Product' || (Array.isArray(t) && t.includes('Product'))) {
+          const imgs = ([] as unknown[]).concat(o.image ?? []);
+          imgs.forEach((im, i) => {
+            const u = typeof im === 'string' ? im : (im as Record<string, unknown>)?.url;
+            if (typeof u === 'string') add(u, 5e6 / (1 + i * 0.15));
+          });
+        }
+        if (o['@graph']) visit(o['@graph']);
+      };
+      visit(JSON.parse(el.textContent ?? ''));
+    } catch {
+      /* 잘못된 JSON은 무시 */
     }
-    if (url.hostname === 'assets.adidas.com') {
-      // 예: /images/w_600,f_auto,q_auto/… → w_1200
-      url.pathname = url.pathname.replace(/\/images\/(?:[wh]_\d+,)+/, '/images/w_1200,');
-      return url.href;
-    }
-    return u;
-  } catch {
-    return u;
   }
+  // 2) 대표 이미지
+  add(document.querySelector('meta[property="og:image"]')?.getAttribute('content'), 8e6);
+  add(document.querySelector('meta[name="twitter:image"]')?.getAttribute('content'), 4e6);
+
+  // 3) 페이지 속 이미지(지연 로딩 포함)
+  const here = location.pathname.replace(/\/$/, '');
+  const knownCdn = /(^|\.)static\.nike\.com$|(^|\.)assets\.adidas\.com$/;
+  for (const img of Array.from(document.querySelectorAll('img'))) {
+    if (img.closest('header, nav, footer')) continue;
+    const r = img.getBoundingClientRect();
+    const pageTop = r.top + scrollY;
+    const cands = [
+      bestOfSrcset(img.getAttribute('srcset')),
+      bestOfSrcset(img.getAttribute('data-srcset')),
+      img.getAttribute('data-src'),
+      img.getAttribute('data-original'),
+      img.currentSrc,
+      img.getAttribute('src'),
+    ];
+    const pic = img.closest('picture');
+    if (pic) for (const s of Array.from(pic.querySelectorAll('source'))) cands.unshift(bestOfSrcset(s.getAttribute('srcset') || s.getAttribute('data-srcset')));
+    const src = cands.find((c) => c && !c.startsWith('data:'));
+    if (!src) continue;
+    let host = '';
+    try {
+      host = new URL(src, location.href).hostname;
+    } catch {
+      continue;
+    }
+    const big = r.width >= 120 && r.height >= 120 && (img.naturalWidth >= 250 || !img.complete);
+    // 갤러리 썸네일은 작게 보여도 같은 상품의 다른 사진이므로 알려진 쇼핑몰 CDN이면 받는다.
+    if (!big && !knownCdn.test(host)) continue;
+    if (!big && (r.width < 24 || r.height < 24) && img.naturalWidth < 250) {
+      if (!(r.width === 0 && knownCdn.test(host))) continue;
+    }
+    let score = Math.max(r.width * r.height, 120 * 120);
+    // 다른 상품으로 가는 링크 안(추천·최근 본 상품)이면 크게 낮춘다.
+    const a = img.closest('a[href]') as HTMLAnchorElement | null;
+    if (a) {
+      try {
+        const to = new URL(a.href, location.href);
+        if (to.pathname.replace(/\/$/, '') !== here) score *= 0.05;
+      } catch {
+        /* 무시 */
+      }
+    }
+    // 상세 갤러리는 페이지 위쪽에 있다.
+    if (pageTop > innerHeight * 1.6) score *= 0.1;
+    add(src, score);
+  }
+  const urls = [...found.values()]
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .map((c) => c.u)
+    .slice(0, 16);
+  return { urls, title: document.title };
 }
 
 async function openTryOn(c: Candidates): Promise<void> {
@@ -120,9 +214,10 @@ async function openTryOn(c: Candidates): Promise<void> {
 
 // 자동 시험용: 툴바 클릭을 흉내 낼 수 있게 노출(사용자 기능에는 영향 없음)
 (globalThis as unknown as { irisTest: unknown }).irisTest = {
+  upgradeImageUrl,
   tryTab: async (tabId: number) => {
     const found = await collect(tabId);
-    await openTryOn({ urls: found?.urls ?? [], title: found?.title });
+    await openTryOn({ urls: found?.urls ?? [], alts: found?.alts, title: found?.title });
     return found;
   },
 };

@@ -96,32 +96,53 @@ export function removeBackground(img: RGBAImage): BackgroundResult {
   // 배경의 자연스러운 기울기(비네팅·잡음)보다 확실히 큰 변화만 벽으로 본다.
   const gradThreshold = Math.max(3, (borderGrad[Math.floor(borderGrad.length * 0.95)] ?? 0) * 2 + 1.5);
   // 배경색 범위: 비네팅을 감안해 넉넉하게(단, 선명한 색의 옷까지 먹지 않도록 상한)
-  const colorRange = Math.max(28, Math.min(70, spread * 3 + 20));
+  const colorRange = Math.max(9, Math.min(70, spread * 3 + 9));
 
-  const pass = (i: number): boolean => {
+  // 잡음 크기: 테두리에서 이웃 픽셀 간 색 차이의 90% 값
+  const nd: number[] = [];
+  for (const i of idx) {
+    if (i % w < w - 1) nd.push(Math.abs(rgb[i * 3] - rgb[(i + 1) * 3]) + Math.abs(rgb[i * 3 + 1] - rgb[(i + 1) * 3 + 1]) + Math.abs(rgb[i * 3 + 2] - rgb[(i + 1) * 3 + 2]));
+  }
+  nd.sort((a, b) => a - b);
+  const noise = nd[Math.floor(nd.length * 0.9)] ?? 0;
+  // 지나온 배경색(경로를 따라 천천히 갱신되는 기준색)과의 차이 허용치.
+  // 비네팅처럼 천천히 변하는 배경은 따라가고, 흰 옷과 연회색 배경의 작은 계단(5 정도)은 막는다.
+  const driftTol = Math.max(3.2, noise * 1.2 + 1.5);
+
+  const ref = new Float32Array(w * h * 3);
+  const pass = (i: number, from: number): boolean => {
     if (grad[i] >= gradThreshold) return false;
-    const d = Math.hypot(rgb[i * 3] - bg[0], rgb[i * 3 + 1] - bg[1], rgb[i * 3 + 2] - bg[2]);
-    return d < colorRange;
+    const r = rgb[i * 3];
+    const g = rgb[i * 3 + 1];
+    const b = rgb[i * 3 + 2];
+    if (Math.hypot(r - bg[0], g - bg[1], b - bg[2]) >= colorRange) return false;
+    if (from < 0) return true;
+    const dr = r - ref[from * 3];
+    const dg = g - ref[from * 3 + 1];
+    const db = b - ref[from * 3 + 2];
+    return Math.max(Math.abs(dr), Math.abs(dg), Math.abs(db)) < driftTol;
   };
 
   const visited = new Uint8Array(w * h);
   const queue = new Int32Array(w * h);
   let head = 0;
   let tail = 0;
-  const seed = (i: number): void => {
-    if (!visited[i] && pass(i)) {
-      visited[i] = 1;
-      queue[tail++] = i;
+  const seed = (i: number, from: number): void => {
+    if (visited[i] || !pass(i, from)) return;
+    visited[i] = 1;
+    queue[tail++] = i;
+    for (let c = 0; c < 3; c++) {
+      ref[i * 3 + c] = from < 0 ? rgb[i * 3 + c] : ref[from * 3 + c] * 0.85 + rgb[i * 3 + c] * 0.15;
     }
   };
-  for (const i of idx) seed(i);
+  for (const i of idx) seed(i, -1);
   while (head < tail) {
     const i = queue[head++];
     const x = i % w;
-    if (x > 0) seed(i - 1);
-    if (x < w - 1) seed(i + 1);
-    if (i >= w) seed(i - w);
-    if (i < w * (h - 1)) seed(i + w);
+    if (x > 0) seed(i - 1, i);
+    if (x < w - 1) seed(i + 1, i);
+    if (i >= w) seed(i - w, i);
+    if (i < w * (h - 1)) seed(i + w, i);
   }
 
   let mask: Uint8Array = new Uint8Array(w * h);

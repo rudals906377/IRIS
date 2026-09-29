@@ -43,8 +43,10 @@ function runAt(runs: Run[], x: number): Run | undefined {
   return runs.find((r) => r.x0 <= x && x <= r.x1);
 }
 
-export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis | null {
+export function analyzeTop(mask0: Uint8Array, w: number, h: number): TopAnalysis | null {
   const warnings: string[] = [];
+  // 앞이 열린 지퍼 재킷·카디건: 가운데의 세로 틈을 메운 윤곽으로 형태를 분석한다(라벨은 원래 윤곽에만).
+  const mask = closeCenterGap(mask0, w, h);
   // 경계 상자
   let top = h;
   let bottom = -1;
@@ -80,15 +82,17 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
   mids.sort((a, b) => a - b);
   const cx = mids.length ? mids[mids.length >> 1] : (left + right) / 2;
 
-  // 밑단: 아래쪽 25% 구간에서 중심을 포함한 몸판 구간이 가장 넓은 곳의 폭을 쓴다.
-  // (셔츠의 둥근 밑단 모서리나 늘어진 끈을 밑단으로 오인하지 않도록) 높이는 옷 맨 아래.
+  // 밑단: 몸판 중심선이 끝나는 곳(옆에 늘어진 끈·리본은 제외)에서 위로 25% 구간 중
+  // 중심을 포함한 몸판 구간이 가장 넓은 곳의 폭을 쓴다(셔츠의 둥근 밑단 모서리 대비).
+  let torsoBottom = bottom;
+  while (torsoBottom > top && !runAt(runs[torsoBottom], Math.round(cx))) torsoBottom--;
   let hemRun: Run | undefined;
-  for (let y = Math.round(bottom - H * 0.25); y <= bottom; y++) {
+  for (let y = Math.round(torsoBottom - H * 0.25); y <= torsoBottom; y++) {
     const r = runAt(runs[y], Math.round(cx));
     if (r && (!hemRun || r.x1 - r.x0 >= hemRun.x1 - hemRun.x0)) hemRun = r;
   }
   if (!hemRun) return null;
-  const hemY = bottom - Math.round(H * 0.01);
+  const hemY = torsoBottom - Math.round(H * 0.01);
   const hemL: Vec2 = { x: hemRun.x1, y: hemY };
   const hemR: Vec2 = { x: hemRun.x0, y: hemY };
   const hemHalf = (hemRun.x1 - hemRun.x0) / 2;
@@ -159,12 +163,65 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
     return null;
   };
 
-  const armpitL = findArmpit(1);
-  const armpitR = findArmpit(-1);
-  if (!armpitL || !armpitR) {
-    warnings.push('겨드랑이 위치를 찾지 못했습니다');
-    return null;
+  // 겨드랑이 후보 두 가지: (가) 볼록 껍질의 오목한 틈(소매와 몸판 사이 골)의 가장 깊은 곳,
+  // (나) 행 단위 옆선 추적. 둘 다 끝까지 분석해 비율 검증 신뢰도가 높은 쪽을 쓴다.
+  const pockets = hullPockets(mask, w, h, top, bottom);
+  // 입구보다 훨씬 깊은 좁은 틈 = 몸판 옆에 늘어뜨린 소매 아래의 틈(꼭대기가 실제 겨드랑이보다 낮다)
+  let slit = false;
+  const hullArmpit = (side: 1 | -1): Vec2 | null => {
+    let best: Pocket | null = null;
+    for (const p of pockets) {
+      const dx = (p.deep.x - cx) * side;
+      if (dx < W * 0.08) continue; // 목 파임·가운데 틈 제외
+      if (p.deep.y < top + H * 0.1 || p.deep.y > top + H * 0.8) continue;
+      if (p.openingY < p.deep.y - H * 0.02) continue; // 입구가 위에 있는 틈(목 쪽) 제외
+      if (p.depth < W * 0.03) continue;
+      if (!best || p.depth > best.depth) best = p;
+    }
+    if (best && best.depth > best.openingLen * 1.6) slit = true;
+    return best ? { x: best.deep.x, y: best.deep.y } : null;
+  };
+  const pairs: [Vec2, Vec2][] = [];
+  const hl = hullArmpit(1);
+  const hr = hullArmpit(-1);
+  const sl = findArmpit(1);
+  const sr = findArmpit(-1);
+  if (hl && hr) pairs.push([hl, hr]);
+  if (sl && sr) pairs.push([sl, sr]);
+  if (hl && sr && !hr) pairs.push([hl, sr]);
+  if (sl && hr && !hl) pairs.push([sl, hr]);
+  if (!pairs.length) return null;
+  let bestResult: TopAnalysis | null = null;
+  const consider = (r: TopAnalysis): void => {
+    if (!bestResult || r.confidence > bestResult.confidence + 0.02) bestResult = r;
+  };
+  for (const [aL, aR] of pairs) {
+    const r = finish(aL, aR, [...warnings]);
+    consider(r);
+    // 늘어뜨린 소매가 몸판에 겹쳐 틈이 아래쪽에만 보이면, 틈 꼭대기는 실제 겨드랑이보다 낮다.
+    // 틈 꼭대기의 x(몸판 옆선)는 믿고, 높이는 흔한 옷 비율(진동 깊이 ≈ 가슴 폭의 0.45)로 추정한다.
+    const chest = aL.x - aR.x;
+    const topAt = (x: number): number => {
+      const xi = Math.round(x);
+      for (let y = top; y <= bottom; y++) if (mask[y * w + xi]) return y;
+      return top;
+    };
+    const shoulderY = (topAt(aL.x - chest * 0.04) + topAt(aR.x + chest * 0.04)) / 2;
+    if (chest > 0 && (Math.min(aL.y, aR.y) - shoulderY) / chest > 0.7) {
+      const y = shoulderY + chest * 0.45;
+      const est = finish({ x: aL.x, y }, { x: aR.x, y }, [...warnings, '소매가 몸판에 겹쳐 겨드랑이를 비율로 추정했습니다']);
+      // 좁은 틈이면 추정이 더 맞고, 아니면(어깨가 떨어진 오버핏 등) 찾은 위치가 더 맞다.
+      if (slit) {
+        if (est.confidence >= bestResult!.confidence - 0.15) bestResult = est;
+      } else {
+        est.confidence *= 0.85;
+        consider(est);
+      }
+    }
   }
+  return bestResult;
+
+  function finish(armpitL: Vec2, armpitR: Vec2, warnings: string[]): TopAnalysis {
 
   // 윤곽 윗선
   const ytop = new Float32Array(w).fill(NaN);
@@ -188,14 +245,34 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
     }
     return best;
   };
-  const neckL = highest(cx + torsoHalf * 0.05, cx + torsoHalf * 0.45);
-  const neckR = highest(cx - torsoHalf * 0.45, cx - torsoHalf * 0.05);
+  // 후드: 모자가 어깨선보다 높이 솟아 있고, 모자와 어깨가 만나는 곳에 위가 열린 오목한 골이 있다.
+  // 그 골의 가장 깊은 점이 목둘레 양 끝이며, 그 위쪽(모자)은 목 뒤로 넘어가는 부분(라벨 4)으로 둔다.
+  const hoodNotch = (side: 1 | -1): Vec2 | null => {
+    let best: Pocket | null = null;
+    for (const p of pockets) {
+      const dx = (p.deep.x - cx) * side;
+      if (dx < torsoHalf * 0.1 || dx > torsoHalf * 0.75) continue;
+      if (p.openingY > p.deep.y) continue; // 입구가 위쪽
+      if (p.deep.y > Math.min(armpitL.y, armpitR.y)) continue;
+      if (p.depth < H * 0.025) continue;
+      if (!best || p.depth > best.depth) best = p;
+    }
+    return best ? { ...best.deep } : null;
+  };
+  const notchL = hoodNotch(1);
+  const notchR = hoodNotch(-1);
+  const centerTop = ytop[Math.round(cx)];
+  const hood =
+    !!notchL && !!notchR && Number.isFinite(centerTop) && Math.min(notchL.y, notchR.y) - centerTop > H * 0.08 && notchL.x - notchR.x > torsoHalf * 0.3;
+  if (hood) warnings.push('후드: 모자 부분은 목 뒤로 넘깁니다');
+  const neckL = hood ? notchL! : highest(cx + torsoHalf * 0.05, cx + torsoHalf * 0.45);
+  const neckR = hood ? notchR! : highest(cx - torsoHalf * 0.45, cx - torsoHalf * 0.05);
   const neckW = Math.max(4, neckL.x - neckR.x);
   const neckY = (neckL.y + neckR.y) / 2;
   const dipY = ytop[Math.round(cx)];
   let neckFront: Vec2;
   let hasOpenNeck = false;
-  if (Number.isFinite(dipY) && dipY - neckY > neckW * 0.12) {
+  if (!hood && Number.isFinite(dipY) && dipY - neckY > neckW * 0.12) {
     neckFront = { x: cx, y: dipY };
     hasOpenNeck = true;
   } else {
@@ -220,6 +297,9 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
     const t = Math.min(1, Math.max(0, (y - s.y) / (a.y - s.y)));
     return s.x + (a.x - s.x) * t;
   };
+  // 겨드랑이 아래 몸판 옆선(겨드랑이 → 밑단 끝). 이 선 바깥에 붙어 있는 것은 몸판에 겹친 소매다.
+  const sideX = (a: Vec2, hm: Vec2, y: number): number => (hm.y === a.y ? a.x : a.x + ((hm.x - a.x) * (y - a.y)) / (hm.y - a.y));
+  const sideTol = W * 0.03;
   let sleeveCountL = 0;
   let sleeveCountR = 0;
   for (let y = top; y <= bottom; y++) {
@@ -230,9 +310,9 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
         const i = y * w + x;
         let lab = 1;
         if (y <= armpitL.y && x > armholeX(shoulderL, armpitL, y)) lab = 2;
-        else if (y > armpitL.y && x > cx && r !== torso) lab = 2;
+        else if (y > armpitL.y && x > cx && (r !== torso || x > sideX(armpitL, hemL, y) + sideTol)) lab = 2;
         if (y <= armpitR.y && x < armholeX(shoulderR, armpitR, y)) lab = 3;
-        else if (y > armpitR.y && x < cx && r !== torso) lab = 3;
+        else if (y > armpitR.y && x < cx && (r !== torso || x < sideX(armpitR, hemR, y) - sideTol)) lab = 3;
         labels[i] = lab;
         if (lab === 2) sleeveCountL++;
         if (lab === 3) sleeveCountR++;
@@ -252,8 +332,26 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
     else if (labels[i] === 3) sleeveCountR++;
   }
 
+  // 후드 모자: 목둘레 곡선과 목 → 어깨 선보다 위에 있는 몸판 픽셀
+  if (hood) {
+    const upper = (x: number): number => {
+      if (x >= neckR.x && x <= neckL.x) {
+        const t = (x - cx) / (neckW / 2);
+        return neckFront.y - (neckFront.y - neckY) * t * t;
+      }
+      const [n, sh] = x > neckL.x ? [neckL, shoulderL] : [neckR, shoulderR];
+      const t = sh.x === n.x ? 1 : Math.min(1, Math.max(0, (x - n.x) / (sh.x - n.x)));
+      return n.y + (sh.y - n.y) * t - 2;
+    };
+    for (let y = top; y <= bottom; y++) {
+      for (let x = left; x <= right; x++) {
+        const i = y * w + x;
+        if (labels[i] === 1 && y < upper(x)) labels[i] = 4;
+      }
+    }
+  }
   // 목 안쪽: 목둘레 양 끝과 앞 목선을 지나는 포물선 위쪽
-  if (!hasOpenNeck) {
+  if (!hasOpenNeck && !hood) {
     for (let x = Math.ceil(neckR.x); x <= Math.floor(neckL.x); x++) {
       const t = (x - cx) / (neckW / 2);
       const curveY = neckFront.y - (neckFront.y - neckY) * t * t;
@@ -339,7 +437,7 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
     ['밑단/가슴', (hemHalf * 2) / chest, 0.6, 1.7],
     ['목/어깨', neckW / Math.max(1, shoulderW), 0.18, 0.75],
     ['기장/가슴', (hemY - (shoulderL.y + shoulderR.y) / 2) / chest, 0.7, 2.4],
-    ['진동 깊이/가슴', armpitDrop / chest, 0.18, 0.9],
+    ['진동 깊이/가슴', armpitDrop / chest, 0.18, 1.1],
   ];
   let plaus = 1;
   for (const [name, value, lo, hi] of checks) {
@@ -351,7 +449,199 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
   const confidence = Math.max(0, Math.min(1, (symArm * 0.5 + symCenter * 0.5) * plaus));
   if (confidence < 0.6) warnings.push('자동 분석 신뢰도가 낮습니다. 기준점을 확인해 주세요');
 
+  for (let i = 0; i < labels.length; i++) if (!mask0[i]) labels[i] = 0;
   return { keypoints, labels, sleeve, confidence, warnings };
+  }
+}
+
+/** 가운데 세로선 양쪽의 구간 사이 좁은 틈(열린 앞판)을 메운다. 틈이 없으면 원래 마스크를 그대로 돌려준다. */
+function closeCenterGap(mask: Uint8Array, w: number, h: number): Uint8Array {
+  let left = w;
+  let right = -1;
+  for (let i = 0; i < mask.length; i++) {
+    if (!mask[i]) continue;
+    const x = i % w;
+    if (x < left) left = x;
+    if (x > right) right = x;
+  }
+  if (right < 0) return mask;
+  const mid = (left + right) / 2;
+  const maxGap = (right - left) * 0.14;
+  let out: Uint8Array | null = null;
+  let filledRows = 0;
+  for (let y = 0; y < h; y++) {
+    const runs = rowRuns(mask, w, y);
+    for (let k = 0; k + 1 < runs.length; k++) {
+      const a = runs[k];
+      const b = runs[k + 1];
+      const g0 = a.x1 + 1;
+      const g1 = b.x0 - 1;
+      if (g1 - g0 + 1 > maxGap) continue;
+      // 틈이 가운데 근처에 있고, 양쪽 구간이 충분히 넓을 때만(소매-몸판 틈과 구분)
+      if (Math.abs((g0 + g1) / 2 - mid) > (right - left) * 0.08) continue;
+      if (a.x1 - a.x0 < (right - left) * 0.12 || b.x1 - b.x0 < (right - left) * 0.12) continue;
+      out ??= mask.slice();
+      out.fill(1, y * w + g0, y * w + g1 + 1);
+      filledRows++;
+    }
+  }
+  return out && filledRows > 3 ? out : mask;
+}
+
+interface Pocket {
+  /** 틈 안에서 입구(껍질 변)로부터 가장 먼 점 */
+  deep: Vec2;
+  depth: number;
+  /** 입구 변 중점의 y */
+  openingY: number;
+  /** 입구 변 길이 */
+  openingLen: number;
+}
+
+/**
+ * 볼록 껍질 안쪽이지만 옷이 아닌 영역(오목한 틈)을 찾고, 각 틈의 입구 변과 가장 깊은 점을 구한다.
+ * 티셔츠의 소매 밑, 늘어뜨린 긴소매와 몸판 사이의 좁은 틈에서 가장 깊은 곳이 겨드랑이다.
+ */
+export function hullPockets(mask: Uint8Array, w: number, h: number, top: number, bottom: number): Pocket[] {
+  const pts: Vec2[] = [];
+  const spanL = new Int32Array(h).fill(-1);
+  const spanR = new Int32Array(h).fill(-1);
+  for (let y = top; y <= bottom; y++) {
+    let a = -1;
+    let b = -1;
+    for (let x = 0; x < w; x++) {
+      if (mask[y * w + x]) {
+        if (a < 0) a = x;
+        b = x;
+      }
+    }
+    if (a >= 0) {
+      pts.push({ x: a, y }, { x: b, y });
+    }
+  }
+  if (pts.length < 6) return [];
+  // 단조 사슬로 볼록 껍질
+  pts.sort((p, q) => p.x - q.x || p.y - q.y);
+  const cross = (o: Vec2, a: Vec2, b: Vec2): number => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Vec2[] = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: Vec2[] = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+  if (hull.length < 3) return [];
+  // 각 행의 껍질 안쪽 범위
+  for (let y = top; y <= bottom; y++) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let k = 0; k < hull.length; k++) {
+      const p = hull[k];
+      const q = hull[(k + 1) % hull.length];
+      if ((p.y - y) * (q.y - y) > 0) continue;
+      if (p.y === q.y) {
+        lo = Math.min(lo, p.x, q.x);
+        hi = Math.max(hi, p.x, q.x);
+        continue;
+      }
+      const x = p.x + ((y - p.y) * (q.x - p.x)) / (q.y - p.y);
+      lo = Math.min(lo, x);
+      hi = Math.max(hi, x);
+    }
+    if (lo <= hi) {
+      spanL[y] = Math.ceil(lo);
+      spanR[y] = Math.floor(hi);
+    }
+  }
+  // 틈 픽셀 연결 요소
+  const comp = new Int32Array(w * h);
+  const queue = new Int32Array(w * h);
+  const inPocket = (i: number): boolean => {
+    const y = (i / w) | 0;
+    const x = i - y * w;
+    return y >= top && y <= bottom && spanL[y] >= 0 && x >= spanL[y] && x <= spanR[y] && !mask[i];
+  };
+  const members: number[][] = [];
+  for (let y = top; y <= bottom; y++) {
+    if (spanL[y] < 0) continue;
+    for (let x = spanL[y]; x <= spanR[y]; x++) {
+      const s = y * w + x;
+      if (mask[s] || comp[s]) continue;
+      const id = members.length + 1;
+      const list: number[] = [];
+      let head = 0;
+      let tail = 0;
+      queue[tail++] = s;
+      comp[s] = id;
+      while (head < tail) {
+        const i = queue[head++];
+        list.push(i);
+        const xx = i % w;
+        const nb = [xx > 0 ? i - 1 : -1, xx < w - 1 ? i + 1 : -1, i >= w ? i - w : -1, i < w * (h - 1) ? i + w : -1];
+        for (const j of nb) {
+          if (j >= 0 && !comp[j] && inPocket(j)) {
+            comp[j] = id;
+            queue[tail++] = j;
+          }
+        }
+      }
+      members.push(list);
+    }
+  }
+  const area = pts.length; // 대략적인 규모 기준(행 수 × 2)
+  const out: Pocket[] = [];
+  members.forEach((list, idx) => {
+    if (list.length < Math.max(12, area * 0.05)) return;
+    const id = idx + 1;
+    // 입구 변: 껍질 변을 따라가며 이 틈과 맞닿은 표본이 가장 많은 변
+    let bestEdge = -1;
+    let bestCount = 0;
+    for (let k = 0; k < hull.length; k++) {
+      const p = hull[k];
+      const q = hull[(k + 1) % hull.length];
+      const len = Math.hypot(q.x - p.x, q.y - p.y);
+      let count = 0;
+      for (let t = 0; t <= len; t += 1) {
+        const x = p.x + ((q.x - p.x) * t) / (len || 1);
+        const y = p.y + ((q.y - p.y) * t) / (len || 1);
+        let hit = false;
+        for (let dy = -1; dy <= 1 && !hit; dy++) {
+          for (let dx = -1; dx <= 1 && !hit; dx++) {
+            const xx = Math.round(x) + dx;
+            const yy = Math.round(y) + dy;
+            if (xx >= 0 && xx < w && yy >= 0 && yy < h && comp[yy * w + xx] === id) hit = true;
+          }
+        }
+        if (hit) count++;
+      }
+      if (count > bestCount) {
+        bestCount = count;
+        bestEdge = k;
+      }
+    }
+    if (bestEdge < 0) return;
+    const p = hull[bestEdge];
+    const q = hull[(bestEdge + 1) % hull.length];
+    const len = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+    let deep = { x: 0, y: 0 };
+    let depth = -1;
+    for (const i of list) {
+      const x = i % w;
+      const y = (i / w) | 0;
+      const d = Math.abs((q.x - p.x) * (p.y - y) - (p.x - x) * (q.y - p.y)) / len;
+      if (d > depth) {
+        depth = d;
+        deep = { x, y };
+      }
+    }
+    out.push({ deep, depth, openingY: (p.y + q.y) / 2, openingLen: len });
+  });
+  return out;
 }
 
 function largestLabelComponent(labels: Uint8Array, w: number, h: number, id: number): Uint8Array {
