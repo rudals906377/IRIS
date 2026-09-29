@@ -89,8 +89,9 @@ export class TopRig {
       const v = new Float32Array(mesh.vertexCount);
       for (let i = 0; i < mesh.vertexCount; i++) {
         const [si, vi] = inverseBilinear({ x: mesh.src[i * 2], y: mesh.src[i * 2 + 1] }, p00, p10, p01, p11);
-        s[i] = si;
-        v[i] = vi;
+        // 소매 사각형 밖(격자 여백)의 외삽이 폭주하지 않게 제한한다.
+        s[i] = Number.isFinite(si) ? Math.min(1.6, Math.max(-0.6, si)) : 0;
+        v[i] = Number.isFinite(vi) ? Math.min(1.8, Math.max(-0.8, vi)) : 0.5;
       }
       this.sleeves.push({
         mesh,

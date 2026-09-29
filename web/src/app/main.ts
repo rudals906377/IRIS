@@ -389,7 +389,10 @@ function applyParams(): void {
 applyParams();
 void initCatalog().then(() => {
   const src = params.get('src');
-  if (src === 'sample') {
+  if (isExtension) {
+    // 확장 프로그램 착용 창: 바로 카메라를 켠다(권한은 처음 한 번만 묻는다).
+    $('btn-camera').click();
+  } else if (src === 'sample') {
     $('btn-sample').click();
   } else if (src) {
     // 시험용: 같은 사이트 안의 동영상 주소로 바로 시작

@@ -80,10 +80,15 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
   mids.sort((a, b) => a - b);
   const cx = mids.length ? mids[mids.length >> 1] : (left + right) / 2;
 
-  // 밑단: 맨 아래 2% 위치의 몸판 구간
-  const hemY = Math.round(bottom - H * 0.02);
-  const hemRun = runAt(runs[hemY], Math.round(cx)) ?? runs[hemY][0];
+  // 밑단: 아래쪽 25% 구간에서 중심을 포함한 몸판 구간이 가장 넓은 곳의 폭을 쓴다.
+  // (셔츠의 둥근 밑단 모서리나 늘어진 끈을 밑단으로 오인하지 않도록) 높이는 옷 맨 아래.
+  let hemRun: Run | undefined;
+  for (let y = Math.round(bottom - H * 0.25); y <= bottom; y++) {
+    const r = runAt(runs[y], Math.round(cx));
+    if (r && (!hemRun || r.x1 - r.x0 >= hemRun.x1 - hemRun.x0)) hemRun = r;
+  }
   if (!hemRun) return null;
+  const hemY = bottom - Math.round(H * 0.01);
   const hemL: Vec2 = { x: hemRun.x1, y: hemY };
   const hemR: Vec2 = { x: hemRun.x0, y: hemY };
   const hemHalf = (hemRun.x1 - hemRun.x0) / 2;
@@ -323,12 +328,27 @@ export function analyzeTop(mask: Uint8Array, w: number, h: number): TopAnalysis 
     warnings.push('소매를 찾지 못해 민소매로 처리했습니다');
   }
 
-  // 신뢰도: 좌우 대칭성과 비율로 간단히 평가
+  // 신뢰도: 좌우 대칭성 + 실제 옷으로 가능한 비율인지(어깨·가슴·밑단·목·기장·진동 깊이)
   const symArm = 1 - Math.min(1, Math.abs(armpitL.y - armpitR.y) / (H * 0.1));
   const symCenter = 1 - Math.min(1, Math.abs((armpitL.x + armpitR.x) / 2 - cx) / (W * 0.08));
-  const ratio = hemHalf * 2 / Math.max(1, armpitL.x - armpitR.x);
-  const ratioOk = ratio > 0.7 && ratio < 1.5 ? 1 : 0.4;
-  const confidence = Math.max(0, Math.min(1, symArm * 0.4 + symCenter * 0.4 + ratioOk * 0.2));
+  const chest = Math.max(1, armpitL.x - armpitR.x);
+  const shoulderW = shoulderL.x - shoulderR.x;
+  const armpitDrop = (armpitL.y + armpitR.y) / 2 - (shoulderL.y + shoulderR.y) / 2;
+  const checks: [string, number, number, number][] = [
+    ['어깨/가슴', shoulderW / chest, 0.65, 1.35],
+    ['밑단/가슴', (hemHalf * 2) / chest, 0.6, 1.7],
+    ['목/어깨', neckW / Math.max(1, shoulderW), 0.18, 0.75],
+    ['기장/가슴', (hemY - (shoulderL.y + shoulderR.y) / 2) / chest, 0.7, 2.4],
+    ['진동 깊이/가슴', armpitDrop / chest, 0.18, 0.9],
+  ];
+  let plaus = 1;
+  for (const [name, value, lo, hi] of checks) {
+    if (value < lo || value > hi) {
+      plaus *= 0.55;
+      warnings.push(`비율 이상(${name} ${value.toFixed(2)})`);
+    }
+  }
+  const confidence = Math.max(0, Math.min(1, (symArm * 0.5 + symCenter * 0.5) * plaus));
   if (confidence < 0.6) warnings.push('자동 분석 신뢰도가 낮습니다. 기준점을 확인해 주세요');
 
   return { keypoints, labels, sleeve, confidence, warnings };

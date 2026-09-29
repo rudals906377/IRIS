@@ -9,7 +9,8 @@
     "build": "npm run copy-wasm && tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc",
-    "test": "node --test tests/*.test.ts"
+    "test": "node --test tests/*.test.ts",
+    "build:ext": "node scripts/build-ext.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "1.0.1"

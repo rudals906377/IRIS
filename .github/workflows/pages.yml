@@ -33,6 +33,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      # 크롬 확장 프로그램 설치 파일도 사이트에서 내려받을 수 있게 함께 올린다.
+      - run: node scripts/build-ext.mjs dist/iris-extension.zip
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/dist

@@ -218,6 +218,14 @@ button.on {
   font-size: 12px;
 }
 
+.ext-link {
+  font-size: 13px;
+}
+
+.ext-link a {
+  color: var(--accent);
+}
+
 .start .credit {
   font-size: 11px;
   opacity: 0.7;

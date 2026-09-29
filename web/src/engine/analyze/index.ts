@@ -138,8 +138,9 @@ export async function analyzeProductImage(
       console.warn('대화형 분할 실패', err);
     }
   }
-  if (!best) {
-    throw new Error('옷 모양을 인식하지 못했습니다. 배경이 단색인 상품 단독 사진(모델 착용 사진 제외)을 골라 주세요.');
+  // 비율이 실제 옷으로 불가능할 만큼 틀리면 망가진 착용 화면 대신 안내한다.
+  if (!best || best.a.confidence < 0.35) {
+    throw new Error('옷 모양을 인식하지 못했습니다. 배경이 단색인 상의 단독 사진(모델 착용 사진 제외)을 골라 주세요.');
   }
 
   // 텍스처: 원본을 최대 1024px로, 마스크를 부드럽게 키워 알파로 쓴다.

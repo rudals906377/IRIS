@@ -4,7 +4,9 @@
 미래내일 일경험 「마스크 기반 영상합성 기술 구현」 프로젝트.
 
 - 사이트: https://rudals906377.github.io/IRIS/ (GitHub Pages 활성화 후 열림)
+- **크롬 확장 프로그램**: 쇼핑몰 상세페이지에서 바로 입어 보기 → [설치·사용 방법](docs/extension-guide.md) · [설치 파일](release/iris-extension.zip)
 - 조사·설계 문서: [docs/realtime-virtual-try-on-plan.md](docs/realtime-virtual-try-on-plan.md)
+- 작업 인수인계: [docs/handoff.md](docs/handoff.md)
 
 ## 특징
 
@@ -13,6 +15,7 @@
   - 머리카락·얼굴·손·팔이 옷 앞에 오면 옷을 가립니다(가이디드 필터로 머리카락 올 단위 경계).
   - 원래 입은 옷의 주름·그림자를 새 옷에 입혀 입체감을 냅니다.
   - 상품 픽셀을 그대로 쓰므로 색·무늬·로고가 바뀌지 않습니다.
+- **아무 쇼핑몰 사진이나**: 상품 사진을 올리거나(끌어놓기) 확장 프로그램으로 상세페이지 사진을 고르면, 배경 제거·목/어깨/소매/밑단 위치 찾기·부위 구분을 브라우저 안에서 자동으로 해서 바로 입힙니다.
 - **실시간성 측정 내장**: 단계별 처리 시간, 촬영→그리기 지연, 건너뛴 프레임, 1분 단위 추세, 거울 루프백 지연 측정, JSON 내보내기.
 
 ## 사용법
@@ -50,7 +53,15 @@ npm run build      # dist/ 생성
 python3 tools/garments/generate.py --out web/public/products
 ```
 
-주소 인자(개발·시험용): `?src=sample`(예시 영상으로 바로 시작), `?product=<상품 id>`, `?hud=1`, `?debug=lm,seg,occ`, `?pose=lite|full|heavy`, `?delegate=CPU|GPU`
+크롬 확장 프로그램 빌드(`web/dist-ext/`, `release/iris-extension.zip`):
+
+```bash
+cd web && npm run build:ext
+```
+
+헤드리스 브라우저 시험 도구는 [tools/harness](tools/harness/README.md), 상품 사진 분석 결과표는 [tools/analyze](tools/analyze/README.md).
+
+주소 인자(개발·시험용): `?src=sample`(예시 영상으로 바로 시작), `?product=<상품 id>`, `?hud=1`, `?debug=lm,seg,occ`, `?pose=lite|full|heavy`, `?delegate=CPU|GPU`, `?img=<상품 사진 주소>`
 
 ### 구조
 
