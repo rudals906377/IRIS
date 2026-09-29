@@ -9,12 +9,13 @@
     "build": "npm run copy-wasm && tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc",
-    "test": "node --test tests/"
+    "test": "node --test tests/*.test.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "1.0.1"
   },
   "devDependencies": {
+    "@types/node": "^22.20.4",
     "typescript": "~5.9.3",
     "vite": "^8.3.1"
   }
