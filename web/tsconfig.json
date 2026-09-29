@@ -13,7 +13,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
-    "types": []
+    "types": ["chrome"]
   },
   "include": ["src", "tests", "vite.config.ts"]
 }

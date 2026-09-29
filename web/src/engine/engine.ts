@@ -2,7 +2,7 @@
 // 원칙: 가장 최신 프레임만 처리하고(밀린 프레임은 건너뜀), 자세를 계산한 바로 그 프레임 위에 옷을 합성한다.
 
 import { BodyTracker, LM, type BodyFrame } from './body.ts';
-import { loadGarment, type ProductInfo } from './garment.ts';
+import { loadGarment, type GarmentAsset, type ProductInfo } from './garment.ts';
 import { LoopbackTest } from './loopback.ts';
 import { Metrics } from './metrics.ts';
 import { buildArmOccluders } from './occluders.ts';
@@ -21,7 +21,7 @@ export interface EngineSettings {
   debugSeg: boolean;
   debugOcc: boolean;
   debugLandmarks: boolean;
-  /** 개발용: 0 정상, 1 라벨 색, 2 통과 픽셀, 3 가림 버퍼 */
+  /** 개발용: 0 정상, 1 라벨 색, 2 통과 픽셀, 3 가림 버퍼, 4 가림 원인, 5 소매만 */
   debugGarment: number;
   fit: TopFit;
 }
@@ -84,8 +84,14 @@ export class TryOnEngine {
     this.loadingId = info.id;
     const asset = await loadGarment(info, this.productBase);
     if (this.loadingId !== info.id) return; // 그 사이 다른 상품이 선택됨
+    this.setAsset(asset);
+  }
+
+  /** 이미 만들어진 자산(자동 분석한 상품 사진 등)을 입힌다. */
+  setAsset(asset: GarmentAsset): void {
+    this.loadingId = asset.info.id;
     this.clearGarment();
-    this.garment = { info, gpu: this.renderer.createGarment(asset), rig: new TopRig(asset) };
+    this.garment = { info: asset.info, gpu: this.renderer.createGarment(asset), rig: new TopRig(asset) };
   }
 
   private clearGarment(): void {
@@ -139,7 +145,9 @@ export class TryOnEngine {
     let capsules: ReturnType<typeof buildArmOccluders> = [];
     if (body && this.garment) {
       this.garment.rig.update(body, this.settings.fit);
-      layers.push({ gpu: this.garment.gpu, order: this.garment.rig.order, alpha: body.confidence * frontFacing(body) });
+      const order =
+        this.settings.debugGarment === 5 ? this.garment.rig.order.filter((m) => m.partId === 2 || m.partId === 3) : this.garment.rig.order;
+      layers.push({ gpu: this.garment.gpu, order, alpha: body.confidence * frontFacing(body) });
       capsules = buildArmOccluders(body);
     }
     const t2 = performance.now();
@@ -151,7 +159,7 @@ export class TryOnEngine {
       refine: this.settings.refine,
       debugSeg: this.settings.debugSeg,
       debugOcc: this.settings.debugOcc,
-      debugGarment: this.settings.debugGarment,
+      debugGarment: this.settings.debugGarment === 5 ? 0 : this.settings.debugGarment,
     });
     this.drawOverlay(body, w, h);
     const t3 = performance.now();
@@ -243,11 +251,17 @@ export class TryOnEngine {
   }
 }
 
-/** 정면에서 많이 돌아서면(상품 사진에 없는 옆·뒷면) 옷을 서서히 흐리게 한다. */
+/**
+ * 정면에서 많이 돌아서면(상품 사진에 없는 옆·뒷면) 옷을 서서히 흐리게 한다.
+ * 깊이(z) 추정은 흔들림이 커서 쓰지 않고, 2D 어깨 폭 ÷ 몸통 길이로 판단한다(정면 ≈ 0.7).
+ * 등을 보이면(왼쪽 어깨가 화면 왼쪽) 바로 사라진다.
+ */
 function frontFacing(body: BodyFrame): number {
-  const yaw = Math.abs(body.yaw);
-  const deg = (yaw * 180) / Math.PI;
-  if (deg <= 40) return 1;
-  if (deg >= 75) return 0;
-  return 1 - (deg - 40) / 35;
+  const sL = body.p[LM.leftShoulder];
+  const sR = body.p[LM.rightShoulder];
+  if (sL.x - sR.x < body.shoulderW * 0.1) return 0;
+  const hipsSeen = Math.min(body.vis[LM.leftHip], body.vis[LM.rightHip]) > 0.6;
+  if (!hipsSeen) return 1;
+  const r = body.shoulderW / body.axisLen;
+  return Math.min(1, Math.max(0, (r - 0.25) / 0.2));
 }

@@ -254,6 +254,18 @@ button.on {
   margin: 0 auto 4px;
 }
 
+.upload-icon {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 4px;
+  display: grid;
+  place-items: center;
+  font-size: 34px;
+  color: var(--accent);
+  border: 2px dashed #3b4252;
+  border-radius: 10px;
+}
+
 .product.selected {
   border-color: var(--accent);
 }

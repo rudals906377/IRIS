@@ -39,7 +39,8 @@ export interface PartMesh {
 
 export interface GarmentAsset {
   info: ProductInfo;
-  image: ImageBitmap | HTMLImageElement;
+  /** 투명 배경 상품 텍스처(이미지·캔버스 모두 가능) */
+  image: TexImageSource;
   labels: Uint8Array;
   width: number;
   height: number;

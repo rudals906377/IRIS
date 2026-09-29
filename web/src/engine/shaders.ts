@@ -94,7 +94,7 @@ uniform sampler2D uTex;    // 상품(premultiplied RGBA)
 uniform sampler2D uLabel;  // R: 부위 번호, G: 몸판 확장 플래그(봉제선 틈 방지)
 uniform sampler2D uCam;    // 카메라(밉맵 포함)
 uniform sampler2D uSeg;    // R 머리카락·얼굴, G 몸 피부, B 옷, A 사람
-uniform sampler2D uOcc;    // R 몸판 가림 팔, G 피부 허용, B 손
+uniform sampler2D uOcc;    // R 팔 중심(몸판 가림), G 팔 주변(몸판 위 피부 판정 영역), B 손
 uniform sampler2D uGF;     // 가이디드 필터 계수 (a1, b1, a2, b2)
 uniform float uUseGF;
 uniform vec2 uSize;
@@ -128,22 +128,31 @@ void main() {
   if (uDebug > 0.5 && uDebug < 1.5) { o = vec4(part / 3.0, 0.0, 1.0 - part / 3.0, 1.0); return; }
   if (!mine || c.a < 0.004) discard;
   if (uDebug > 1.5 && uDebug < 2.5) { o = vec4(1.0, 0.0, 0.0, 1.0); return; }
-  if (uDebug > 2.5) { o = vec4(occ.rgb, 1.0); return; }
+  if (uDebug > 2.5 && uDebug < 3.5) { o = vec4(occ.rgb, 1.0); return; }
   // 확률을 경계 폭만 남기고 선명하게: 0.35 이하는 0, 0.65 이상은 1
   vec4 sg = smoothstep(vec4(0.35), vec4(0.65), seg);
+  // 손(B)과 머리카락·얼굴은 모든 부위를 가린다.
+  // 몸판만: 팔 중심(R) + 팔 주변(G) 안의 피부. 소매는 자기 팔 피부로 구멍 나면 안 되므로 제외.
   float hide = max(occ.b, sg.r);
-  hide = max(hide, sg.g * occ.g);
-  hide = max(hide, occ.r * uIsTorso);
+  hide = max(hide, uIsTorso * max(occ.r, sg.g * occ.g));
   float a = uAlpha * (1.0 - clamp(hide, 0.0, 1.0));
+  // 디버그 4: 가림 원인 색 표시 (빨강 손, 초록 피부×아래팔, 파랑 머리카락·얼굴, 흰색 몸판 팔 구멍)
+  if (uDebug > 3.5) { o = vec4(occ.b, sg.g * occ.g, sg.r, 1.0) + vec4(occ.r * uIsTorso * 0.5); return; }
   // 목 안쪽은 원래 옷(분할의 '옷') 위에만 그린다. 분할이 없으면 피부를 덮을 위험이 있어 그리지 않는다.
   if (uIsInner > 0.5) a *= sg.b;
 
-  // 셰이딩 전이: 원래 옷의 주름·그림자(밝기의 고주파 성분)를 새 옷에 곱한다.
+  // 셰이딩 전이: 원래 옷의 주름·그림자(밝기의 완만한 변화)를 새 옷에 곱한다.
+  // 원래 옷의 인쇄 무늬가 비치지 않도록, 대비가 크거나 색이 바뀌는 곳은 전이하지 않는다.
   const vec3 W = vec3(0.299, 0.587, 0.114);
-  float hi = dot(textureLod(uCam, camUv, 1.5).rgb, W);
-  float lo = dot(textureLod(uCam, camUv, 5.0).rgb, W);
-  float ratio = clamp(hi / max(lo, 0.04), 0.78, 1.22);
-  float gate = mix(1.0, sg.b, uUseSeg);
+  vec3 cHi = textureLod(uCam, camUv, 2.0).rgb;
+  vec3 cLo = textureLod(uCam, camUv, 5.0).rgb;
+  float hi = dot(cHi, W);
+  float lo = max(dot(cLo, W), 0.04);
+  float ratio = hi / lo;
+  float chromaShift = length(cHi / max(hi, 0.04) - cLo / lo);
+  float wrinkle = (1.0 - smoothstep(0.16, 0.32, abs(ratio - 1.0))) * (1.0 - smoothstep(0.06, 0.16, chromaShift));
+  ratio = clamp(ratio, 0.82, 1.18);
+  float gate = mix(1.0, sg.b, uUseSeg) * wrinkle;
   float sh = mix(1.0, ratio, uShade * gate);
   o = vec4(c.rgb * sh, c.a) * a;
 }`;

@@ -8,7 +8,9 @@
 //   ?debug=lm,seg,occ       개발자 표시
 //   ?pose=lite|full|heavy   자세 모델
 //   ?delegate=CPU|GPU       처리 장치
+//   ?img=<주소>              상품 사진을 자동 분석해 입히기(CORS 허용 이미지)
 
+import { analyzeProductImage, loadImageSource } from '../engine/analyze/index.ts';
 import { TryOnEngine } from '../engine/engine.ts';
 import { loadCatalog, type ProductInfo } from '../engine/garment.ts';
 import { fmt, summarize } from '../engine/stats.ts';
@@ -62,6 +64,79 @@ function setStatus(msg: string): void {
 
 let products: ProductInfo[] = [];
 
+/** 확장 프로그램이 넘겨준 "현재 쇼핑몰 페이지의 상품 사진 후보" */
+interface PageCandidates {
+  urls: string[];
+  title?: string;
+}
+
+const isExtension = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
+
+async function readPageCandidates(): Promise<PageCandidates | null> {
+  if (!isExtension || !chrome.storage?.session) return null;
+  const got = await chrome.storage.session.get('candidates');
+  return (got.candidates as PageCandidates | undefined) ?? null;
+}
+
+function tile(label: string, thumb: string | null, onClick: () => void, id: string): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.className = 'product';
+  b.dataset.id = id;
+  b.title = label;
+  if (thumb) {
+    const img = document.createElement('img');
+    img.src = thumb;
+    img.alt = label;
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    b.append(img);
+  } else {
+    const icon = document.createElement('div');
+    icon.className = 'upload-icon';
+    icon.textContent = '＋';
+    b.append(icon);
+  }
+  b.append(document.createTextNode(label));
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function markSelected(id: string): void {
+  for (const el of railEl.querySelectorAll<HTMLButtonElement>('.product')) {
+    el.classList.toggle('selected', el.dataset.id === id);
+  }
+}
+
+/** 사진(주소 또는 파일)을 자동 분석해 입힌다. */
+async function tryPhoto(src: string | Blob, name: string, id: string): Promise<void> {
+  markSelected(id);
+  setStatus('상품 사진 불러오는 중…');
+  try {
+    let image: HTMLImageElement;
+    if (typeof src === 'string' && isExtension) {
+      // 확장 프로그램은 사이트 권한으로 다른 도메인 이미지도 직접 받아올 수 있다.
+      const res = await fetch(src);
+      if (!res.ok) throw new Error(`사진을 받지 못했습니다 (${res.status})`);
+      image = await loadImageSource(await res.blob());
+    } else {
+      image = await loadImageSource(src);
+    }
+    const { asset, report } = await analyzeProductImage(image, { wasmBase: WASM_BASE, name, id, onStatus: setStatus });
+    engine.setAsset(asset);
+    const conf = Math.round(report.confidence * 100);
+    const kind = report.sleeve === 'long' ? '긴팔' : report.sleeve === 'short' ? '반팔' : '민소매';
+    setStatus(`${name} · 자동 분석 ${kind} · 신뢰도 ${conf}% · ${fmt(report.ms, 0)} ms${report.warnings.length ? ' · ' + report.warnings[0] : ''}`);
+  } catch (err) {
+    const msg = String(err instanceof Error ? err.message : err);
+    const cors = /tainted|cross-origin|CORS|decode/i.test(msg);
+    setStatus(
+      cors && !isExtension
+        ? '이 사이트의 사진은 웹에서 직접 불러올 수 없습니다. 사진을 저장해 올리거나 IRIS 확장 프로그램을 사용하세요.'
+        : msg,
+    );
+  }
+}
+
 async function initCatalog(): Promise<void> {
   try {
     const catalog = await loadCatalog(PRODUCT_BASE);
@@ -70,7 +145,26 @@ async function initCatalog(): Promise<void> {
     setStatus(String(err));
     return;
   }
+  const uploadInput = document.createElement('input');
+  uploadInput.type = 'file';
+  uploadInput.accept = 'image/*';
+  uploadInput.hidden = true;
+  uploadInput.addEventListener('change', () => {
+    const f = uploadInput.files?.[0];
+    if (f) void tryPhoto(f, f.name.replace(/\.[^.]+$/, ''), 'upload');
+    uploadInput.value = '';
+  });
+  const tiles: HTMLElement[] = [uploadInput, tile('사진으로 입어보기', null, () => uploadInput.click(), 'upload')];
+
+  const page = await readPageCandidates();
+  if (page?.urls.length) {
+    page.urls.forEach((u, i) => {
+      tiles.push(tile(`페이지 사진 ${i + 1}`, u, () => void tryPhoto(u, page.title ?? `페이지 사진 ${i + 1}`, `page-${i}`), `page-${i}`));
+    });
+  }
+
   railEl.replaceChildren(
+    ...tiles,
     ...products.map((p) => {
       const b = document.createElement('button');
       b.className = 'product';
@@ -85,16 +179,29 @@ async function initCatalog(): Promise<void> {
       return b;
     }),
   );
-  const first = params.get('product') ?? products[0]?.id;
-  if (first) await selectProduct(first);
+  const img = params.get('img');
+  if (page?.urls.length) {
+    await tryPhoto(page.urls[0], page.title ?? '페이지 사진 1', 'page-0');
+  } else if (img) {
+    await tryPhoto(img, '주소로 불러온 사진', 'url');
+  } else {
+    const first = params.get('product') ?? products[0]?.id;
+    if (first) await selectProduct(first);
+  }
 }
+
+// 사진을 화면에 끌어다 놓으면 바로 분석
+document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer?.files?.[0];
+  if (f && f.type.startsWith('image/')) void tryPhoto(f, f.name.replace(/\.[^.]+$/, ''), 'upload');
+});
 
 async function selectProduct(id: string): Promise<void> {
   const info = products.find((p) => p.id === id);
   if (!info) return;
-  for (const el of railEl.querySelectorAll<HTMLButtonElement>('.product')) {
-    el.classList.toggle('selected', el.dataset.id === id);
-  }
+  markSelected(id);
   setStatus(`${info.name} 준비 중…`);
   const t0 = performance.now();
   try {
@@ -155,6 +262,7 @@ function applySettings(): void {
   s.refine = $<HTMLInputElement>('opt-refine').checked;
   s.fit.seamWidth = Number($<HTMLInputElement>('opt-width').value);
   s.fit.lift = Number($<HTMLInputElement>('opt-lift').value);
+  s.fit.length = Number($<HTMLInputElement>('opt-length').value);
   s.debugLandmarks = $<HTMLInputElement>('opt-dbg-lm').checked;
   s.debugSeg = $<HTMLInputElement>('opt-dbg-seg').checked;
   s.debugOcc = $<HTMLInputElement>('opt-dbg-occ').checked;
@@ -171,7 +279,7 @@ async function applyTracker(): Promise<void> {
   setStatus(`처리 장치 ${engine.tracker.delegate} · 자세 모델 ${trackerConfig.poseModel}`);
 }
 
-for (const id of ['opt-mirror', 'opt-shade', 'opt-seg', 'opt-refine', 'opt-width', 'opt-lift', 'opt-dbg-lm', 'opt-dbg-seg', 'opt-dbg-occ']) {
+for (const id of ['opt-mirror', 'opt-shade', 'opt-seg', 'opt-refine', 'opt-width', 'opt-lift', 'opt-length', 'opt-dbg-lm', 'opt-dbg-seg', 'opt-dbg-occ']) {
   $(id).addEventListener('input', applySettings);
 }
 for (const id of ['opt-pose', 'opt-delegate', 'opt-seg-every']) {
