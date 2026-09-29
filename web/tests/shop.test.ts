@@ -100,3 +100,42 @@ test('앞이 열린 재킷: 가운데 틈이 있어도 분석되고 틈은 라�
   assert.equal(a.labels[200 * 300 + 150], 0);
   assert.equal(a.labels[200 * 300 + 120], 1);
 });
+
+test('모델 착용 사진: 상의와 하의 색이 바뀌는 곳에서 자르고 소매를 팔 쪽으로 나눈다', async () => {
+  const { analyzeWorn } = await import('../src/engine/analyze/worn.ts');
+  const w = 300;
+  const h = 400;
+  const clothes = new Float32Array(w * h);
+  const rgb = new Uint8ClampedArray(w * h * 4);
+  // 관절점(착용자 왼쪽 = 이미지 오른쪽), 팔은 옆으로 약간 벌림
+  const lm: { x: number; y: number; visibility: number }[] = Array.from({ length: 33 }, () => ({ x: 0, y: 0, visibility: 0 }));
+  const set = (i: number, x: number, y: number): void => void (lm[i] = { x, y, visibility: 0.99 });
+  set(11, 200, 80); set(12, 100, 80); set(13, 235, 160); set(14, 65, 160);
+  set(15, 250, 240); set(16, 50, 240); set(23, 185, 240); set(24, 115, 240);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const torso = y >= 70 && y < 250 && x >= 95 && x <= 205;
+      const pants = y >= 250 && y < 380 && x >= 105 && x <= 195;
+      // 반소매: 어깨에서 팔꿈치 절반까지
+      const sleeveL = y >= 72 && y < 120 && x > 205 && x < 235;
+      const sleeveR = y >= 72 && y < 120 && x < 95 && x > 65;
+      if (torso || sleeveL || sleeveR) {
+        clothes[i] = 1;
+        rgb.set([200, 40, 40, 255], i * 4); // 빨간 상의
+      } else if (pants) {
+        clothes[i] = 1;
+        rgb.set([40, 60, 160, 255], i * 4); // 파란 하의
+      } else rgb.set([230, 200, 180, 255], i * 4); // 피부·배경
+    }
+  }
+  const a = analyzeWorn(clothes, rgb, w, h, lm);
+  assert.ok(a, '분석 실패');
+  assert.ok(Math.abs(a.keypoints.hemL.y - 250) < 8, `밑단 ${a.keypoints.hemL.y}`);
+  assert.equal(a.labels[300 * w + 150], 0, '하의는 잘라야 함');
+  assert.equal(a.labels[180 * w + 150], 1);
+  assert.equal(a.labels[95 * w + 225], 2, '착용자 왼쪽 소매');
+  assert.equal(a.labels[95 * w + 75], 3, '착용자 오른쪽 소매');
+  assert.equal(a.sleeve, 'short');
+  assert.ok((a.widthScale ?? 1) > 1);
+});

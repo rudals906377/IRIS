@@ -67,7 +67,7 @@ export class TopRig {
     this.asset = asset;
     const kp = asset.kp;
     this.gMid = mid(kp.shoulderL, kp.shoulderR);
-    this.gw = dist(kp.shoulderL, kp.shoulderR);
+    this.gw = dist(kp.shoulderL, kp.shoulderR) / (asset.info.widthScale ?? 1);
     const hemY = kp.hemL && kp.hemR ? (kp.hemL.y + kp.hemR.y) / 2 : this.gMid.y + this.gw * STD_LENGTH_RATIO;
     this.gLen = Math.max(1, hemY - this.gMid.y);
     const armpitY = kp.armpitL && kp.armpitR ? (kp.armpitL.y + kp.armpitR.y) / 2 : this.gMid.y + this.gLen * 0.28;

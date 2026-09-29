@@ -278,6 +278,19 @@ button.on {
   border-color: var(--accent);
 }
 
+/* 페이지 사진 후보 평가 결과: 옷만 찍힌 사진은 표시, 모델·연출 사진은 흐리게 */
+.product[data-fit='good']::after {
+  content: '옷 사진';
+  display: block;
+  margin-top: 2px;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.product[data-fit='poor'] img {
+  opacity: 0.55;
+}
+
 .panel {
   position: fixed;
   top: 0;

@@ -87,9 +87,13 @@ export class TryOnEngine {
     this.setAsset(asset);
   }
 
+  /** 마지막으로 입힌 자산(시험 도구에서 분석 결과 확인용) */
+  lastAsset: GarmentAsset | null = null;
+
   /** 이미 만들어진 자산(자동 분석한 상품 사진 등)을 입힌다. */
   setAsset(asset: GarmentAsset): void {
     this.loadingId = asset.info.id;
+    this.lastAsset = asset;
     this.clearGarment();
     this.garment = { info: asset.info, gpu: this.renderer.createGarment(asset), rig: new TopRig(asset) };
   }

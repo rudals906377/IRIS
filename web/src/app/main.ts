@@ -10,7 +10,7 @@
 //   ?delegate=CPU|GPU       처리 장치
 //   ?img=<주소>              상품 사진을 자동 분석해 입히기(CORS 허용 이미지)
 
-import { analyzeProductImage, loadImageSource } from '../engine/analyze/index.ts';
+import { analyzeProductImage, loadImageSource, quickAssess } from '../engine/analyze/index.ts';
 import { TryOnEngine } from '../engine/engine.ts';
 import { loadCatalog, type ProductInfo } from '../engine/garment.ts';
 import { fmt, summarize } from '../engine/stats.ts';
@@ -67,7 +67,58 @@ let products: ProductInfo[] = [];
 /** 확장 프로그램이 넘겨준 "현재 쇼핑몰 페이지의 상품 사진 후보" */
 interface PageCandidates {
   urls: string[];
+  /** 고해상도로 바꾼 주소 → 원래 주소 */
+  alts?: Record<string, string>;
   title?: string;
+}
+
+let pageAlts: Record<string, string> = {};
+/** 한 번 받은 사진은 다시 받지 않는다(후보 평가 → 착용). */
+const imageCache = new Map<string, Promise<HTMLImageElement>>();
+
+async function fetchImage(src: string): Promise<HTMLImageElement> {
+  let p = imageCache.get(src);
+  if (!p) {
+    p = (async () => {
+      if (!isExtension) return loadImageSource(src);
+      // 확장 프로그램은 사이트 권한으로 다른 도메인 이미지도 직접 받아올 수 있다.
+      // 고해상도로 바꾼 주소가 열리지 않으면 원래 주소로 다시 받는다.
+      for (const u of [src, pageAlts[src]].filter(Boolean) as string[]) {
+        const res = await fetch(u).catch(() => null);
+        if (res?.ok) return loadImageSource(await res.blob());
+      }
+      throw new Error('사진을 받지 못했습니다');
+    })();
+    imageCache.set(src, p);
+    p.catch(() => imageCache.delete(src));
+  }
+  return p;
+}
+
+/**
+ * 페이지 사진 후보를 앞에서부터 빠르게 평가해 옷만 찍힌 사진을 고른다.
+ * 앞순위(대표 이미지·갤러리 첫 사진)에서 충분히 좋은 사진이 나오면 바로 멈춘다(뒷면 사진보다 앞면 우선).
+ */
+async function pickCandidate(urls: string[]): Promise<{ index: number; confidence: number }> {
+  let best = { index: 0, confidence: -1 };
+  const limit = Math.min(urls.length, 8);
+  for (let i = 0; i < limit; i++) {
+    setStatus(`이 페이지의 상품 사진 ${urls.length}장 중 옷만 찍힌 사진을 찾는 중… (${i + 1}/${limit})`);
+    try {
+      const img = await fetchImage(urls[i]);
+      const q = quickAssess(img);
+      const tileEl = railEl.querySelector<HTMLElement>(`.product[data-id="page-${i}"]`);
+      if (tileEl) tileEl.dataset.fit = q.confidence >= 0.6 ? 'good' : 'poor';
+      if (q.confidence > best.confidence) best = { index: i, confidence: q.confidence };
+      if (q.confidence >= 0.75) break;
+    } catch {
+      /* 못 받은 사진은 건너뛴다 */
+    }
+    await new Promise((r) => setTimeout(r, 0)); // 화면 갱신 기회
+  }
+  // 옷만 찍힌 사진이 없으면 대표 사진(보통 정면 모델 착용 사진)을 착용 사진 분석으로 넘긴다.
+  if (best.confidence < 0.45) best = { index: 0, confidence: best.confidence };
+  return best;
 }
 
 const isExtension = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
@@ -112,15 +163,7 @@ async function tryPhoto(src: string | Blob, name: string, id: string): Promise<v
   markSelected(id);
   setStatus('상품 사진 불러오는 중…');
   try {
-    let image: HTMLImageElement;
-    if (typeof src === 'string' && isExtension) {
-      // 확장 프로그램은 사이트 권한으로 다른 도메인 이미지도 직접 받아올 수 있다.
-      const res = await fetch(src);
-      if (!res.ok) throw new Error(`사진을 받지 못했습니다 (${res.status})`);
-      image = await loadImageSource(await res.blob());
-    } else {
-      image = await loadImageSource(src);
-    }
+    const image = typeof src === 'string' ? await fetchImage(src) : await loadImageSource(src);
     const { asset, report } = await analyzeProductImage(image, { wasmBase: WASM_BASE, name, id, onStatus: setStatus });
     engine.setAsset(asset);
     const conf = Math.round(report.confidence * 100);
@@ -181,7 +224,9 @@ async function initCatalog(): Promise<void> {
   );
   const img = params.get('img');
   if (page?.urls.length) {
-    await tryPhoto(page.urls[0], page.title ?? '페이지 사진 1', 'page-0');
+    pageAlts = page.alts ?? {};
+    const pick = await pickCandidate(page.urls);
+    await tryPhoto(page.urls[pick.index], page.title ?? `페이지 사진 ${pick.index + 1}`, `page-${pick.index}`);
   } else if (img) {
     await tryPhoto(img, '주소로 불러온 사진', 'url');
   } else {

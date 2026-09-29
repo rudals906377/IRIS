@@ -18,6 +18,8 @@ export interface TopAnalysis {
   /** 0~1, 낮으면 사용자에게 기준점 확인을 권한다. */
   confidence: number;
   warnings: string[];
+  /** 가로 배율 보정(ProductInfo.widthScale) */
+  widthScale?: number;
 }
 
 interface Run {

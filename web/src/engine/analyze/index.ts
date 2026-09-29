@@ -5,19 +5,23 @@
 //    다시 분리해 보고, 더 신뢰도가 높은 결과를 쓴다.
 // 모든 처리는 브라우저 안에서 이뤄지며 사진은 어디에도 전송되지 않는다.
 
-import { FilesetResolver, InteractiveSegmenterLegacy } from '@mediapipe/tasks-vision';
+import { FilesetResolver, ImageSegmenter, InteractiveSegmenterLegacy, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { buildMeshes, type GarmentAsset, type ProductInfo } from '../garment.ts';
 import type { Vec2 } from '../math.ts';
 import { largestComponent, open, removeBackground, type RGBAImage } from './background.ts';
 import { analyzeTop, type TopAnalysis } from './top.ts';
+import { analyzeWorn, type Landmark } from './worn.ts';
 
 const WORK_SIZE = 512;
 const TEX_SIZE = 1024;
+const MP_MODELS = 'https://storage.googleapis.com/mediapipe-models';
+const POSE_MODEL = `${MP_MODELS}/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task`;
+const SEG_MODEL = `${MP_MODELS}/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite`;
 const MAGIC_MODEL =
   'https://storage.googleapis.com/mediapipe-models/interactive_segmenter/magic_touch/float32/1/magic_touch.tflite';
 
 export interface AnalyzeReport {
-  method: 'rule' | 'magic';
+  method: 'rule' | 'magic' | 'worn';
   confidence: number;
   sleeve: TopAnalysis['sleeve'];
   warnings: string[];
@@ -46,6 +50,108 @@ async function getMagic(wasmBase: string): Promise<InteractiveSegmenterLegacy> {
     return magic;
   })();
   return magicLoading;
+}
+
+let photoModels: Promise<{ pose: PoseLandmarker; seg: ImageSegmenter }> | null = null;
+
+/** 모델 착용 사진용: 정지 사진 모드의 자세 추정·다중 클래스 분할(CPU, 처음 한 번만 불러옴) */
+function getPhotoModels(wasmBase: string): Promise<{ pose: PoseLandmarker; seg: ImageSegmenter }> {
+  photoModels ??= (async () => {
+    const fs = await FilesetResolver.forVisionTasks(wasmBase);
+    const [pose, seg] = await Promise.all([
+      PoseLandmarker.createFromOptions(fs, {
+        baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'CPU' },
+        runningMode: 'IMAGE',
+        numPoses: 1,
+      }),
+      ImageSegmenter.createFromOptions(fs, {
+        baseOptions: { modelAssetPath: SEG_MODEL, delegate: 'CPU' },
+        runningMode: 'IMAGE',
+        outputCategoryMask: false,
+        outputConfidenceMasks: true,
+      }),
+    ]);
+    return { pose, seg };
+  })();
+  photoModels.catch(() => (photoModels = null));
+  return photoModels;
+}
+
+interface WornResult {
+  /** 옷 부분을 잘라 낸 원본 해상도 사진 */
+  crop: HTMLCanvasElement;
+  work: { w: number; h: number };
+  mask: Uint8Array;
+  a: TopAnalysis;
+}
+
+/** 사진에 사람이 있으면 모델 착용 사진으로 보고 상의를 잘라 분석한다. 사람이 없으면 null. */
+async function analyzeWornPhoto(src: HTMLImageElement | ImageBitmap | HTMLCanvasElement, workCanvas: HTMLCanvasElement, wasmBase: string): Promise<WornResult | null> {
+  const { pose, seg } = await getPhotoModels(wasmBase);
+  const res = pose.detect(workCanvas);
+  const lms = res.landmarks?.[0];
+  if (!lms) return null;
+  const W0 = workCanvas.width;
+  const H0 = workCanvas.height;
+  const P = (i: number): Landmark => ({ x: lms[i].x * W0, y: lms[i].y * H0, visibility: lms[i].visibility });
+  const need = [11, 12, 23, 24];
+  if (need.some((i) => (lms[i].visibility ?? 1) < 0.5)) return null;
+  // 상체와 팔을 넉넉히 감싸는 영역만 잘라 분할 해상도를 높인다.
+  const sw = Math.abs(P(11).x - P(12).x);
+  const pts = [11, 12, 13, 14, 15, 16, 23, 24].map(P).filter((p) => (p.visibility ?? 1) > 0.3);
+  const hipY = (P(23).y + P(24).y) / 2;
+  const torso = hipY - (P(11).y + P(12).y) / 2;
+  let x0 = Math.min(...pts.map((p) => p.x)) - sw * 0.35;
+  let x1 = Math.max(...pts.map((p) => p.x)) + sw * 0.35;
+  let y0 = Math.min(P(11).y, P(12).y) - sw * 0.5;
+  let y1 = Math.max(hipY + torso * 0.55, ...pts.map((p) => p.y + torso * 0.12));
+  x0 = Math.max(0, x0);
+  y0 = Math.max(0, y0);
+  x1 = Math.min(W0, x1);
+  y1 = Math.min(H0, y1);
+  if (x1 - x0 < 32 || y1 - y0 < 32) return null;
+  const { w: ow } = sizeOf(src);
+  const k = ow / W0; // 분석 → 원본 배율
+  const cw = Math.round((x1 - x0) * k);
+  const ch = Math.round((y1 - y0) * k);
+  const tex = fit(cw, ch, TEX_SIZE);
+  const crop = document.createElement('canvas');
+  crop.width = tex.w;
+  crop.height = tex.h;
+  const cctx = crop.getContext('2d', { willReadFrequently: true })!;
+  cctx.imageSmoothingQuality = 'high';
+  cctx.drawImage(src, x0 * k, y0 * k, cw, ch, 0, 0, tex.w, tex.h);
+  const work = fit(tex.w, tex.h, WORK_SIZE);
+  const wc = toCanvas(crop, work.w, work.h);
+  const rgba = wc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, work.w, work.h).data;
+  const clothes = new Float32Array(work.w * work.h);
+  let skin = 0;
+  seg.segment(wc, (r) => {
+    // 사람 피부(2 몸, 3 얼굴)가 보여야 모델 착용 사진으로 인정한다(옷만 찍힌 사진의 자세 오검출 방지).
+    for (const c of [2, 3]) {
+      const sm = r.confidenceMasks?.[c]?.getAsFloat32Array();
+      if (sm) for (let i = 0; i < sm.length; i++) if (sm[i] > 0.5) skin++;
+    }
+    const m = r.confidenceMasks?.[4]; // 4 = 옷
+    if (!m) return;
+    skin /= m.width * m.height;
+    const f = m.getAsFloat32Array();
+    for (let y = 0; y < work.h; y++) {
+      const my = Math.min(m.height - 1, Math.floor((y * m.height) / work.h));
+      for (let x = 0; x < work.w; x++) {
+        const mx = Math.min(m.width - 1, Math.floor((x * m.width) / work.w));
+        clothes[y * work.w + x] = f[my * m.width + mx];
+      }
+    }
+  });
+  if (skin < 0.01) return null;
+  const s = work.w / (x1 - x0);
+  const local: Landmark[] = lms.map((l) => ({ x: (l.x * W0 - x0) * s, y: (l.y * H0 - y0) * s, visibility: l.visibility }));
+  const a = analyzeWorn(clothes, rgba, work.w, work.h, local);
+  if (!a) return null;
+  const mask = new Uint8Array(work.w * work.h);
+  for (let i = 0; i < mask.length; i++) mask[i] = a.labels[i] ? 1 : 0;
+  return { crop, work, mask, a };
 }
 
 function toCanvas(src: CanvasImageSource, w: number, h: number): HTMLCanvasElement {
@@ -125,6 +231,24 @@ export async function analyzeProductImage(
   const ruleA = analyzeTop(rule.mask, work.w, work.h);
   if (ruleA) best = { mask: rule.mask, a: ruleA, method: 'rule' };
 
+  let texSrc: CanvasImageSource = src;
+  let texSize = { w: ow, h: oh };
+  let workSize = work;
+  {
+    // 사람이 찍혀 있으면 모델 착용 사진으로 분석한다(단색 배경의 모델 사진은 규칙 방식이 사람 전체를 옷으로 볼 수 있다).
+    opts.onStatus?.('모델 착용 사진인지 확인 중…');
+    try {
+      const worn = await analyzeWornPhoto(src, workCanvas, opts.wasmBase);
+      if (worn && worn.a.confidence >= 0.4) {
+        best = { mask: worn.mask, a: worn.a, method: 'worn' };
+        texSrc = worn.crop;
+        texSize = { w: worn.crop.width, h: worn.crop.height };
+        workSize = { ...worn.work, s: 1 };
+      }
+    } catch (err) {
+      console.warn('착용 사진 분석 실패', err);
+    }
+  }
   if (!best || best.a.confidence < 0.7) {
     opts.onStatus?.('정밀 분리 모델로 다시 분석 중…');
     try {
@@ -133,6 +257,9 @@ export async function analyzeProductImage(
       const magicA = analyzeTop(mm, work.w, work.h);
       if (magicA && (!best || magicA.confidence > best.a.confidence + 0.05)) {
         best = { mask: mm, a: magicA, method: 'magic' };
+        texSrc = src;
+        texSize = { w: ow, h: oh };
+        workSize = work;
       }
     } catch (err) {
       console.warn('대화형 분할 실패', err);
@@ -140,20 +267,20 @@ export async function analyzeProductImage(
   }
   // 비율이 실제 옷으로 불가능할 만큼 틀리면 망가진 착용 화면 대신 안내한다.
   if (!best || best.a.confidence < 0.35) {
-    throw new Error('옷 모양을 인식하지 못했습니다. 배경이 단색인 상의 단독 사진(모델 착용 사진 제외)을 골라 주세요.');
+    throw new Error('옷 모양을 인식하지 못했습니다. 배경이 단색인 상의 단독 사진이나 정면 모델 착용 사진을 골라 주세요.');
   }
 
   // 텍스처: 원본을 최대 1024px로, 마스크를 부드럽게 키워 알파로 쓴다.
   opts.onStatus?.('착용 준비 중…');
-  const tex = fit(ow, oh, TEX_SIZE);
-  const texCanvas = toCanvas(src, tex.w, tex.h);
+  const tex = fit(texSize.w, texSize.h, TEX_SIZE);
+  const texCanvas = toCanvas(texSrc, tex.w, tex.h);
   const maskCanvas = document.createElement('canvas');
-  maskCanvas.width = work.w;
-  maskCanvas.height = work.h;
+  maskCanvas.width = workSize.w;
+  maskCanvas.height = workSize.h;
   const mctx = maskCanvas.getContext('2d')!;
-  const mimg = mctx.createImageData(work.w, work.h);
+  const mimg = mctx.createImageData(workSize.w, workSize.h);
   // 가장자리 1px을 깎아 배경색이 섞인 테두리(흰 테)를 없앤다.
-  const edgeCut = erodeOnce(best.mask, work.w, work.h);
+  const edgeCut = erodeOnce(best.mask, workSize.w, workSize.h);
   for (let i = 0; i < edgeCut.length; i++) {
     mimg.data[i * 4 + 3] = edgeCut[i] ? 255 : 0;
   }
@@ -168,17 +295,17 @@ export async function analyzeProductImage(
   // 라벨은 가장 가까운 분석 픽셀 값으로 키운다.
   const labels = new Uint8Array(tex.w * tex.h);
   for (let y = 0; y < tex.h; y++) {
-    const sy = Math.min(work.h - 1, Math.floor((y * work.h) / tex.h));
+    const sy = Math.min(workSize.h - 1, Math.floor((y * workSize.h) / tex.h));
     for (let x = 0; x < tex.w; x++) {
-      const sx = Math.min(work.w - 1, Math.floor((x * work.w) / tex.w));
-      labels[y * tex.w + x] = best.a.labels[sy * work.w + sx];
+      const sx = Math.min(workSize.w - 1, Math.floor((x * workSize.w) / tex.w));
+      labels[y * tex.w + x] = best.a.labels[sy * workSize.w + sx];
     }
   }
   // 알파가 거의 없는 곳은 라벨도 비운다(메쉬가 빈 칸을 덮지 않도록).
   const alpha = tctx.getImageData(0, 0, tex.w, tex.h).data;
   for (let i = 0; i < labels.length; i++) if (alpha[i * 4 + 3] < 8) labels[i] = 0;
 
-  const k = tex.w / work.w;
+  const k = tex.w / workSize.w;
   const keypoints: Record<string, Vec2> = {};
   const kpJson: Record<string, [number, number]> = {};
   for (const [name, p] of Object.entries(best.a.keypoints)) {
@@ -195,6 +322,7 @@ export async function analyzeProductImage(
     size: [tex.w, tex.h],
     keypoints: kpJson,
     sleeve: best.a.sleeve === 'none' ? null : best.a.sleeve,
+    widthScale: best.a.widthScale,
   };
   const asset: GarmentAsset = {
     info,
@@ -215,6 +343,23 @@ export async function analyzeProductImage(
       ms: performance.now() - t0,
     },
   };
+}
+
+/**
+ * 빠른 사전 평가(규칙 방식만, 모델 불필요): 쇼핑몰 페이지의 여러 사진 중
+ * "배경이 단색이고 옷 형태가 분명한 사진"을 고르는 데 쓴다. 0~1(높을수록 옷만 찍힌 사진).
+ */
+export function quickAssess(src: HTMLImageElement | ImageBitmap | HTMLCanvasElement): { confidence: number; sleeve: TopAnalysis['sleeve'] | null } {
+  const { w: ow, h: oh } = sizeOf(src);
+  if (!ow || !oh) return { confidence: 0, sleeve: null };
+  const work = fit(ow, oh, WORK_SIZE);
+  const c = toCanvas(src, work.w, work.h);
+  const data = c.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, work.w, work.h).data;
+  const rule = removeBackground({ data, width: work.w, height: work.h });
+  // 배경이 단색이 아니면(모델 착용·연출 사진) 규칙 방식 결과를 믿지 않는다.
+  const bgPenalty = rule.spread > 40 ? 0.3 : rule.spread > 20 ? 0.7 : 1;
+  const a = analyzeTop(rule.mask, work.w, work.h);
+  return { confidence: (a?.confidence ?? 0) * bgPenalty, sleeve: a?.sleeve ?? null };
 }
 
 /** 주소(URL)나 파일에서 이미지를 불러온다. 다른 사이트 이미지는 CORS 허용 시에만 픽셀을 읽을 수 있다. */

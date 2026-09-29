@@ -15,6 +15,8 @@ export interface ProductInfo {
   size: [number, number];
   keypoints: Record<string, [number, number]>;
   sleeve?: 'short' | 'long' | null;
+  /** 가로 배율 보정(모델 착용 사진처럼 몸 앞면 폭만 보이는 사진은 1보다 크게) */
+  widthScale?: number;
   credit?: string;
 }
 
