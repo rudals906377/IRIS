@@ -28,15 +28,22 @@ const sw = ctx.serviceWorkers()[0] ?? (await ctx.waitForEvent('serviceworker', {
 const shop = await ctx.newPage();
 await shop.goto(shopUrl, { waitUntil: 'load', timeout: 60000 });
 await shop.waitForTimeout(3000);
-const found = await sw.evaluate(async (host) => {
-  const [tab] = await chrome.tabs.query({ url: `*://${host}/*` });
+const found = await sw.evaluate(async (url) => {
+  const tabs = await chrome.tabs.query({});
+  const tab = tabs.find((t) => t.url === url) ?? tabs.find((t) => t.url?.startsWith(new URL(url).origin));
   return globalThis.irisTest.tryTab(tab.id);
-}, new URL(shopUrl).host);
+}, shop.url());
 console.log('수집된 후보:', JSON.stringify(found, null, 1));
 const tryon = await ctx.waitForEvent('page', { predicate: (p) => p.url().includes('index.html'), timeout: 20000 });
 await tryon.waitForFunction(() => window.iris && window.iris.metrics.framesTotal > 3 && window.iris.product, null, { timeout: 120000 }).catch(() => console.log('착용 준비 시간 초과'));
 await tryon.waitForTimeout(6000);
-console.log(JSON.stringify(await tryon.evaluate(() => ({ status: document.getElementById('status').textContent, product: window.iris.product?.name, body: !!window.iris.lastBody })), null, 1));
+console.log(JSON.stringify(await tryon.evaluate(() => ({
+  status: document.getElementById('status').textContent,
+  product: window.iris.product?.name,
+  selected: document.querySelector('.product.selected')?.dataset.id,
+  fit: [...document.querySelectorAll('.product[data-fit]')].map((e) => `${e.dataset.id}:${e.dataset.fit}`),
+  body: !!window.iris.lastBody,
+})), null, 1));
 await tryon.screenshot({ path: outPng });
 console.log(logs.slice(-15).join('\n'));
 await ctx.close();

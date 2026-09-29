@@ -19,6 +19,8 @@ if [ ! -d "$TMP/idm/.git" ]; then
   git -C "$TMP/idm" sparse-checkout set gradio_demo/example/cloth gradio_demo/example/human
 fi
 cp "$TMP"/idm/gradio_demo/example/cloth/*.jpg "$TD/cloth/"
+mkdir -p "$TD/human"   # 모델 착용 사진 분석 시험용
+for n in 00034_00 00035_00 00055_00 00121_00 01992_00; do cp "$TMP/idm/gradio_demo/example/human/$n.jpg" "$TD/human/"; done
 cp "$ROOT"/web/public/products/shop/*.jpg "$TD/cloth/"
 for n in 00121_00 01992_00 00035_00 00055_00 00034_00; do
   "$FF" -hide_banner -loglevel error -y -loop 1 -t 2 -i "$TMP/idm/gradio_demo/example/human/$n.jpg" -vf "scale=576:768,fps=15" -c:v libvpx-vp9 -b:v 0 -crf 30 -deadline realtime -cpu-used 8 "$TD/still_$n.webm"

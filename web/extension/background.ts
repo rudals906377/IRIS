@@ -169,24 +169,25 @@ function collectProductImages(): { urls: string[]; title?: string } {
     } catch {
       continue;
     }
-    const big = r.width >= 120 && r.height >= 120 && (img.naturalWidth >= 250 || !img.complete);
-    // 갤러리 썸네일은 작게 보여도 같은 상품의 다른 사진이므로 알려진 쇼핑몰 CDN이면 받는다.
-    if (!big && !knownCdn.test(host)) continue;
-    if (!big && (r.width < 24 || r.height < 24) && img.naturalWidth < 250) {
-      if (!(r.width === 0 && knownCdn.test(host))) continue;
-    }
+    const lazy = !img.getAttribute('src') || !img.complete || img.naturalWidth === 0;
+    const big = r.width >= 120 && r.height >= 120 && (img.naturalWidth >= 250 || lazy);
+    // 갤러리 썸네일: 작게 보여도 원본이 크거나(축소 표시) 알려진 쇼핑몰 CDN이면 같은 상품의 다른 사진으로 받는다.
+    const thumb = r.width >= 40 && r.height >= 40 && (img.naturalWidth >= 250 || knownCdn.test(host));
+    const hiddenSlide = r.width === 0 && knownCdn.test(host); // 캐러셀에서 가려진 사진
+    if (!big && !thumb && !hiddenSlide) continue;
     let score = Math.max(r.width * r.height, 120 * 120);
-    // 다른 상품으로 가는 링크 안(추천·최근 본 상품)이면 크게 낮춘다.
+    // 다른 상품으로 가는 링크 안(추천·최근 본 상품)은 다른 옷이므로 뺀다.
     const a = img.closest('a[href]') as HTMLAnchorElement | null;
     if (a) {
       try {
         const to = new URL(a.href, location.href);
-        if (to.pathname.replace(/\/$/, '') !== here) score *= 0.05;
+        if (to.pathname.replace(/\/$/, '') !== here) continue;
       } catch {
         /* 무시 */
       }
     }
-    // 상세 갤러리는 페이지 위쪽에 있다.
+    // 상세 갤러리는 페이지 위쪽에 있다(한참 아래는 추천·후기 영역).
+    if (pageTop > innerHeight * 2.5) continue;
     if (pageTop > innerHeight * 1.6) score *= 0.1;
     add(src, score);
   }

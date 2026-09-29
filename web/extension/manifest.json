@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "IRIS 가상 착용",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "쇼핑몰 상품 사진을 웹캠 속 내 몸에 바로 입어 봅니다. 영상은 이 컴퓨터 안에서만 처리됩니다.",
   "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "action": {
