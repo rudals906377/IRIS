@@ -343,10 +343,11 @@ export class TopRig {
       const corrBot = sub(pit, innerAt(pitArc, off0));
       const m = sl.mesh;
       for (let i = 0; i < m.vertexCount; i++) {
-        const s = Math.max(0, sl.s[i]);
+        // 뿌리 중점보다 위(s<0, 접어 찍은 소매의 어깨 쪽)도 팔 위쪽으로 이어서 놓는다(뿌리에 뭉쳐 비지 않게)
+        const s = sl.s[i];
         const v = sl.v[i];
         const aTop = s * topLen;
-        const aBot = pitArc + s * botLen;
+        const aBot = pitArc + Math.max(0, s) * botLen + Math.min(0, s) * topLen;
         const off = halfAt(s, (aTop + aBot) / 2);
         const fade = 1 - smoothstep(0, 0.35, s);
         const top = add(outerAt(aTop, off), scale(corrTop, fade));
