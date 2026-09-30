@@ -29,7 +29,7 @@ python3 - "$TD" "$FF" <<'PY'
 import subprocess, sys
 from PIL import Image
 td, ff = sys.argv[1], sys.argv[2]
-boxes = {'00034_00': (255, 0, 470, 286), '00055_00': (294, 0, 533, 319), '01992_00': (178, 0, 419, 321), 'sam1': (372, 38, 703, 479)}
+boxes = {'00034_00': (255, 0, 470, 286), '00055_00': (294, 0, 533, 319), '01992_00': (178, 0, 419, 321), 'sam1': (372, 38, 703, 479), '00035_00': (315, 54, 540, 354), '00121_00': (236, 0, 500, 352)}
 for n, box in boxes.items():
     Image.open(f'{td}/human/{n}.jpg').convert('RGB').crop(box).resize((720, 960), Image.LANCZOS).save(f'{td}/face/{n}.png')
     subprocess.run([ff, '-hide_banner', '-loglevel', 'error', '-y', '-loop', '1', '-t', '2', '-i', f'{td}/face/{n}.png', '-vf', 'fps=15',

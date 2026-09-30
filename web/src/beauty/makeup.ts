@@ -229,8 +229,13 @@ void main() {
     // ② 톤 정리: 붉은기·얼룩을 얼굴 평균 피부색 쪽으로(밝기는 유지)
     float Lsm = dot(sm, WL);
     sm = mix(sm, (vSkin / Ls) * Lsm, 0.3);
-    // ③ 파운데이션 호수: 기준 피부 대비 색 비율을 얇게
-    sm *= mix(vec3(1.0), clamp(lin(uBase) / REF, 0.6, 1.6), 0.35);
+    // ③ 파운데이션 호수: 색감(언더톤)은 기준 피부 대비 비율로, 밝기는 ±8%까지만 바꾼다.
+    //    피부 톤과 많이 다른 호수를 그대로 곱하면 어두운 피부가 잿빛으로 들뜬다(맞지 않는 호수를 바른 것처럼)
+    vec3 bs = lin(uBase);
+    float bsL = max(dot(bs, WL), 1e-3);
+    vec3 chroma = clamp((bs / bsL) / (REF / dot(REF, WL)), 0.75, 1.3);
+    float bright = clamp(pow(bsL / dot(REF, WL), 0.3), 0.92, 1.08);
+    sm *= mix(vec3(1.0), chroma * bright, 0.35);
     outL = mix(cl, sm, baseM);
   }
   // 눈썹: 올은 진하게, 올 사이 피부는 옅게 채운다

@@ -13,6 +13,14 @@ node tools/harness/batch.mjs /tmp/b '[{"src":"testdata/face/00055_00.webm","look
 node tools/harness/freeze.mjs 'src=testdata/female.webm&look=daily&delegate=CPU' /tmp/fz 12 '[{"refine":false},{"refine":true}]'
 ```
 
+**커밋 전 스모크 시험**: 모든 효과를 켜고 셰이더 컴파일 오류·예외가 없는지 확인한다(셰이더 오류는 빌드·단위 테스트로 안 잡힌다).
+
+```bash
+node tools/harness/smoke.mjs     # 실패하면 종료 코드 1
+```
+
+시험 얼굴 영상(`testdata/face/`)에는 밝은·중간·어두운 피부 톤이 모두 있다(00034·00055·01992·sam1·00035·00121). 색 관련 변경은 여러 톤에서 함께 확인한다.
+
 주의: 미리보기 서버는 `web/dist`를 보여 주므로 `testdata`에 파일을 새로 넣었으면 다시 빌드하거나 `web/dist/testdata`에 복사한다.
 
 디버그 설정(`settings`): `debugLandmarks` 얼굴 점 / `debugSeg` 분할(빨강 머리카락, 초록 몸 피부, 파랑 얼굴 피부).

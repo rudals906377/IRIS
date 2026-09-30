@@ -22,7 +22,9 @@ const c = (hex: string): RGB => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2
 /** tip: 끝 색(뿌리 → 끝 그라데이션, 헤어만) */
 export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[]> = {
   // 피부 보정: 파운데이션 호수(한국식 호수 표기는 대략적인 밝기 구분). 보정 세기는 진하기 슬라이더
+  // 호수 색은 색감(언더톤)과 ±8% 밝기로만 반영된다. '톤 유지'는 기준 피부색이라 잡티·톤 정리만 한다
   base: [
+    { name: '톤 유지', color: c('#d1a38a') },
     { name: '17호 라이트', color: c('#f0d6c2') },
     { name: '21호 내추럴', color: c('#e6c4a8') },
     { name: '23호 베이지', color: c('#d8b394') },
@@ -108,7 +110,7 @@ export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<Part
   daily: {
     label: '데일리',
     parts: {
-      base: { color: c('#e6c4a8'), amount: 0.45 },
+      base: { color: c('#d1a38a'), amount: 0.45 },
       lip: { color: c('#c7545f'), amount: 0.6 },
       shadow: { color: c('#8a5a44'), amount: 0.35 },
       blush: { color: c('#f2a08a'), amount: 0.3 },
@@ -159,7 +161,7 @@ export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<Part
   glam: {
     label: '글램',
     parts: {
-      base: { color: c('#e6c4a8'), amount: 0.6 },
+      base: { color: c('#d1a38a'), amount: 0.6 },
       contour: { color: c('#8c7a70'), amount: 0.55 },
       lip: { color: c('#9e3a4a'), amount: 0.8 },
       shadow: { color: c('#b98a5e'), amount: 0.6 },
