@@ -74,16 +74,3 @@ test('거울 루프백: 카메라가 화면을 못 보면 실패로 끝남', () 
   assert.equal(lb.phase, 'failed');
 });
 
-test('역쌍선형 좌표: 사각형 꼭짓점과 중심', async () => {
-  const { inverseBilinear } = await import('../src/engine/rig-top.ts');
-  const p00 = { x: 0, y: 0 };
-  const p10 = { x: 10, y: 2 };
-  const p01 = { x: 1, y: 8 };
-  const p11 = { x: 12, y: 11 };
-  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-6;
-  const [s0, v0] = inverseBilinear(p11, p00, p10, p01, p11);
-  assert.ok(near(s0, 1) && near(v0, 1), `${s0},${v0}`);
-  const c = { x: (0 + 10 + 1 + 12) / 4, y: (0 + 2 + 8 + 11) / 4 };
-  const [s1, v1] = inverseBilinear(c, p00, p10, p01, p11);
-  assert.ok(near(s1, 0.5) && near(v1, 0.5), `${s1},${v1}`);
-});

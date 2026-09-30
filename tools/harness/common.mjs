@@ -17,9 +17,9 @@ export function launch() {
   return chromium.launch({ executablePath: CHROME, args: ARGS });
 }
 
-/** 앱이 영상 프레임을 몇 장 처리하고 상품이 준비될 때까지 기다린다. */
+/** 앱이 영상 프레임을 몇 장 처리하고 얼굴을 찾을 때까지 기다린다. */
 export async function waitReady(page, timeout = 90000) {
-  await page.waitForFunction(() => window.iris && window.iris.metrics.framesTotal > 4 && window.iris.product, null, { timeout });
+  await page.waitForFunction(() => window.iris && window.iris.metrics.framesTotal > 4 && window.iris.lastFace, null, { timeout });
 }
 
 /** 스크린샷에서 검은 여백을 잘라 낸다(파이썬 없이 쓰려면 생략 가능). */

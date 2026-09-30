@@ -1,26 +1,23 @@
-// 화면 구성과 사용자 조작. 엔진(engine/)을 불러 카메라·상품·설정을 연결한다.
+// 화면 구성과 사용자 조작. 엔진(engine/)을 불러 카메라·메이크업·설정을 연결한다.
 //
-// 개발·테스트용 주소 인자:
+// 개발·시험용 주소 인자:
 //   ?src=sample            예시 영상으로 바로 시작
 //   ?src=<경로>             같은 사이트의 동영상으로 바로 시작(시험용)
-//   ?product=<상품 id>      처음 선택할 상품
+//   ?look=<룩 이름>         처음 적용할 룩(daily, coral, red, smoky, rose, clear)
 //   ?hud=1                  측정 표시 켜기
-//   ?debug=lm,seg,occ       개발자 표시
-//   ?pose=lite|full|heavy   자세 모델
+//   ?debug=lm,seg           개발자 표시(얼굴 점, 분할)
 //   ?delegate=CPU|GPU       처리 장치
-//   ?img=<주소>              상품 사진을 자동 분석해 입히기(CORS 허용 이미지)
 
-import { analyzeProductImage, loadImageSource, quickAssess } from '../engine/analyze/index.ts';
-import { TryOnEngine } from '../engine/engine.ts';
-import { loadCatalog, type ProductInfo } from '../engine/garment.ts';
+import { LOOKS, PALETTES, PART_LABELS, type LookName, type PartName } from '../beauty/palettes.ts';
+import type { MakeupLook, RGB } from '../beauty/makeup.ts';
+import { BeautyEngine } from '../engine/engine.ts';
 import { fmt, summarize } from '../engine/stats.ts';
-import { DEFAULT_TRACKER_CONFIG, type Delegate, type PoseModel, type TrackerConfig } from '../engine/tracker.ts';
+import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
 const base = new URL('./', location.href);
 const WASM_BASE = new URL('mediapipe/wasm', base).href;
-const PRODUCT_BASE = new URL('products/', base).href;
 const canMp4 = document.createElement('video').canPlayType('video/mp4; codecs="avc1.4d401e"') !== '';
 const SAMPLE_VIDEO = new URL(canMp4 ? 'samples/sample-person.mp4' : 'samples/sample-person.webm', base).href;
 
@@ -30,29 +27,32 @@ const guideEl = $<HTMLDivElement>('guide');
 const startEl = $<HTMLDivElement>('start');
 const viewEl = $<HTMLDivElement>('view');
 const panelEl = $<HTMLElement>('panel');
-const railEl = $<HTMLElement>('rail');
+const tabsEl = $<HTMLElement>('tabs');
+const swatchesEl = $<HTMLElement>('swatches');
+const amountEl = $<HTMLInputElement>('amount');
+const amountRowEl = $<HTMLElement>('amount-row');
+const glossRowEl = $<HTMLElement>('gloss-row');
+const glossEl = $<HTMLInputElement>('gloss');
 const loopbackEl = $<HTMLPreElement>('loopback-result');
 
-const engine = new TryOnEngine({
+const engine = new BeautyEngine({
   video: $<HTMLVideoElement>('video'),
   canvas: $<HTMLCanvasElement>('gl'),
   overlay: $<HTMLCanvasElement>('overlay'),
   wasmBase: WASM_BASE,
-  productBase: PRODUCT_BASE,
 });
-// 개발 도구·자동 테스트에서 상태를 확인할 수 있게 노출
-(window as unknown as { iris: TryOnEngine }).iris = engine;
+// 개발 도구·자동 시험에서 상태를 확인할 수 있게 노출
+(window as unknown as { iris: BeautyEngine }).iris = engine;
 
 const coarse = matchMedia('(pointer: coarse)').matches;
 const trackerConfig: TrackerConfig = {
   ...DEFAULT_TRACKER_CONFIG,
-  poseModel: (params.get('pose') as PoseModel) ?? (coarse ? 'lite' : 'full'),
   delegate: (params.get('delegate') as Delegate) ?? 'GPU',
   segEvery: coarse ? 2 : 1,
 };
 
 let running = false;
-let lastPersonSeen = performance.now();
+let lastFaceSeen = performance.now();
 let loopbackSummary: ReturnType<typeof summarize> | null = null;
 let loopbackFailures = 0;
 
@@ -60,208 +60,134 @@ function setStatus(msg: string): void {
   statusEl.textContent = msg;
 }
 
-// ---- 상품 목록 ----
+// ---- 메이크업 선택 ----
 
-let products: ProductInfo[] = [];
+/** 부위별로 마지막에 고른 색(없음이면 null)과 진하기 */
+const chosen: Record<PartName, { color: RGB | null; amount: number }> = {
+  lip: { color: null, amount: 0.75 },
+  shadow: { color: null, amount: 0.45 },
+  blush: { color: null, amount: 0.35 },
+  liner: { color: null, amount: 0.85 },
+  brow: { color: null, amount: 0.35 },
+};
+let gloss = 0.3;
+let tab: PartName | 'look' = 'look';
+let currentLook: LookName | null = null;
 
-/** 확장 프로그램이 넘겨준 "현재 쇼핑몰 페이지의 상품 사진 후보" */
-interface PageCandidates {
-  urls: string[];
-  /** 고해상도로 바꾼 주소 → 원래 주소 */
-  alts?: Record<string, string>;
-  title?: string;
-}
-
-let pageAlts: Record<string, string> = {};
-/** 한 번 받은 사진은 다시 받지 않는다(후보 평가 → 착용). */
-const imageCache = new Map<string, Promise<HTMLImageElement>>();
-
-async function fetchImage(src: string): Promise<HTMLImageElement> {
-  let p = imageCache.get(src);
-  if (!p) {
-    p = (async () => {
-      if (!isExtension) return loadImageSource(src);
-      // 확장 프로그램은 사이트 권한으로 다른 도메인 이미지도 직접 받아올 수 있다.
-      // 고해상도로 바꾼 주소가 열리지 않으면 원래 주소로 다시 받는다.
-      for (const u of [src, pageAlts[src]].filter(Boolean) as string[]) {
-        const res = await fetch(u).catch(() => null);
-        if (res?.ok) return loadImageSource(await res.blob());
-      }
-      throw new Error('사진을 받지 못했습니다');
-    })();
-    imageCache.set(src, p);
-    p.catch(() => imageCache.delete(src));
+function applyLookToEngine(): void {
+  const look: MakeupLook = {};
+  for (const part of Object.keys(chosen) as PartName[]) {
+    const c = chosen[part];
+    if (!c.color) continue;
+    if (part === 'lip') look.lip = { color: c.color, amount: c.amount, gloss };
+    else look[part] = { color: c.color, amount: c.amount };
   }
-  return p;
+  engine.look = look;
 }
 
-/**
- * 페이지 사진 후보를 앞에서부터 빠르게 평가해 옷만 찍힌 사진을 고른다.
- * 앞순위(대표 이미지·갤러리 첫 사진)에서 충분히 좋은 사진이 나오면 바로 멈춘다(뒷면 사진보다 앞면 우선).
- */
-async function pickCandidate(urls: string[]): Promise<{ index: number; confidence: number }> {
-  let best = { index: 0, confidence: -1 };
-  const limit = Math.min(urls.length, 8);
-  for (let i = 0; i < limit; i++) {
-    setStatus(`이 페이지의 상품 사진 ${urls.length}장 중 옷만 찍힌 사진을 찾는 중… (${i + 1}/${limit})`);
-    try {
-      const img = await fetchImage(urls[i]);
-      const q = quickAssess(img);
-      const tileEl = railEl.querySelector<HTMLElement>(`.product[data-id="page-${i}"]`);
-      if (tileEl) tileEl.dataset.fit = q.confidence >= 0.6 ? 'good' : 'poor';
-      if (q.confidence > best.confidence) best = { index: i, confidence: q.confidence };
-      if (q.confidence >= 0.75) break;
-    } catch {
-      /* 못 받은 사진은 건너뛴다 */
-    }
-    await new Promise((r) => setTimeout(r, 0)); // 화면 갱신 기회
+function selectLook(name: LookName): void {
+  const l = LOOKS[name];
+  currentLook = name;
+  for (const part of Object.keys(chosen) as PartName[]) {
+    const v = l.parts[part];
+    chosen[part].color = v ? v.color : null;
+    if (v) chosen[part].amount = v.amount;
   }
-  // 옷만 찍힌 사진이 없으면 대표 사진(보통 정면 모델 착용 사진)을 착용 사진 분석으로 넘긴다.
-  if (best.confidence < 0.45) best = { index: 0, confidence: best.confidence };
-  return best;
+  gloss = l.gloss ?? gloss;
+  glossEl.value = String(gloss);
+  applyLookToEngine();
+  renderRail();
 }
 
-const isExtension = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
+const hex = (c: RGB): string => '#' + c.map((v) => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
+const fromHex = (h: string): RGB => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as RGB;
+const same = (a: RGB | null, b: RGB | null): boolean => !!a && !!b && a.every((v, i) => Math.abs(v - b[i]) < 0.004);
 
-async function readPageCandidates(): Promise<PageCandidates | null> {
-  if (!isExtension || !chrome.storage?.session) return null;
-  const got = await chrome.storage.session.get('candidates');
-  return (got.candidates as PageCandidates | undefined) ?? null;
-}
-
-function tile(label: string, thumb: string | null, onClick: () => void, id: string): HTMLButtonElement {
+function swatch(label: string, color: RGB | null, selected: boolean, onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button');
-  b.className = 'product';
-  b.dataset.id = id;
+  b.className = 'swatch' + (selected ? ' selected' : '');
   b.title = label;
-  if (thumb) {
-    const img = document.createElement('img');
-    img.src = thumb;
-    img.alt = label;
-    img.loading = 'lazy';
-    img.referrerPolicy = 'no-referrer';
-    b.append(img);
-  } else {
-    const icon = document.createElement('div');
-    icon.className = 'upload-icon';
-    icon.textContent = '＋';
-    b.append(icon);
-  }
-  b.append(document.createTextNode(label));
+  const dot = document.createElement('span');
+  dot.className = 'dot' + (color ? '' : ' none');
+  if (color) dot.style.background = hex(color);
+  b.append(dot, document.createTextNode(label));
   b.addEventListener('click', onClick);
   return b;
 }
 
-function markSelected(id: string): void {
-  for (const el of railEl.querySelectorAll<HTMLButtonElement>('.product')) {
-    el.classList.toggle('selected', el.dataset.id === id);
-  }
-}
-
-/** 사진(주소 또는 파일)을 자동 분석해 입힌다. */
-async function tryPhoto(src: string | Blob, name: string, id: string): Promise<boolean> {
-  markSelected(id);
-  setStatus('상품 사진 불러오는 중…');
-  try {
-    const image = typeof src === 'string' ? await fetchImage(src) : await loadImageSource(src);
-    const { asset, report } = await analyzeProductImage(image, { wasmBase: WASM_BASE, name, id, onStatus: setStatus });
-    engine.setAsset(asset);
-    const conf = Math.round(report.confidence * 100);
-    const kind = report.sleeve === 'long' ? '긴팔' : report.sleeve === 'short' ? '반팔' : '민소매';
-    setStatus(`${name} · 자동 분석 ${kind} · 신뢰도 ${conf}% · ${fmt(report.ms, 0)} ms${report.warnings.length ? ' · ' + report.warnings[0] : ''}`);
-    return true;
-  } catch (err) {
-    const msg = String(err instanceof Error ? err.message : err);
-    const cors = /tainted|cross-origin|CORS|decode/i.test(msg);
-    setStatus(
-      cors && !isExtension
-        ? '이 사이트의 사진은 웹에서 직접 불러올 수 없습니다. 사진을 저장해 올리거나 IRIS 확장 프로그램을 사용하세요.'
-        : msg,
-    );
-    return false;
-  }
-}
-
-async function initCatalog(): Promise<void> {
-  try {
-    const catalog = await loadCatalog(PRODUCT_BASE);
-    products = catalog.products;
-  } catch (err) {
-    setStatus(String(err));
-    return;
-  }
-  const uploadInput = document.createElement('input');
-  uploadInput.type = 'file';
-  uploadInput.accept = 'image/*';
-  uploadInput.hidden = true;
-  uploadInput.addEventListener('change', () => {
-    const f = uploadInput.files?.[0];
-    if (f) void tryPhoto(f, f.name.replace(/\.[^.]+$/, ''), 'upload');
-    uploadInput.value = '';
-  });
-  const tiles: HTMLElement[] = [uploadInput, tile('사진으로 입어보기', null, () => uploadInput.click(), 'upload')];
-
-  const page = await readPageCandidates();
-  if (page?.urls.length) {
-    page.urls.forEach((u, i) => {
-      tiles.push(tile(`페이지 사진 ${i + 1}`, u, () => void tryPhoto(u, page.title ?? `페이지 사진 ${i + 1}`, `page-${i}`), `page-${i}`));
-    });
-  }
-
-  railEl.replaceChildren(
-    ...tiles,
-    ...products.map((p) => {
+function renderRail(): void {
+  tabsEl.replaceChildren(
+    ...(['look', 'lip', 'shadow', 'blush', 'liner', 'brow'] as const).map((t) => {
       const b = document.createElement('button');
-      b.className = 'product';
-      b.dataset.id = p.id;
-      b.title = p.name;
-      const img = document.createElement('img');
-      img.src = new URL(p.thumb, PRODUCT_BASE).href;
-      img.alt = p.name;
-      img.loading = 'lazy';
-      b.append(img, document.createTextNode(p.name));
-      b.addEventListener('click', () => void selectProduct(p.id));
+      b.className = 'tab' + (tab === t ? ' on' : '');
+      b.textContent = t === 'look' ? '룩' : PART_LABELS[t];
+      b.addEventListener('click', () => {
+        tab = t;
+        renderRail();
+      });
       return b;
     }),
   );
-  const img = params.get('img');
-  if (page?.urls.length) {
-    pageAlts = page.alts ?? {};
-    const pick = await pickCandidate(page.urls);
-    // 고른 사진이 안 되면(모델 사진의 뒷모습·확대 등) 나머지 후보를 차례로 시도한다.
-    const order = [pick.index, ...page.urls.map((_, i) => i).filter((i) => i !== pick.index)].slice(0, 6);
-    for (const i of order) {
-      if (await tryPhoto(page.urls[i], page.title ?? `페이지 사진 ${i + 1}`, `page-${i}`)) break;
-    }
-  } else if (img) {
-    await tryPhoto(img, '주소로 불러온 사진', 'url');
-  } else {
-    const first = params.get('product') ?? products[0]?.id;
-    if (first) await selectProduct(first);
+  if (tab === 'look') {
+    swatchesEl.replaceChildren(
+      ...(Object.keys(LOOKS) as LookName[]).map((name) => {
+        const l = LOOKS[name];
+        return swatch(l.label, l.parts.lip?.color ?? null, currentLook === name, () => selectLook(name));
+      }),
+    );
+    amountRowEl.hidden = true;
+    glossRowEl.hidden = true;
+    return;
   }
+  const part = tab;
+  const c = chosen[part];
+  const items = [
+    swatch('없음', null, !c.color, () => {
+      c.color = null;
+      currentLook = null;
+      applyLookToEngine();
+      renderRail();
+    }),
+    ...PALETTES[part].map((p) =>
+      swatch(p.name, p.color, same(c.color, p.color), () => {
+        c.color = p.color;
+        currentLook = null;
+        applyLookToEngine();
+        renderRail();
+      }),
+    ),
+  ];
+  // 직접 고르기
+  const pick = document.createElement('label');
+  pick.className = 'swatch';
+  pick.title = '직접 고르기';
+  const input = document.createElement('input');
+  input.type = 'color';
+  input.value = c.color ? hex(c.color) : '#c0404a';
+  input.addEventListener('input', () => {
+    c.color = fromHex(input.value);
+    currentLook = null;
+    applyLookToEngine();
+  });
+  const dot = document.createElement('span');
+  dot.className = 'dot custom';
+  pick.append(input, dot, document.createTextNode('직접'));
+  items.push(pick as unknown as HTMLButtonElement);
+  swatchesEl.replaceChildren(...items);
+  amountRowEl.hidden = false;
+  amountEl.value = String(c.amount);
+  glossRowEl.hidden = part !== 'lip';
 }
 
-// 사진을 화면에 끌어다 놓으면 바로 분석
-document.addEventListener('dragover', (e) => e.preventDefault());
-document.addEventListener('drop', (e) => {
-  e.preventDefault();
-  const f = e.dataTransfer?.files?.[0];
-  if (f && f.type.startsWith('image/')) void tryPhoto(f, f.name.replace(/\.[^.]+$/, ''), 'upload');
+amountEl.addEventListener('input', () => {
+  if (tab === 'look') return;
+  chosen[tab].amount = Number(amountEl.value);
+  applyLookToEngine();
 });
-
-async function selectProduct(id: string): Promise<void> {
-  const info = products.find((p) => p.id === id);
-  if (!info) return;
-  markSelected(id);
-  setStatus(`${info.name} 준비 중…`);
-  const t0 = performance.now();
-  try {
-    await engine.setProduct(info);
-    setStatus(`${info.name} · 준비 ${fmt(performance.now() - t0, 0)} ms`);
-  } catch (err) {
-    setStatus(`상품을 불러오지 못했습니다: ${String(err)}`);
-  }
-}
+glossEl.addEventListener('input', () => {
+  gloss = Number(glossEl.value);
+  applyLookToEngine();
+});
 
 // ---- 시작 ----
 
@@ -271,7 +197,7 @@ async function begin(open: () => Promise<void>): Promise<void> {
     await open();
     startEl.hidden = true;
     await engine.tracker.configure(trackerConfig, setStatus);
-    setStatus(`${engine.product?.name ?? ''} · 처리 장치 ${engine.tracker.delegate}`);
+    setStatus(`처리 장치 ${engine.tracker.delegate}`);
     engine.start();
     running = true;
   } catch (err) {
@@ -308,32 +234,26 @@ function applyView(): void {
 
 function applySettings(): void {
   const s = engine.settings;
-  s.shade = Number($<HTMLInputElement>('opt-shade').value);
   s.useSeg = $<HTMLInputElement>('opt-seg').checked;
   s.refine = $<HTMLInputElement>('opt-refine').checked;
-  s.fit.seamWidth = Number($<HTMLInputElement>('opt-width').value);
-  s.fit.lift = Number($<HTMLInputElement>('opt-lift').value);
-  s.fit.length = Number($<HTMLInputElement>('opt-length').value);
   s.debugLandmarks = $<HTMLInputElement>('opt-dbg-lm').checked;
   s.debugSeg = $<HTMLInputElement>('opt-dbg-seg').checked;
-  s.debugOcc = $<HTMLInputElement>('opt-dbg-occ').checked;
   applyView();
 }
 
 async function applyTracker(): Promise<void> {
-  trackerConfig.poseModel = $<HTMLSelectElement>('opt-pose').value as PoseModel;
   trackerConfig.delegate = $<HTMLSelectElement>('opt-delegate').value as Delegate;
   trackerConfig.segEvery = Number($<HTMLSelectElement>('opt-seg-every').value);
   if (!running) return;
   await engine.tracker.configure(trackerConfig, setStatus);
   engine.metrics.reset();
-  setStatus(`처리 장치 ${engine.tracker.delegate} · 자세 모델 ${trackerConfig.poseModel}`);
+  setStatus(`처리 장치 ${engine.tracker.delegate}`);
 }
 
-for (const id of ['opt-mirror', 'opt-shade', 'opt-seg', 'opt-refine', 'opt-width', 'opt-lift', 'opt-length', 'opt-dbg-lm', 'opt-dbg-seg', 'opt-dbg-occ']) {
+for (const id of ['opt-mirror', 'opt-seg', 'opt-refine', 'opt-dbg-lm', 'opt-dbg-seg']) {
   $(id).addEventListener('input', applySettings);
 }
-for (const id of ['opt-pose', 'opt-delegate', 'opt-seg-every']) {
+for (const id of ['opt-delegate', 'opt-seg-every']) {
   $(id).addEventListener('change', () => void applyTracker());
 }
 $('opt-res').addEventListener('change', () => {
@@ -372,7 +292,7 @@ $('btn-loopback').addEventListener('click', () => {
     const proc = engine.metrics.proc.quantile(0.5);
     loopbackEl.textContent = [
       `화면→카메라→브라우저 왕복: 중앙 ${fmt(s.p50)} ms · 95% ${fmt(s.p95)} ms · 최대 ${fmt(s.max)} ms (n=${s.n}, 실패 ${lb.failures})`,
-      `착용 처리 시간(중앙): ${fmt(proc)} ms`,
+      `처리 시간(중앙): ${fmt(proc)} ms`,
       `추정 전체 지연(움직임→화면) ≈ ${fmt(s.p50 + proc)} ms`,
       '※ 추정치입니다. 정확한 값은 슬로모션 촬영으로 교차 확인하세요.',
     ].join('\n');
@@ -389,7 +309,7 @@ $('btn-export').addEventListener('click', () => {
     video: { w: engine.source.width, h: engine.source.height },
     tracker: { ...trackerConfig, activeDelegate: engine.tracker.delegate },
     settings: engine.settings,
-    product: engine.product?.id,
+    look: engine.look,
     loopback: loopbackSummary ? { ...loopbackSummary, failures: loopbackFailures } : null,
     minutes: engine.metrics.minutes,
     frames: engine.metrics.records,
@@ -407,12 +327,12 @@ $('btn-export').addEventListener('click', () => {
 setInterval(() => {
   if (!running) return;
   const now = performance.now();
-  if (engine.lastBody) lastPersonSeen = now;
-  guideEl.hidden = now - lastPersonSeen < 1200 || engine.loopback?.running === true;
+  if (engine.lastFace) lastFaceSeen = now;
+  guideEl.hidden = now - lastFaceSeen < 1200 || engine.loopback?.running === true;
   if (!hudEl.hidden) {
     const lines = engine.metrics.hudLines(now);
     const src = engine.source;
-    lines.unshift(`입력 ${src.width}×${src.height} · ${engine.tracker.delegate} · 자세 ${trackerConfig.poseModel}`);
+    lines.unshift(`입력 ${src.width}×${src.height} · ${engine.tracker.delegate}`);
     if (loopbackSummary) {
       lines.push(`루프백 왕복 ${fmt(loopbackSummary.p50)} ms → 추정 전체 ${fmt(loopbackSummary.p50 + engine.metrics.proc.quantile(0.5))} ms`);
     }
@@ -430,20 +350,17 @@ function applyParams(): void {
   const debug = (params.get('debug') ?? '').split(',');
   $<HTMLInputElement>('opt-dbg-lm').checked = debug.includes('lm');
   $<HTMLInputElement>('opt-dbg-seg').checked = debug.includes('seg');
-  $<HTMLInputElement>('opt-dbg-occ').checked = debug.includes('occ');
-  $<HTMLSelectElement>('opt-pose').value = trackerConfig.poseModel;
   $<HTMLSelectElement>('opt-delegate').value = trackerConfig.delegate;
   $<HTMLSelectElement>('opt-seg-every').value = String(trackerConfig.segEvery);
   applySettings();
+  const look = params.get('look') as LookName | null;
+  selectLook(look && look in LOOKS ? look : 'daily');
 }
 
 applyParams();
-void initCatalog().then(() => {
+{
   const src = params.get('src');
-  if (isExtension) {
-    // 확장 프로그램 착용 창: 바로 카메라를 켠다(권한은 처음 한 번만 묻는다).
-    $('btn-camera').click();
-  } else if (src === 'sample') {
+  if (src === 'sample') {
     $('btn-sample').click();
   } else if (src) {
     // 시험용: 같은 사이트 안의 동영상 주소로 바로 시작
@@ -451,4 +368,4 @@ void initCatalog().then(() => {
     applyView();
     void begin(() => engine.source.openFile(new URL(src, base).href));
   }
-});
+}

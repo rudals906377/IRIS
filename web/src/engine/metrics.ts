@@ -11,6 +11,9 @@ export interface FrameRecord {
   pose: number;
   seg: number;
   hands: number;
+  /** 얼굴 점 추적(ms) */
+  face: number;
+  /** 효과 준비(영역 계산 등, ms) */
   rig: number;
   render: number;
   /** 촬영 → 그리기 제출(ms). 브라우저가 촬영 시각을 줄 때만. */
@@ -38,6 +41,7 @@ export class Metrics {
   readonly pose = new Rolling(300);
   readonly seg = new Rolling(300);
   readonly hands = new Rolling(300);
+  readonly face = new Rolling(300);
   readonly rig = new Rolling(300);
   readonly render = new Rolling(300);
   readonly age = new Rolling(300);
@@ -67,6 +71,7 @@ export class Metrics {
     if (r.pose) this.pose.push(r.pose);
     if (r.seg) this.seg.push(r.seg);
     if (r.hands) this.hands.push(r.hands);
+    if (r.face) this.face.push(r.face);
     this.rig.push(r.rig);
     this.render.push(r.render);
     if (r.age !== undefined) this.age.push(r.age);
@@ -96,7 +101,7 @@ export class Metrics {
   }
 
   reset(): void {
-    for (const r of [this.proc, this.pose, this.seg, this.hands, this.rig, this.render, this.age]) r.clear();
+    for (const r of [this.proc, this.pose, this.seg, this.hands, this.face, this.rig, this.render, this.age]) r.clear();
     this.frameRate.clear();
     this.records.length = 0;
     this.minutes.length = 0;
@@ -112,7 +117,7 @@ export class Metrics {
     const lines = [
       `프레임 처리  ${fmt(this.frameRate.rate(now), 0)} fps`,
       `처리 시간    ${q(this.proc)} ms (중앙/95%)`,
-      `  자세 ${fmt(this.pose.quantile(0.5))} · 분할 ${fmt(this.seg.quantile(0.5))} · 변형 ${fmt(this.rig.quantile(0.5))} · 그리기 ${fmt(this.render.quantile(0.5))}`,
+      `  얼굴 ${fmt(this.face.quantile(0.5))} · 분할 ${fmt(this.seg.quantile(0.5))} · 자세 ${fmt(this.pose.quantile(0.5))} · 효과 ${fmt(this.rig.quantile(0.5))} · 그리기 ${fmt(this.render.quantile(0.5))}`,
     ];
     if (this.hands.count) lines.push(`  손 ${fmt(this.hands.quantile(0.5))} ms`);
     lines.push(
