@@ -5,6 +5,8 @@
 import { faceRegions, type FaceRegions } from '../beauty/face-regions.ts';
 import { HairColorRenderer, type HairLook } from '../beauty/hair.ts';
 import { MakeupRenderer, type MakeupLook } from '../beauty/makeup.ts';
+import { NailRenderer, type NailLook } from '../beauty/nail.ts';
+import { nailQuads, type HandPoints } from '../beauty/nail-place.ts';
 import { TattooRenderer } from '../beauty/tattoo.ts';
 import { FACE_FOR_POSE, measureLimbWidth, placeAxis, tattooMesh, type PosePoints, type TattooPlace } from '../beauty/tattoo-place.ts';
 import { PointFilter } from './filters.ts';
@@ -57,6 +59,9 @@ export class BeautyEngine {
   /** 지금 적용 중인 타투(없으면 null). 켜려면 추적기의 자세 추적(pose)이 켜져 있어야 한다 */
   tattoo: TattooSettings | null = null;
   lastPose: PosePoints | null = null;
+  /** 지금 적용 중인 네일(없으면 null). 켜려면 추적기의 손 추적(hands)이 켜져 있어야 한다 */
+  nail: NailLook | null = null;
+  lastHands: HandPoints[] = [];
   loopback: LoopbackTest | null = null;
   lastFace: FaceFrame | null = null;
   lastRegions: FaceRegions | null = null;
@@ -64,6 +69,9 @@ export class BeautyEngine {
   private readonly makeup: MakeupRenderer;
   private readonly hairFx: HairColorRenderer;
   private readonly tattooFx: TattooRenderer;
+  private readonly nailFx: NailRenderer;
+  /** 손 종류('Left'/'Right')별 21점 필터 */
+  private readonly handFilters = new Map<string, PointFilter[]>();
   private readonly poseFilters = new Map<number, PointFilter>();
   private poseSeen = -1;
   private limbWidth: { place: TattooPlace; w: number } | null = null;
@@ -77,6 +85,7 @@ export class BeautyEngine {
     this.makeup = new MakeupRenderer(this.renderer.gl);
     this.hairFx = new HairColorRenderer(this.renderer.gl);
     this.tattooFx = new TattooRenderer(this.renderer.gl);
+    this.nailFx = new NailRenderer(this.renderer.gl);
     this.tracker = new Tracker(opts.wasmBase);
     this.overlay = opts.overlay.getContext('2d')!;
     const luma = document.createElement('canvas');
@@ -130,6 +139,12 @@ export class BeautyEngine {
     const regions = face ? faceRegions(face.p) : null;
     this.lastRegions = regions;
     const effects: ((t: FrameTextures) => void)[] = [];
+    const hands = this.updateHands(track, info.now, w, h);
+    const nail = this.nail;
+    if (nail && hands.length > 0) {
+      const quads = hands.flatMap((hp) => nailQuads(hp));
+      effects.push((t) => this.nailFx.draw(quads, nail, t));
+    }
     const pose = this.updatePose(track, info.now, w, h, face);
     const tat = this.tattoo;
     if (tat && pose) {
@@ -201,6 +216,31 @@ export class BeautyEngine {
     }
     this.lastPose = Object.keys(p).length > 0 ? { p, vis } : null;
     return this.lastPose;
+  }
+
+  /** 손 점을 픽셀 좌표로 바꾸고 손 종류별로 떨림을 줄인다. */
+  private updateHands(track: TrackResult | null, t: number, w: number, h: number): HandPoints[] {
+    const r = track?.hands;
+    if (!r) return this.lastHands;
+    const out: HandPoints[] = [];
+    const keys: string[] = [];
+    r.landmarks.forEach((lm, i) => {
+      const handed = r.handedness[i]?.[0]?.categoryName ?? 'Right';
+      // 두 손이 같은 종류로 판정될 수 있으므로 순번을 붙여 필터를 따로 둔다
+      let key = handed;
+      for (let n = 2; keys.includes(key); n++) key = `${handed}${n}`;
+      keys.push(key);
+      let fs = this.handFilters.get(key);
+      if (!fs) {
+        fs = lm.map(() => new PointFilter({ minCutoff: 1.5, beta: 0.03, dCutoff: 1.0 }));
+        this.handFilters.set(key, fs);
+      }
+      out.push({ p: lm.map((q, k) => fs![k].filter(q.x * w, q.y * h, t)), z: lm.map((q) => q.z), handed });
+    });
+    // 사라진 손의 필터는 비워서 다시 나타날 때 옛 위치에서 끌려오지 않게
+    for (const key of [...this.handFilters.keys()]) if (!keys.includes(key)) this.handFilters.delete(key);
+    this.lastHands = out;
+    return out;
   }
 
   /** 팔·목 굵기를 분할에서 재고 천천히 따라가게 평활한다(분할이 없으면 null → 길이 비율로 추정). */

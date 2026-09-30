@@ -3,7 +3,7 @@
 
 import type { RGB } from './makeup.ts';
 
-export type PartName = 'lip' | 'shadow' | 'blush' | 'liner' | 'brow' | 'hair';
+export type PartName = 'lip' | 'shadow' | 'blush' | 'liner' | 'brow' | 'hair' | 'nail';
 
 export const PART_LABELS: Record<PartName, string> = {
   lip: '립',
@@ -12,6 +12,7 @@ export const PART_LABELS: Record<PartName, string> = {
   liner: '아이라이너',
   brow: '눈썹',
   hair: '헤어',
+  nail: '네일',
 };
 
 const c = (hex: string): RGB => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as RGB;
@@ -65,6 +66,17 @@ export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[
     { name: '블루 블랙', color: c('#1c2230') },
     { name: '옴브레 브라운', color: c('#3a2a22'), tip: c('#c9a26a') },
     { name: '옴브레 핑크', color: c('#2a2226'), tip: c('#d88aa0') },
+  ],
+  nail: [
+    { name: '레드', color: c('#b3122a') },
+    { name: '누드 핑크', color: c('#e3b3ab') },
+    { name: '코랄', color: c('#ec6a55') },
+    { name: '버건디', color: c('#5c1424') },
+    { name: '라벤더', color: c('#b9a3d9') },
+    { name: '민트', color: c('#9fdcc6') },
+    { name: '네이비', color: c('#1d2a52') },
+    { name: '블랙', color: c('#161416') },
+    { name: '밀키 화이트', color: c('#f1ece6') },
   ],
 };
 

@@ -27,7 +27,7 @@
 | 1 | 메이크업(립·아이섀도·블러셔·아이라이너·눈썹) | 얼굴 점 → 영역 마스크 → 색 입히기 **(완료, 다듬는 중)** |
 | 2 | 헤어 컬러 | 머리카락 분할 + 가이디드 필터(올 단위 경계) → 밝기 살린 염색, 옴브레 **(완료)** |
 | 3 | 타투 | 자세·피부 분할 → 도안을 팔(원기둥으로 감기)·목·쇄골에 붙이기 **(완료)** |
-| 4 | 네일아트 | 손 점(손가락 끝) → 손톱 영역 추정 → 색·무늬 |
+| 4 | 네일아트 | 손 점(손가락 끝) → 손톱 영역 추정 → 색·무늬 **(1차: 동작하지만 손톱 경계가 부정확, 개선 중)** |
 
 헤어 **스타일**(길이·모양) 바꾸기는 생성형 AI가 필요해 실시간으로는 어렵습니다. 사진 한 장 모드로 따로 검토합니다.
 
@@ -59,7 +59,7 @@ npm run build      # dist/ 생성
 
 헤드리스 브라우저 시험 도구: [tools/harness](tools/harness/README.md)
 
-주소 인자(개발·시험용): `?src=sample`(예시 영상으로 바로 시작), `?look=daily|coral|red|smoky|rose|clear`, `?hair=<헤어 색 번호>`, `?tattoo=<도안 id>&place=<위치>&tsize=0~1`, `?hud=1`, `?debug=lm,seg`, `?delegate=CPU|GPU`
+주소 인자(개발·시험용): `?src=sample`(예시 영상으로 바로 시작), `?look=daily|coral|red|smoky|rose|clear`, `?hair=<헤어 색 번호>`, `?tattoo=<도안 id>&place=<위치>&tsize=0~1`, `?nail=<번호>&nstyle=solid|french|gradient|glitter|dots`, `?hud=1`, `?debug=lm,seg`, `?delegate=CPU|GPU`
 
 ### 구조
 
@@ -79,6 +79,8 @@ web/src/beauty/
   tattoo-place.ts  타투 위치(관절점 → 원기둥 격자), 분할로 팔 굵기 재기
   tattoo.ts        타투 합성(피부에만, 곱하기 잉크)
   tattoo-designs.ts 타투 도안(선화)과 사용자 사진 → 도안 변환
+  nail-place.ts    손 점 → 손톱 사각형(손등 방향·접힌 손가락 판단)
+  nail.ts          네일 합성(둥근 손톱 모양, 광택, 프렌치·그라데이션·글리터·도트)
   palettes.ts      색상표와 룩
 web/src/app/    화면 구성
 ```
