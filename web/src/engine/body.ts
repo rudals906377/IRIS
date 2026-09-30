@@ -90,6 +90,8 @@ export class BodyTracker {
   private frontRatio = 0.72;
   /** 최근에 믿을 만했던 몸통 길이(px). 어깨가 옆으로 돌아 짧아져도 엉덩이 위치를 버리지 않기 위한 기준 */
   private refAxis = NaN;
+  /** 정면일 때 어깨 폭 ÷ (코 → 어깨선 세로 거리). 좌우로 돌아도 세로 거리는 거의 그대로라 크기 기준이 된다 */
+  private neckRatio = NaN;
   private turnS = 0;
   private turnC = 1;
 
@@ -150,10 +152,22 @@ export class BodyTracker {
     const nose = p[LM.nose];
     if (vis[LM.nose] > 0.5 && dot(sub(nose, shoulderMid), down) > 0) down = scale(down, -1);
 
+    // 코 → 어깨선 세로 거리로 정면 어깨 폭을 추정(엉덩이가 안 보이는 상반신 구도에서 몸을 돌려도 크기 유지)
+    const neckLen = vis[LM.nose] > 0.5 ? dot(sub(shoulderMid, nose), down) : NaN;
+    const yawRaw = Math.atan2(z[LM.leftShoulder] - z[LM.rightShoulder], sL.x - sR.x);
+    if (Number.isFinite(neckLen) && neckLen > 0 && Math.abs(yawRaw) < 0.35 && sL.x > sR.x) {
+      const r = shoulderW / neckLen;
+      if (r > 1 && r < 5) {
+        // 정면에 가까울수록 어깨 폭이 크므로 큰 값 쪽으로 빠르게, 작은 값 쪽으로 느리게
+        this.neckRatio = Number.isFinite(this.neckRatio) ? this.neckRatio + (r - this.neckRatio) * (r > this.neckRatio ? 0.3 : 0.02) : r;
+      }
+    }
+    const neckFrontW = Number.isFinite(this.neckRatio) && Number.isFinite(neckLen) && neckLen > 0 ? Math.max(shoulderW, neckLen * this.neckRatio) : shoulderW;
+
     // 엉덩이: 보이면 추정값을 쓰고, 안 보이면 체형 비율로 보완한다.
     const hipVis = Math.min(vis[LM.leftHip], vis[LM.rightHip]);
     const hipW = smoothstep(0.3, 0.75, hipVis);
-    const priorHip = add(shoulderMid, scale(down, TORSO_RATIO * shoulderW));
+    const priorHip = add(shoulderMid, scale(down, TORSO_RATIO * neckFrontW));
     const measuredHip = mid(p[LM.leftHip], p[LM.rightHip]);
     let hipMid = lerp(priorHip, measuredHip, hipW);
     // 엉덩이 예측이 비정상적으로 짧거나 길면 보정한다.
@@ -190,8 +204,17 @@ export class BodyTracker {
       mag = mag > dead ? mag - dead * 0.5 : 0;
       const sign = yaw === 0 ? 1 : Math.sign(yaw);
       turn = sign * mag;
+    } else if (neckFrontW > shoulderW * 1.02 || Number.isFinite(this.neckRatio)) {
+      // 상반신 구도: 코→어깨 거리로 잰 정면 어깨 폭 대비 줄어든 정도로 크기를, 깊이 각도로 방향을 정한다
+      let mag = Math.acos(Math.min(1, shoulderW / neckFrontW));
+      if (backView) mag = Math.PI - mag;
+      const dead = 0.3;
+      mag = mag > dead ? mag - dead * 0.5 : 0;
+      // 고개를 들어 코→어깨 거리가 늘어도 회전으로 오인하지 않게, 깊이 각도도 정면에 가까우면 줄인다
+      if (!backView) mag *= Math.min(1, Math.abs(yaw) / 0.3);
+      turn = (yaw === 0 ? 1 : Math.sign(yaw)) * mag;
     } else {
-      // 엉덩이가 안 보이면(상반신 구도) 깊이 각도만 쓸 수 있다: 작은 값은 잡음으로 보고 무시
+      // 코가 안 보이는 등 기준이 없으면 깊이 각도만: 작은 값은 잡음으로 보고 무시
       const dead = 0.4;
       const a = Math.abs(yaw);
       turn = a > dead ? Math.sign(yaw) * Math.min(Math.PI, (a - dead) * 1.4) : 0;
@@ -219,7 +242,7 @@ export class BodyTracker {
       axisLen,
       yaw,
       turn,
-      frontW: hipW > 0.5 ? Math.max(shoulderW, axisLen * this.frontRatio) : shoulderW / Math.max(0.6, Math.abs(Math.cos(turn))),
+      frontW: hipW > 0.5 ? Math.max(shoulderW, axisLen * this.frontRatio) : neckFrontW > shoulderW ? neckFrontW : shoulderW / Math.max(0.6, Math.abs(Math.cos(turn))),
     };
     this.last = frame;
     return frame;
@@ -234,5 +257,6 @@ export class BodyTracker {
     this.turnC = 1;
     this.frontRatio = 0.72;
     this.refAxis = NaN;
+    this.neckRatio = NaN;
   }
 }
