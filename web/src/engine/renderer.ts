@@ -136,7 +136,7 @@ export class Renderer {
     ]);
     this.occProg = this.program(OCC_VS, OCC_FS, ['uSize', 'uFeather']);
     this.garmentProg = this.program(GARMENT_VS, GARMENT_FS, [
-      'uSize', 'uTexSize', 'uTex', 'uLabel', 'uCam', 'uSeg', 'uOcc', 'uPart', 'uIsTorso', 'uIsInner', 'uAlpha', 'uShade', 'uUseSeg', 'uDebug', 'uGF', 'uUseGF', 'uIsBack', 'uCovOnly', 'uSm', 'uAxis', 'uLat', 'uSw',
+      'uSize', 'uTexSize', 'uTex', 'uLabel', 'uCam', 'uSeg', 'uOcc', 'uPart', 'uIsTorso', 'uIsInner', 'uAlpha', 'uShade', 'uUseSeg', 'uDebug', 'uGF', 'uUseGF', 'uIsBack', 'uCovOnly', 'uSm', 'uAxis', 'uLat', 'uSw', 'uNeckCover',
     ]);
     this.camTex = this.texture(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
     this.segTex = this.texture(gl.LINEAR, gl.LINEAR);
@@ -508,6 +508,7 @@ export class Renderer {
       const g = layer.gpu;
       gl.uniform2f(p.u.uTexSize, g.asset.width, g.asset.height);
       gl.uniform1f(p.u.uAlpha, layer.alpha);
+      gl.uniform1f(p.u.uNeckCover, g.asset.info.highNeck ? 1 : 0);
       this.bindTex(0, g.tex, p.u.uTex);
       this.bindTex(1, g.label, p.u.uLabel);
       for (const mesh of layer.order) {

@@ -18,6 +18,6 @@ for (const m of meta) {
   writeFileSync(join(work, `mask${m.i}.bin`), bg.mask);
   if (a) writeFileSync(join(work, `lab${m.i}.bin`), a.labels);
   out.push({ i: m.i, src: m.src, ok: !!a, sleeve: a?.sleeve, conf: a ? +a.confidence.toFixed(2) : 0, ms: +ms.toFixed(1), warnings: a?.warnings, kp: a?.keypoints });
-  console.log(m.i, a ? `${a.sleeve} 신뢰도 ${a.confidence.toFixed(2)}` : '실패', a?.warnings.join(' | ') ?? '', '←', m.src);
+  console.log(m.i, a ? `${a.sleeve}${a.highNeck ? '·하이넥' : ''} 신뢰도 ${a.confidence.toFixed(2)}` : '실패', a?.warnings.join(' | ') ?? '', '←', m.src);
 }
 writeFileSync(join(work, 'result.json'), JSON.stringify(out));

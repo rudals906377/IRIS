@@ -334,6 +334,7 @@ export async function analyzeProductImage(
     keypoints: kpJson,
     sleeve: best.a.sleeve === 'none' ? null : best.a.sleeve,
     widthScale: best.a.widthScale,
+    highNeck: best.a.highNeck,
   };
   const asset: GarmentAsset = {
     info,

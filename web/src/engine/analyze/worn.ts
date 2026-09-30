@@ -411,5 +411,9 @@ export function analyzeWorn(clothes: ArrayLike<number>, rgb: Uint8ClampedArray, 
   confidence = Math.max(0, Math.min(1, confidence));
   // 착용 사진은 몸 앞면 폭만 보이므로(옆으로 감긴 부분이 안 보임) 평평하게 놓은 옷보다 좁다.
   // 어깨점 폭(관절 폭의 1.2배)을 기준으로 조금 넉넉하게 펴서 입힌다.
-  return { keypoints, labels, sleeve, confidence, warnings, widthScale: 1.3 };
+  // 하이넥: 옷이 어깨선보다 한참 위(목 중간)까지 올라온다
+  const topC = ytop(cx);
+  const highNeck = Number.isFinite(topC) && shoulderY - topC > SW * 0.3;
+  if (highNeck) warnings.push('하이넥: 깃이 목을 덮습니다');
+  return { keypoints, labels, sleeve, confidence, warnings, widthScale: 1.3, highNeck };
 }

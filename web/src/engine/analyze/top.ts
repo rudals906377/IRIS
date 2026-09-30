@@ -20,6 +20,8 @@ export interface TopAnalysis {
   warnings: string[];
   /** 가로 배율 보정(ProductInfo.widthScale) */
   widthScale?: number;
+  /** 깃이 어깨선보다 높이 올라오는 옷(목폴라·하이넥·지퍼 올린 져지): 목을 덮어 그린다 */
+  highNeck?: boolean;
 }
 
 interface Run {
@@ -326,6 +328,10 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number, rgba?: Uint8
   };
   const shoulderL = shoulderO?.L ?? shoulderAt(armpitL, 1);
   const shoulderR = shoulderO?.R ?? shoulderAt(armpitR, -1);
+  // 하이넥: 목둘레 양 끝(깃 위)이 어깨선보다 가슴 폭의 22% 이상 높다(보통 티셔츠는 10% 안팎). 후드는 제외.
+  const chestW0 = Math.max(1, armpitL.x - armpitR.x);
+  const highNeck = !hood && (shoulderL.y + shoulderR.y) / 2 - neckY > chestW0 * 0.22;
+  if (highNeck) warnings.push('하이넥: 깃이 목을 덮습니다');
 
   // 부위 라벨
   const labels = new Uint8Array(w * h);
@@ -388,8 +394,8 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number, rgba?: Uint8
       }
     }
   }
-  // 목 안쪽: 목둘레 양 끝과 앞 목선을 지나는 포물선 위쪽
-  if (!hasOpenNeck && !hood) {
+  // 목 안쪽: 목둘레 양 끝과 앞 목선을 지나는 포물선 위쪽(하이넥은 깃 자체이므로 몸판으로 둔다)
+  if (!hasOpenNeck && !hood && !highNeck) {
     for (let x = Math.ceil(neckR.x); x <= Math.floor(neckL.x); x++) {
       const t = (x - cx) / (neckW / 2);
       const curveY = neckFront.y - (neckFront.y - neckY) * t * t;
@@ -489,7 +495,7 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number, rgba?: Uint8
   if (confidence < 0.6) warnings.push('자동 분석 신뢰도가 낮습니다. 기준점을 확인해 주세요');
 
   for (let i = 0; i < labels.length; i++) if (!mask0[i]) labels[i] = 0;
-  return { keypoints, labels, sleeve, confidence, warnings };
+  return { keypoints, labels, sleeve, confidence, warnings, highNeck };
   }
 }
 

@@ -17,6 +17,8 @@ export interface ProductInfo {
   sleeve?: 'short' | 'long' | null;
   /** 가로 배율 보정(모델 착용 사진처럼 몸 앞면 폭만 보이는 사진은 1보다 크게) */
   widthScale?: number;
+  /** 깃이 목을 덮는 옷(목폴라·하이넥): 목 피부 위에도 그린다 */
+  highNeck?: boolean;
   credit?: string;
 }
 

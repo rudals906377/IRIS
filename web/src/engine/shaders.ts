@@ -165,6 +165,7 @@ uniform vec2 uSm;        // 어깨 중점(px)
 uniform vec2 uAxis;      // 몸통 축(아래 방향)
 uniform vec2 uLat;       // 몸 가로 방향
 uniform float uSw;       // 어깨 폭(px)
+uniform float uNeckCover; // 1이면 하이넥(목을 덮어도 됨)
 in vec2 vUv;
 in vec2 vAux;
 out vec4 o;
@@ -208,7 +209,7 @@ void main() {
     float lat = abs(dot(d, uLat));
     // 어깨선(쇄골 높이) 위의 피부만 목으로 본다. 그 아래 가슴 피부는 새 옷이 덮어야 한다.
     float neck = (1.0 - smoothstep(0.0, uSw * 0.14, ax)) * (1.0 - smoothstep(uSw * 0.26, uSw * 0.4, lat));
-    hide = max(hide, sg.g * neck);
+    hide = max(hide, sg.g * neck * (1.0 - uNeckCover));
   }
   float a = uAlpha * (1.0 - clamp(hide, 0.0, 1.0));
   // 디버그 4: 가림 원인 색 표시 (빨강 손, 초록 피부×아래팔, 파랑 머리카락·얼굴, 흰색 몸판 팔 구멍)
