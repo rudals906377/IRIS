@@ -78,6 +78,9 @@ export interface FaceRegions {
   brow: MVert[];
   /** 블러셔: 가운데 1 → 가장자리 0인 타원 부채꼴 */
   blush: MVert[];
+  /** 쉐딩(광대 아래·턱선·관자놀이·코 옆)과 하이라이터(콧대·광대 위·인중 위·턱 끝·이마) */
+  contour: MVert[];
+  highlight: MVert[];
   /** 피부 보정에서 뺄 이목구비(눈·속눈썹, 눈썹, 입술) 다각형 */
   features: Vec2[][];
   /** 얼굴 점 전체를 감싸는 사각형(px) — 피부 보정 계산 범위 */
@@ -128,7 +131,7 @@ function ellipseMesh(c: Vec2, rx: number, ry: number, dir: Vec2, peak: number): 
     });
   const center = Array.from({ length: K + 1 }, () => c);
   // 가운데 → 0.5 → 가장자리: 가우시안에 가까운 모양
-  return bandMesh([center, ring(0.5), ring(1)], (r) => peak * [1, 0.72, 0][r]);
+  return bandMesh([center, ring(0.5), ring(1)], (r) => peak * [1, 0.62, 0][r]);
 }
 
 /** 눈꺼풀 선(바깥 → 안쪽)과 눈썹 아랫선 사이를 여러 줄로 나눈 아이섀도 망. height 0~1: 눈썹까지 얼마나 올릴지 */
@@ -148,6 +151,36 @@ function shadowMesh(p: Vec2[], upper: number[], browLower: number[], height: num
   // 눈 앞머리(안쪽 끝)는 옅게: 콧대 쪽으로 번지지 않게
   const n = lid.length;
   return bandMesh(rows, (r, c) => vals[r] * vis * (0.55 + 0.45 * smooth(n - 1, n - 4, c)), faceW);
+}
+
+/** 선(점 줄)을 따라 폭 width의 띠. val(열 번호 0~1 위치) → 진하기 */
+function lineBand(pts: Vec2[], width: number, val: (t: number) => number, faceW: number): MVert[] {
+  const n = pts.length;
+  const side = (sgn: number): Vec2[] =>
+    pts.map((q, k) => {
+      const a = pts[Math.max(0, k - 1)];
+      const b = pts[Math.min(n - 1, k + 1)];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const l = Math.hypot(dx, dy) || 1;
+      return { x: q.x - (dy / l) * width * 0.5 * sgn, y: q.y + (dx / l) * width * 0.5 * sgn };
+    });
+  const L = side(1);
+  const R = side(-1);
+  // 가운데 줄을 두어 띠 가로 방향으로도 가운데가 진하게
+  return bandMesh([L, pts, R], (r, c) => val(c / (n - 1)) * (r === 1 ? 1 : 0.35), faceW);
+}
+
+/** 윤곽선(점 줄)에서 얼굴 안쪽으로 depth만큼 들어간 띠: 윤곽 쪽 진하고 안쪽으로 옅게 */
+function inwardBand(pts: Vec2[], center: Vec2, depth: number, val: (t: number) => number, faceW: number): MVert[] {
+  const n = pts.length;
+  const inner = pts.map((q) => {
+    const dx = center.x - q.x;
+    const dy = center.y - q.y;
+    const l = Math.hypot(dx, dy) || 1;
+    return { x: q.x + (dx / l) * depth, y: q.y + (dy / l) * depth };
+  });
+  return bandMesh([pts, inner], (r, c) => (r === 0 ? val(c / (n - 1)) : 0), faceW);
 }
 
 /** 아래 속눈썹 선 아래 음영(눈꼬리 쪽이 진하고 앞쪽은 옅게). lower: 안쪽 → 바깥 */
@@ -236,6 +269,44 @@ function browMesh(p: Vec2[], lower: number[], upper: number[], faceW: number, vi
   return bandMesh([[tail, ...a], [tail, ...b]], (_, c) => vals[c] * vis, faceW);
 }
 
+/** 쉐딩·하이라이터 망. 사람 오른쪽(R)·왼쪽(L)은 대칭 번호 */
+function contourMeshes(p: Vec2[], faceW: number, visR: number, visL: number): { contour: MVert[]; highlight: MVert[] } {
+  const P = (ids: number[]): Vec2[] => ids.map((i) => p[i]);
+  const center = lerp(lerp(p[FACE_SIDE_R], p[FACE_SIDE_L], 0.5), lerp(p[10], p[152], 0.5), 0.5);
+  const fade = (t: number): number => smooth(0, 0.25, t) * smooth(1, 0.6, t);
+  const contour: MVert[] = [];
+  const highlight: MVert[] = [];
+  // 사람 오른쪽·왼쪽: 광대 아래, 턱선, 관자놀이, 코 옆(위 → 아래), 광대 위 하이라이트(바깥, 안쪽, 아래 기준)
+  const sides = [
+    { vis: visR, hollow: [93, 147, 187], jaw: [132, 58, 172, 136, 150], temple: [54, 21, 162], nose: [193, 122, 196, 3, 236], bone: [116, 118, 123] },
+    { vis: visL, hollow: [323, 376, 411], jaw: [361, 288, 397, 365, 379], temple: [284, 251, 389], nose: [417, 351, 419, 248, 456], bone: [345, 347, 352] },
+  ];
+  for (const { vis, hollow, jaw, temple, nose, bone } of sides) {
+    if (vis <= 0) continue;
+    // 광대 아래: 귀 쪽이 진하고 입꼬리 쪽으로 사라진다
+    contour.push(...lineBand(P(hollow), faceW * 0.075, (t) => vis * (1 - smooth(0.35, 1, t)), faceW));
+    contour.push(...inwardBand(P(jaw), center, faceW * 0.09, (t) => vis * 0.7 * smooth(1, 0.7, t), faceW));
+    contour.push(...inwardBand(P(temple), center, faceW * 0.08, () => vis * 0.55, faceW));
+    contour.push(...lineBand(P(nose), faceW * 0.03, (t) => vis * 0.7 * smooth(1, 0.55, t) * smooth(0, 0.15, t), faceW));
+    // 광대 위 하이라이트: 광대 바깥·안쪽 사이, 아래 기준점 쪽으로 조금 내린 타원
+    const [b0, b1, b2] = P(bone);
+    const c = lerp(lerp(b0, b1, 0.5), b2, 0.3);
+    const dx = b1.x - b0.x;
+    const dy = b1.y - b0.y;
+    const l = Math.hypot(dx, dy) || 1;
+    highlight.push(...ellipseMesh(c, faceW * 0.075, faceW * 0.03, { x: dx / l, y: dy / l }, vis * 0.9));
+  }
+  const vc = Math.min(visR, visL);
+  // 콧대: 미간 아래 → 코끝 위
+  highlight.push(...lineBand(P([168, 6, 197, 195, 5]), faceW * 0.03, (t) => vc * fade(t), faceW));
+  const dirH = { x: (p[FACE_SIDE_L].x - p[FACE_SIDE_R].x) / faceW, y: (p[FACE_SIDE_L].y - p[FACE_SIDE_R].y) / faceW };
+  // 인중 위(입술 산 바로 위), 턱 끝, 이마 가운데
+  highlight.push(...ellipseMesh(lerp(p[0], p[164], 0.4), faceW * 0.035, faceW * 0.013, dirH, vc * 0.8));
+  highlight.push(...ellipseMesh(lerp(p[200], p[199], 0.5), faceW * 0.04, faceW * 0.025, dirH, vc * 0.7));
+  highlight.push(...ellipseMesh(lerp(p[9], p[151], 0.5), faceW * 0.06, faceW * 0.045, dirH, vc * 0.6));
+  return { contour, highlight };
+}
+
 /** 478점(픽셀 좌표)에서 메이크업 영역을 만든다. overlip: -1(입술 안쪽으로) ~ 1(윤곽보다 크게) */
 export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?: number; overlip?: number; lipStyle?: LipStyle } = {}): FaceRegions {
   const faceW = dist(p[FACE_SIDE_R], p[FACE_SIDE_L]);
@@ -263,7 +334,7 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
     const l = Math.hypot(dx, dy) || 1;
     // 돌린 쪽 볼은 화면에서 좁아 보인다: 가로 반지름을 그 쪽 절반 폭에 맞춘다
     const k = Math.max(0.35, Math.min(1.3, frac * 2));
-    return ellipseMesh(c, faceW * 0.15 * k, faceW * 0.1, { x: dx / l, y: dy / l }, vis);
+    return ellipseMesh(c, faceW * 0.16 * k, faceW * 0.105, { x: dx / l, y: dy / l }, vis);
   };
   // 오버립: 입술 가운데에서 위아래로 넓힌다(입꼬리는 거의 그대로)
   const over = Math.max(-1, Math.min(1, opts.overlip ?? 0));
@@ -317,6 +388,7 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
     eyeL,
     brow: [...browMesh(p, BROW_R_LOWER, BROW_R_UPPER, faceW, visR), ...browMesh(p, BROW_L_LOWER, BROW_L_UPPER, faceW, visL)],
     blush: [...blush(CHEEK_R, CHEEKBONE_R, fracR, visR), ...blush(CHEEK_L, CHEEKBONE_L, 1 - fracR, visL)],
+    ...contourMeshes(p, faceW, visR, visL),
     features: [
       grow(eyeR, 1.35),
       grow(eyeL, 1.35),

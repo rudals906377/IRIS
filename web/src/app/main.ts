@@ -87,6 +87,7 @@ function setStatus(msg: string): void {
 /** 부위별로 마지막에 고른 색(없음이면 null)과 진하기 */
 const chosen: Record<PartName, { color: RGB | null; amount: number }> = {
   base: { color: null, amount: 0.5 },
+  contour: { color: null, amount: 0.5 },
   lip: { color: null, amount: 0.75 },
   shadow: { color: null, amount: 0.45 },
   blush: { color: null, amount: 0.35 },
@@ -186,7 +187,7 @@ function swatch(label: string, color: RGB | null, selected: boolean, onClick: ()
 
 function renderRail(): void {
   tabsEl.replaceChildren(
-    ...(['look', 'base', 'lip', 'shadow', 'blush', 'liner', 'brow', 'hair', 'nail', 'tattoo'] as const).map((t) => {
+    ...(['look', 'base', 'lip', 'shadow', 'blush', 'contour', 'liner', 'brow', 'hair', 'nail', 'tattoo'] as const).map((t) => {
       const b = document.createElement('button');
       b.className = 'tab' + (tab === t ? ' on' : '');
       b.textContent = t === 'look' ? '룩' : t === 'tattoo' ? '타투' : PART_LABELS[t];

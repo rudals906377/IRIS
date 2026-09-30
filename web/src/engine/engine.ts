@@ -330,5 +330,5 @@ function hairSpan(face: FaceFrame | null, h: number): [number, number] {
 }
 
 function hasAnyMakeup(look: MakeupLook): boolean {
-  return !!(look.base || look.lip || look.shadow || look.blush || look.liner || look.brow);
+  return !!(look.base || look.contour || look.lip || look.shadow || look.blush || look.liner || look.brow);
 }

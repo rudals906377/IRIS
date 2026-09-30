@@ -3,10 +3,11 @@
 
 import type { RGB } from './makeup.ts';
 
-export type PartName = 'base' | 'lip' | 'shadow' | 'blush' | 'liner' | 'brow' | 'hair' | 'nail';
+export type PartName = 'base' | 'contour' | 'lip' | 'shadow' | 'blush' | 'liner' | 'brow' | 'hair' | 'nail';
 
 export const PART_LABELS: Record<PartName, string> = {
   base: '피부',
+  contour: '윤곽',
   lip: '립',
   shadow: '아이섀도',
   blush: '블러셔',
@@ -28,6 +29,13 @@ export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[
     { name: '25호 웜', color: c('#c79d78') },
     { name: '핑크 톤업', color: c('#f0cfc6') },
     { name: '딥 브라운', color: c('#9c6f50') },
+  ],
+  // 윤곽: 쉐딩 색(하이라이터는 자동). 쿨 톤 토프가 자연스러운 그림자에 가깝다
+  contour: [
+    { name: '쿨 토프', color: c('#8c7a70') },
+    { name: '소프트 브라운', color: c('#9a7862') },
+    { name: '웜 브론즈', color: c('#a06c48') },
+    { name: '딥', color: c('#6a5044') },
   ],
   lip: [
     { name: '로지 핑크', color: c('#c7545f') },
@@ -152,6 +160,7 @@ export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<Part
     label: '글램',
     parts: {
       base: { color: c('#e6c4a8'), amount: 0.6 },
+      contour: { color: c('#8c7a70'), amount: 0.55 },
       lip: { color: c('#9e3a4a'), amount: 0.8 },
       shadow: { color: c('#b98a5e'), amount: 0.6 },
       blush: { color: c('#d4707f'), amount: 0.3 },

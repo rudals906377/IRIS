@@ -14,6 +14,8 @@ export interface MakeupLook {
   blush?: { color: RGB; amount: number };
   liner?: { color: RGB; amount: number };
   brow?: { color: RGB; amount: number };
+  /** 윤곽: color 쉐딩 색(하이라이터는 밝은 샴페인으로 자동), amount 세기 */
+  contour?: { color: RGB; amount: number };
   /** 피부 보정: color 파운데이션 호수 색, amount 보정 세기(잡티·결 줄이기, 톤 정리) */
   base?: { color: RGB; amount: number };
 }
@@ -158,8 +160,10 @@ uniform sampler2D uCam;
 uniform sampler2D uSeg;
 uniform sampler2D uM1;   // R 립, G 아이섀도, B 블러셔, A 눈썹
 uniform sampler2D uM2;   // R 아이라이너, G 눈(흰자·눈동자), B 펄 반짝이, A 이목구비(피부 보정 제외)
+uniform sampler2D uM3;   // R 쉐딩, G 하이라이터
 uniform sampler2D uCamBlur;
 uniform vec3 uBase; uniform float uBaseAmt;
+uniform vec3 uContour; uniform float uContourAmt;
 uniform vec3 uLip; uniform float uLipAmt; uniform float uGloss;
 uniform vec3 uShadow; uniform float uShadowAmt; uniform float uPearl;
 uniform vec3 uBlush; uniform float uBlushAmt;
@@ -188,7 +192,9 @@ void main() {
   float shadowM = smoothstep(0.0, 0.85, m1.g) * (1.0 - eye);
   // 피부 보정 범위: 얼굴 피부(분할 B)에서 이목구비를 뺀 곳
   float baseM = uBaseAmt > 0.0 ? uBaseAmt * smoothstep(0.3, 0.8, texture(uSeg, vUv).b) * (1.0 - hand) * (1.0 - smoothstep(0.1, 0.6, m2.a)) : 0.0;
-  float a = max(max(max(m1.r * uLipAmt, shadowM * uShadowAmt), max(m1.b * uBlushAmt, m1.a * uBrowAmt)), max(m2.r * uLinerAmt, baseM));
+  // 윤곽은 얼굴 피부에만(앞머리·배경 제외)
+  vec4 m3 = uContourAmt > 0.0 ? texture(uM3, mUv) * smoothstep(0.3, 0.8, texture(uSeg, vUv).b) * (1.0 - hand) : vec4(0.0);
+  float a = max(max(max(m1.r * uLipAmt, shadowM * uShadowAmt), max(m1.b * uBlushAmt, m1.a * uBrowAmt)), max(max(m2.r * uLinerAmt, baseM), max(m3.r, m3.g) * uContourAmt));
   if (a < 0.002) discard;
 
   vec3 c = textureLod(uCam, vUv, 0.0).rgb;
@@ -208,6 +214,12 @@ void main() {
   float Lloc = dot(lin(textureLod(uCam, vUv, 2.5).rgb), WL);
 
   vec3 outL = cl;
+  if (uContourAmt > 0.0) {
+    // 쉐딩: 비치는 색(피부 × 색 비율), 하이라이터: 빛을 받는 곳일수록 더 밝게(샴페인 빛)
+    outL *= mix(vec3(1.0), clamp(lin(uContour) / REF, 0.2, 1.0), min(1.0, m3.r * uContourAmt * 1.5));
+    float hl = min(1.0, m3.g * uContourAmt * 1.3) * (0.6 + 0.4 * smoothstep(0.7, 1.3, shade));
+    outL = mix(outL, outL * 1.4 + vec3(0.03, 0.025, 0.015) * illum, hl * 0.8);
+  }
   if (baseM > 0.002) {
     // ① 잡티·모공: 흐린 사진과의 차이(결) 중 작은 것만 줄이고, 눈가·콧방울 같은 큰 경계는 남긴다
     vec3 bl = lin(texture(uCamBlur, mUv).rgb);
@@ -228,12 +240,12 @@ void main() {
   // 블러셔: 비치는 색(피부 × 비율) 70% + 가루 색 30%
   vec3 bl = lin(uBlush);
   vec3 blushC = mix(outL * clamp(bl / REF, 0.0, 1.4), bl * illum * shade, 0.3);
-  outL = mix(outL, blushC, min(1.0, m1.b * uBlushAmt * 1.5));
+  outL = mix(outL, blushC, min(1.0, m1.b * uBlushAmt * 1.3));
   // 아이섀도: 비치는 색 65% + 색소 35%, 펄은 빛 받는 곳에 윤기와 반짝이
   vec3 sh = lin(uShadow);
   vec3 shP = mix(vec3(dot(sh, WL)), sh, satK);
   vec3 shadowC = mix(outL * clamp(sh / REF, 0.0, 1.4), shP * illum * shade, 0.35);
-  shadowC += (sh * 0.5 + 0.5) * illum * uPearl * (0.3 * smoothstep(0.2, 0.9, shade) + 1.4 * m2.b);
+  shadowC += (sh * 0.7 + 0.3) * illum * uPearl * (0.3 * smoothstep(0.2, 0.9, shade) + 0.9 * m2.b);
   outL = mix(outL, shadowC, min(1.0, shadowM * uShadowAmt * 1.3));
   vec3 outG = gam(outL);
   // 립: 덮는 색 × 조명 × 입술 명암(입술 평균 대비), 광택은 주변보다 밝은 결을 살려 더한다
@@ -263,7 +275,7 @@ export class MakeupRenderer {
   private readonly vao: WebGLVertexArrayObject;
   private readonly buf: WebGLBuffer;
   private readonly empty: WebGLVertexArrayObject;
-  /** m1, m2 원본 마스크 / t1, t2 가로 흐림 / b1, b2 최종 / 피부 보정용 카메라 흐림(중간, 최종) */
+  /** m1, m2 원본 마스크 / t1, t2 가로 흐림 / b1, b2 최종 / 피부 보정용 카메라 흐림(중간, 최종) / 윤곽 m3, t3, b3 */
   private tex: WebGLTexture[] = [];
   private fbo: WebGLFramebuffer[] = [];
   private w = 0;
@@ -276,7 +288,7 @@ export class MakeupRenderer {
     this.blur = this.program(FULL_VS, BLUR_FS, ['uTex', 'uDir', 'uSigma', 'uWide', 'uSize']);
     this.comp = this.program(COMPOSITE_VS, COMPOSITE_FS, [
       'uCam', 'uSeg', 'uM1', 'uM2', 'uLip', 'uLipAmt', 'uGloss', 'uShadow', 'uShadowAmt', 'uPearl', 'uBlush', 'uBlushAmt', 'uLiner', 'uLinerAmt', 'uBrow', 'uBrowAmt',
-      'uSkinPts', 'uLipPts', 'uSkinLod', 'uLipLod', 'uCamBlur', 'uBase', 'uBaseAmt',
+      'uSkinPts', 'uLipPts', 'uSkinLod', 'uLipLod', 'uCamBlur', 'uBase', 'uBaseAmt', 'uM3', 'uContour', 'uContourAmt',
     ]);
     this.camBlur = this.program(FULL_VS, CAMBLUR_FS, ['uSrc', 'uDir', 'uSigma', 'uFromCam', 'uSize']);
     this.vao = gl.createVertexArray()!;
@@ -294,7 +306,7 @@ export class MakeupRenderer {
     attr('aST', 2, 12);
     gl.bindVertexArray(null);
     this.empty = gl.createVertexArray()!;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 11; i++) {
       const t = gl.createTexture()!;
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -383,15 +395,22 @@ export class MakeupRenderer {
       if ((look.shadow.pearl ?? 0) > 0) this.mesh(regions.shadow, [0, 0, 1, 0], gl.MAX, true);
     }
     if (look.base) this.mesh(regions.features.flatMap(poly), [0, 0, 0, 1], gl.MAX);
+    if (look.contour) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo[8]);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      this.mesh(regions.contour, [1, 0, 0, 0], gl.MAX);
+      this.mesh(regions.highlight, [0, 1, 0, 0], gl.MAX);
+    }
     gl.blendEquation(gl.FUNC_ADD);
     gl.disable(gl.BLEND);
 
     // ② 흐림: 부위별 폭(얼굴 폭 비율, 반 해상도 px). 섀도·블러셔는 망 자체가 옅어지므로 조금만 흐린다
     const s = fw / 2;
     // 작은 얼굴(흐린 영상)에서도 경계가 오려 붙인 듯 날카롭지 않게 최소 1px
-    this.blurPass(0, 2, 4, [Math.max(0.8, s * 0.005), s * 0.015, s * 0.045, Math.max(1, s * 0.01)], [0, 1, 1, 0]);
+    this.blurPass(0, 2, 4, [Math.max(0.8, s * 0.005), s * 0.015, s * 0.06, Math.max(1, s * 0.01)], [0, 1, 1, 0]);
     this.blurPass(1, 3, 5, [Math.max(0.6, s * 0.004), Math.max(0.6, s * 0.004), 0.5, s * 0.012], [0, 0, 0, 0]);
     if (look.base) this.blurCamera(cam, regions, s * 0.014);
+    if (look.contour) this.blurPass(8, 9, 10, [s * 0.035, s * 0.022, 0.5, 0.5], [1, 1, 0, 0]);
 
     // ③ 합성(화면)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -407,6 +426,7 @@ export class MakeupRenderer {
     bind(2, this.tex[4], 'uM1');
     bind(3, this.tex[5], 'uM2');
     bind(4, this.tex[7], 'uCamBlur');
+    bind(5, this.tex[10], 'uM3');
     const u = this.comp.u;
     const set = (c: string, a: string, part?: { color: RGB; amount: number }): void => {
       gl.uniform3f(u[c], ...(part?.color ?? [0, 0, 0]));
@@ -420,6 +440,7 @@ export class MakeupRenderer {
     set('uLiner', 'uLinerAmt', look.liner);
     set('uBrow', 'uBrowAmt', look.brow);
     set('uBase', 'uBaseAmt', look.base);
+    set('uContour', 'uContourAmt', look.contour);
     // 조명·입술 밝기 표본(영상 좌표 → 텍스처 좌표)과 평균 낼 크기(밉맵 단계)
     gl.uniform2fv(u.uSkinPts, regions.skinPts.flatMap((q) => [q.x / W, q.y / H]));
     gl.uniform2fv(u.uLipPts, regions.lipBody.flatMap((q) => [q.x / W, q.y / H]));
