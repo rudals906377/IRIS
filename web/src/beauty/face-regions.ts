@@ -73,6 +73,10 @@ export interface FaceRegions {
   brow: MVert[];
   /** 블러셔: 가운데 1 → 가장자리 0인 타원 부채꼴 */
   blush: MVert[];
+  /** 피부 보정에서 뺄 이목구비(눈·속눈썹, 눈썹, 입술) 다각형 */
+  features: Vec2[][];
+  /** 얼굴 점 전체를 감싸는 사각형(px) — 피부 보정 계산 범위 */
+  bbox: { x0: number; y0: number; x1: number; y1: number };
 }
 
 const lerp = (a: Vec2, b: Vec2, t: number): Vec2 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
@@ -243,6 +247,23 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
   const lc = outer.reduce((a, q) => ({ x: a.x + q.x / outer.length, y: a.y + q.y / outer.length }), { x: 0, y: 0 });
   const lipsOuter = over === 0 ? outer : outer.map((q) => ({ x: lc.x + (q.x - lc.x) * (1 + 0.025 * over), y: lc.y + (q.y - lc.y) * (1 + 0.14 * over) }));
   const lipsInner = LIPS_INNER.map((i) => p[i]);
+  // 이목구비: 눈은 속눈썹까지 들어가게 가운데에서 1.35배로 넓힌다
+  const grow = (pts: Vec2[], k: number): Vec2[] => {
+    const c = pts.reduce((a, q) => ({ x: a.x + q.x / pts.length, y: a.y + q.y / pts.length }), { x: 0, y: 0 });
+    return pts.map((q) => ({ x: c.x + (q.x - c.x) * k, y: c.y + (q.y - c.y) * k }));
+  };
+  const eyeR = [...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)].map((i) => p[i]);
+  const eyeL = [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)].map((i) => p[i]);
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const q of p) {
+    if (q.x < x0) x0 = q.x;
+    if (q.y < y0) y0 = q.y;
+    if (q.x > x1) x1 = q.x;
+    if (q.y > y1) y1 = q.y;
+  }
   return {
     faceW,
     yaw,
@@ -255,10 +276,18 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
     skinPts: SKIN_SAMPLES.map((i) => p[i]),
     shadow: [...shadowMesh(p, EYE_R_UPPER, BROW_R_LOWER, sh, faceW, visR), ...shadowMesh(p, EYE_L_UPPER, BROW_L_LOWER, sh, faceW, visL)],
     liner: [...linerMesh(p, EYE_R_UPPER, EYE_R_LOWER, wing, faceW, visR), ...linerMesh(p, EYE_L_UPPER, EYE_L_LOWER, wing, faceW, visL)],
-    eyeR: [...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)].map((i) => p[i]),
-    eyeL: [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)].map((i) => p[i]),
+    eyeR,
+    eyeL,
     brow: [...browMesh(p, BROW_R_LOWER, BROW_R_UPPER, faceW, visR), ...browMesh(p, BROW_L_LOWER, BROW_L_UPPER, faceW, visL)],
     blush: [...blush(CHEEK_R, CHEEKBONE_R, fracR, visR), ...blush(CHEEK_L, CHEEKBONE_L, 1 - fracR, visL)],
+    features: [
+      grow(eyeR, 1.35),
+      grow(eyeL, 1.35),
+      grow([...BROW_R_LOWER, ...BROW_R_UPPER].map((i) => p[i]), 1.15),
+      grow([...BROW_L_LOWER, ...BROW_L_UPPER].map((i) => p[i]), 1.15),
+      grow(outer, 1.08),
+    ],
+    bbox: { x0, y0, x1, y1 },
   };
 }
 

@@ -3,9 +3,10 @@
 
 import type { RGB } from './makeup.ts';
 
-export type PartName = 'lip' | 'shadow' | 'blush' | 'liner' | 'brow' | 'hair' | 'nail';
+export type PartName = 'base' | 'lip' | 'shadow' | 'blush' | 'liner' | 'brow' | 'hair' | 'nail';
 
 export const PART_LABELS: Record<PartName, string> = {
+  base: '피부',
   lip: '립',
   shadow: '아이섀도',
   blush: '블러셔',
@@ -19,6 +20,15 @@ const c = (hex: string): RGB => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2
 
 /** tip: 끝 색(뿌리 → 끝 그라데이션, 헤어만) */
 export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[]> = {
+  // 피부 보정: 파운데이션 호수(한국식 호수 표기는 대략적인 밝기 구분). 보정 세기는 진하기 슬라이더
+  base: [
+    { name: '17호 라이트', color: c('#f0d6c2') },
+    { name: '21호 내추럴', color: c('#e6c4a8') },
+    { name: '23호 베이지', color: c('#d8b394') },
+    { name: '25호 웜', color: c('#c79d78') },
+    { name: '핑크 톤업', color: c('#f0cfc6') },
+    { name: '딥 브라운', color: c('#9c6f50') },
+  ],
   lip: [
     { name: '로지 핑크', color: c('#c7545f') },
     { name: '코랄', color: c('#e0664e') },
@@ -90,6 +100,7 @@ export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<Part
   daily: {
     label: '데일리',
     parts: {
+      base: { color: c('#e6c4a8'), amount: 0.45 },
       lip: { color: c('#c7545f'), amount: 0.6 },
       shadow: { color: c('#8a5a44'), amount: 0.35 },
       blush: { color: c('#f2a08a'), amount: 0.3 },
@@ -129,6 +140,7 @@ export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<Part
   rose: {
     label: '로즈',
     parts: {
+      base: { color: c('#f0cfc6'), amount: 0.5 },
       lip: { color: c('#a5535c'), amount: 0.7 },
       shadow: { color: c('#c98a7a'), amount: 0.45 },
       blush: { color: c('#d4707f'), amount: 0.35 },
@@ -139,6 +151,7 @@ export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<Part
   glam: {
     label: '글램',
     parts: {
+      base: { color: c('#e6c4a8'), amount: 0.6 },
       lip: { color: c('#9e3a4a'), amount: 0.8 },
       shadow: { color: c('#b98a5e'), amount: 0.6 },
       blush: { color: c('#d4707f'), amount: 0.3 },
