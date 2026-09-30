@@ -59,6 +59,8 @@ export interface RemovalInfo {
   torsoHalf: number;
   pitAx: number;
   shoulderW: number;
+  /** 몸통 회전(라디안) */
+  turn: number;
 }
 
 const SKIN_SIZE = 32;
@@ -132,7 +134,7 @@ export class Renderer {
     this.gl = gl;
     this.camProg = this.program(FULLSCREEN_VS, CAMERA_FS, [
       'uCam', 'uSeg', 'uOcc', 'uGF', 'uUseGF', 'uDebugSeg', 'uDebugOcc',
-      'uRemove', 'uCov', 'uBg', 'uFill', 'uSkin', 'uSize', 'uSm', 'uLat', 'uAxis', 'uAxisLen', 'uTorsoHalf', 'uPitAx', 'uSw',
+      'uRemove', 'uCov', 'uBg', 'uFill', 'uSkin', 'uSize', 'uSm', 'uLat', 'uAxis', 'uAxisLen', 'uTorsoHalf', 'uPitAx', 'uSw', 'uRemoveGain',
     ]);
     this.occProg = this.program(OCC_VS, OCC_FS, ['uSize', 'uFeather']);
     this.garmentProg = this.program(GARMENT_VS, GARMENT_FS, [
@@ -164,7 +166,7 @@ export class Renderer {
     const skin = this.texture(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
     gl.bindTexture(gl.TEXTURE_2D, skin);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, SKIN_SIZE, SKIN_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    const cov = this.texture(gl.LINEAR, gl.LINEAR);
+    const cov = this.texture(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
     const bg0 = this.texture(gl.LINEAR, gl.LINEAR);
     const bg1 = this.texture(gl.LINEAR, gl.LINEAR);
     const fill = this.texture(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
@@ -438,6 +440,8 @@ export class Renderer {
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       this.drawGarments(opts, useGF, true);
+      gl.bindTexture(gl.TEXTURE_2D, this.rm.cov);
+      gl.generateMipmap(gl.TEXTURE_2D);
     }
 
     // ① 카메라
@@ -467,6 +471,8 @@ export class Renderer {
       gl.uniform1f(cp.u.uTorsoHalf, removal.torsoHalf);
       gl.uniform1f(cp.u.uPitAx, removal.pitAx);
       gl.uniform1f(cp.u.uSw, removal.shoulderW);
+      const t = Math.abs(removal.turn);
+      gl.uniform1f(cp.u.uRemoveGain, 1 - Math.min(1, Math.max(0, (t - 0.8) / 0.4)));
     }
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

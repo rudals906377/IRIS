@@ -155,7 +155,9 @@ export class TopRig {
 
   update(body: BodyFrame, fit: TopFit = DEFAULT_TOP_FIT, torsoFit?: TorsoTracker): void {
     // 크기 기준: 상품 가슴 폭(겨드랑이~겨드랑이). 보통 옷은 어깨점 폭 ≈ 가슴 폭 × 0.95이므로 기존 어깨 기준과 같은 크기가 된다.
-    const k = (body.shoulderW * fit.seamWidth) / Math.max(this.gw * 0.6, this.chestHalf * 1.9);
+    // 몸을 돌리면 화면상 어깨 폭이 줄므로, 회전 각도로 되돌린 정면 어깨 폭으로 크기를 정한다
+    const frontW = body.shoulderW / Math.max(0.6, Math.abs(Math.cos(body.turn)));
+    const k = (frontW * fit.seamWidth) / Math.max(this.gw * 0.6, this.chestHalf * 1.9);
     // 세로 배율: 몸통 길이에 맞춰 밑단 위치를 정하되 상품의 기장 비율을 반영한다.
     const hemT = STD_HEM_T * (this.gLen / this.gw / STD_LENGTH_RATIO) * fit.length;
     const kv = (hemT * body.axisLen) / this.gLen;
@@ -192,8 +194,9 @@ export class TopRig {
       off0 = Number.isFinite(am0) ? Math.min(Math.max(off0, am0 * 1.15), am0 * 2.2) : Math.max(off0, w * 0.15);
       const drop = Math.max(0, (this.gw / 2 - this.chestHalf * 0.95) * k);
       // 어깨 관절점은 어깨 윗면보다 아래에 있으므로, 드롭숄더가 아닐수록 어깨점을 위로 올린다
-      const raise = Math.max(0, w * 0.06 - drop * 0.5) + lift * 0.5;
-      const cap = add(add(arm.at(drop), scale(arm.normal(drop), sign * off0 * 0.6)), scale(axisDir, -raise));
+      // 어깨점은 관절 높이 근처(어깨선은 목에서 여기로 기울어 내려온다), 바깥쪽은 소매 뿌리 폭에 맞춘다
+      const raise = Math.max(0, w * 0.03 - drop * 0.5) + lift * 0.5;
+      const cap = add(add(arm.at(drop), scale(arm.normal(drop), sign * off0 * 0.85)), scale(axisDir, -raise));
       arms.set(sl, { arm, sign, cap, off0, drop });
       capLat[sl.side] = Math.max(0, dot(sub(cap, sm), u) * sl.side);
       capAx[sl.side] = dot(sub(cap, sm), axisDir);
@@ -316,14 +319,18 @@ export class TopRig {
       const armR = (a: number): number => w * (0.15 - 0.045 * Math.min(1, Math.max(0, a / arm.length)));
       // 바깥선은 어깨점에서, 안쪽선은 겨드랑이에서 시작해 각자 길이만큼 팔을 따라 내려간다.
       // (상품 사진에서 소매가 옆으로 뻗어 있어도 겨드랑이 쪽이 접히며 무늬가 팔 방향으로 통째로 돌지 않는다)
-      const topLen = sl.topLen * k;
+      // 소매 길이는 팔(어깨→손목) 길이를 넘지 않는다(손을 덮지 않게)
+      const lenScale = Math.min(1, (arm.length * 1.03 - drop) / Math.max(1, sl.topLen * k));
+      const topLen = sl.topLen * k * lenScale;
       const pitArc = Math.max(0, dot(sub(pit, arm.at(0)), arm.dir(0)));
       // 안쪽선 길이: 상품 값과 "밑단이 팔에 직각이 되는 길이"를 섞는다(팔을 내리면 겨드랑이 쪽이 접히며 밑단이 팔에 직각에 가깝다)
       const perpLen = Math.max(topLen * 0.3, drop + topLen - pitArc);
-      const botLen = sl.bottomLen * k * 0.4 + perpLen * 0.6;
+      const botLen = sl.bottomLen * k * lenScale * 0.4 + perpLen * 0.6;
       const halfAt = (s: number, a: number): number => {
-        const bin = Math.max(0, Math.min(TUBE_BINS - 1, Math.floor((Math.max(0, s) / 1.2) * TUBE_BINS)));
-        let half = sl.halfW[bin] * k;
+        const x = Math.max(0, Math.min(TUBE_BINS - 1, (Math.max(0, s) / 1.2) * TUBE_BINS - 0.5));
+        const b0 = Math.floor(x);
+        const b1 = Math.min(TUBE_BINS - 1, b0 + 1);
+        let half = (sl.halfW[b0] + (sl.halfW[b1] - sl.halfW[b0]) * (x - b0)) * k;
         // 실제 팔(원래 입은 옷 소매 포함) 두께를 쟀으면: 그보다 조금 넉넉히 덮되, 상품 사진 폭이 과하면 줄인다.
         const am = torsoFit ? torsoFit.armAt(sl.side, Math.min(1, a / arm.length), w) : NaN;
         return Number.isFinite(am) ? Math.min(Math.max(half, am * 1.15), am * 2.2) : Math.max(half, armR(a));
@@ -498,15 +505,21 @@ function buildTube(asset: GarmentAsset, partId: number, sh: Vec2, pit: Vec2, out
   };
   fill(center, 0);
   fill(halfW, dist(out, inn) / 2);
+  // 구간 값을 선형 보간해 소매 가장자리가 계단(톱니)이 되지 않게 한다
+  const at = (arr: Float32Array, sv: number): number => {
+    const x = Math.max(0, Math.min(TUBE_BINS - 1, (sv / 1.2) * TUBE_BINS - 0.5));
+    const i = Math.floor(x);
+    const j = Math.min(TUBE_BINS - 1, i + 1);
+    return arr[i] + (arr[j] - arr[i]) * (x - i);
+  };
   const s = new Float32Array(mesh.vertexCount);
   const v = new Float32Array(mesh.vertexCount);
   for (let i = 0; i < mesh.vertexCount; i++) {
     const d = { x: mesh.src[i * 2] - root.x, y: mesh.src[i * 2 + 1] - root.y };
     const sv = dot(d, a) / length;
-    const bin = Math.max(0, Math.min(TUBE_BINS - 1, Math.floor((sv / 1.2) * TUBE_BINS)));
     // 격자 여백(라벨 밖) 정점의 외삽은 좁게 제한한다(부풀거나 뒤집히지 않게)
     s[i] = Math.max(-0.15, Math.min(1.25, sv));
-    v[i] = Math.max(-1.2, Math.min(1.2, (dot(d, n) - center[bin]) / halfW[bin]));
+    v[i] = Math.max(-1.2, Math.min(1.2, (dot(d, n) - at(center, sv)) / at(halfW, sv)));
   }
   return { s, v, length, halfW };
 }

@@ -33,6 +33,7 @@ uniform float uAxisLen;      // 몸통 길이(px)
 uniform float uTorsoHalf;    // 몸통 반폭(px)
 uniform float uPitAx;        // 어깨선 → 겨드랑이 거리(px)
 uniform float uSw;           // 어깨 폭(px)
+uniform float uRemoveGain;   // 몸이 많이 돌아가면 0(지우기 끔)
 in vec2 vUv;
 out vec4 o;
 void main() {
@@ -50,11 +51,13 @@ void main() {
     // 바지(엉덩이 아래)와 몸통 안쪽(겨드랑이 아래 몸통 폭 안)은 무엇으로 채울지 모르므로 건드리지 않는다.
     float below = smoothstep(uAxisLen * 0.85, uAxisLen * 1.0, ax);
     float core = (1.0 - smoothstep(uTorsoHalf * 0.8, uTorsoHalf * 0.95, lat)) * smoothstep(uPitAx * 0.8, uPitAx * 1.1, ax);
-    float r = sg.b * (1.0 - smoothstep(0.2, 0.6, cov)) * (1.0 - below) * (1.0 - core) * (1.0 - sg.r);
+    // 새 옷 가장자리 근처만 지운다(넓게 흐린 덮임에서 조금이라도 잡히는 곳). 옷이 작게 잘못 잡혀도 화면이 크게 지워지지 않는다.
+    float near = smoothstep(0.02, 0.12, textureLod(uCov, sUv, 4.0).r);
+    float r = sg.b * (1.0 - smoothstep(0.2, 0.6, cov)) * (1.0 - below) * (1.0 - core) * (1.0 - sg.r) * near * uRemoveGain;
     if (uRemove > 2.5) r = 1.0; // 디버그: 채움색을 화면 전체에 표시
     if (r > 0.001) {
-      // 팔 둘레: 맨팔(평균 피부색 × 원래 명암), 그 밖(모자·어깨 부풀림): 배경
-      float arm = max(occ.r, occ.g);
+      // 팔 중심부만 맨팔(평균 피부색 × 원래 명암)로, 그 밖(원래 소매가 부풀었던 곳·모자·어깨)은 배경으로
+      float arm = occ.r;
       // 목을 덮던 원래 옷(목폴라·후드 끈 등)을 지운 자리는 피부색으로
       float neck = (1.0 - smoothstep(uSw * 0.1, uSw * 0.3, ax)) * (1.0 - smoothstep(uSw * 0.25, uSw * 0.4, lat));
       arm = max(arm, neck);

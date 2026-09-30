@@ -189,6 +189,7 @@ export class TryOnEngine {
               torsoHalf: (mid.left + mid.right) / 2,
               pitAx: body.axisLen * 0.33,
               shoulderW: body.shoulderW,
+              turn: body.turn,
             };
           })()
         : null;
