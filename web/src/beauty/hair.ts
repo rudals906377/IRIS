@@ -35,7 +35,8 @@ uniform sampler2D uSeg;
 uniform sampler2D uGF;
 uniform float uUseGF;
 in vec2 vUv;
-out vec4 o;
+layout(location = 0) out vec4 o;
+layout(location = 1) out vec4 o1;
 ${W}
 ${HAIR_PROB}
 void main() {
@@ -44,6 +45,7 @@ void main() {
   p = smoothstep(0.5, 0.9, p);
   float L = dot(c, W);
   o = vec4(L * p, p, vUv.y * p, L * L * p);
+  o1 = vec4(c * p, p);
 }`;
 
 // ② 합성
@@ -53,6 +55,7 @@ uniform sampler2D uCam;
 uniform sampler2D uSeg;
 uniform sampler2D uGF;
 uniform sampler2D uStats;
+uniform sampler2D uStatsC;  // 머리카락 가중 색 합(rgb·p, p)
 uniform float uUseGF;
 uniform vec3 uColor;
 uniform vec3 uTip;
@@ -95,13 +98,21 @@ void main() {
   // 윤기(주변보다 밝은 결)는 흰 빛으로 조금 더해 광택을 유지(경계는 제외)
   float Lblur = dot(textureLod(uCam, vUv, 3.0).rgb, W);
   dyed += vec3(max(0.0, L - Lblur) * 0.5 * edge);
-  o = vec4(mix(c, clamp(dyed, 0.0, 1.0), m), 1.0);
+  vec3 inner = mix(c, clamp(dyed, 0.0, 1.0), m);
+  // 경계: 픽셀은 머리카락과 배경이 섞인 값이라, 통째로 섞으면 원래 머리색이 테두리로 남는다(밝게 염색할 때 어두운 테두리).
+  // 가이디드 필터 확률을 섞인 비율로 보고, 주변 머리카락의 평균색을 빼고 그 염색색을 더한다(배경 몫은 그대로).
+  vec4 hc = textureLod(uStatsC, vec2(vUv.x, 1.0 - vUv.y), 2.0);
+  vec3 Hloc = hc.a > 1e-3 ? hc.rgb / hc.a : vec3(mean);
+  float relH = clamp(1.0 + (dot(Hloc, W) - mean) / sqrt(var) * 0.35, 0.2, 1.9);
+  vec3 outer = c + (target * relH - Hloc) * m;
+  o = vec4(mix(clamp(outer, 0.0, 1.0), inner, edge), 1.0);
 }`;
 
 export class HairColorRenderer {
   private readonly stats;
   private readonly comp;
   private readonly tex: WebGLTexture;
+  private readonly texC: WebGLTexture;
   private readonly fbo: WebGLFramebuffer;
   private readonly vao: WebGLVertexArrayObject;
   private readonly gl: WebGL2RenderingContext;
@@ -111,7 +122,7 @@ export class HairColorRenderer {
     this.gl = gl;
     this.stats = compileProgram(gl, FULLSCREEN_VS, STATS_FS, ['uCam', 'uSeg', 'uGF', 'uUseGF']);
     this.comp = compileProgram(gl, FULLSCREEN_VS, COMPOSITE_FS, [
-      'uCam', 'uSeg', 'uGF', 'uStats', 'uUseGF', 'uColor', 'uTip', 'uTipOn', 'uAmount', 'uSpan',
+      'uCam', 'uSeg', 'uGF', 'uStats', 'uStatsC', 'uUseGF', 'uColor', 'uTip', 'uTipOn', 'uAmount', 'uSpan',
     ]);
     const N = HairColorRenderer.N;
     this.tex = gl.createTexture()!;
@@ -122,9 +133,16 @@ export class HairColorRenderer {
     gl.texStorage2D(gl.TEXTURE_2D, levels, float ? gl.RGBA16F : gl.RGBA8, N, N);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    this.texC = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.texC);
+    gl.texStorage2D(gl.TEXTURE_2D, levels, float ? gl.RGBA16F : gl.RGBA8, N, N);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     this.fbo = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.tex, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.texC, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.vao = gl.createVertexArray()!;
   }
@@ -156,6 +174,8 @@ export class HairColorRenderer {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.generateMipmap(gl.TEXTURE_2D);
+    gl.bindTexture(gl.TEXTURE_2D, this.texC);
+    gl.generateMipmap(gl.TEXTURE_2D);
 
     // ② 합성
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -166,6 +186,7 @@ export class HairColorRenderer {
     bind(1, t.seg, u.uSeg);
     if (t.gf) bind(2, t.gf, u.uGF);
     bind(3, this.tex, u.uStats);
+    bind(4, this.texC, u.uStatsC);
     gl.uniform1f(u.uUseGF, useGF);
     gl.uniform3f(u.uColor, ...look.color);
     gl.uniform3f(u.uTip, ...(look.tip ?? look.color));
