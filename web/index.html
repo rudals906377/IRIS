@@ -41,13 +41,16 @@
         </div>
       </section>
 
-      <nav class="rail" id="rail" aria-label="메이크업 선택">
+      <nav class="rail" id="rail" aria-label="뷰티 선택">
         <div class="tabs" id="tabs"></div>
         <div class="swatches" id="swatches"></div>
         <div class="amount-row">
           <label id="amount-row">진하기 <input type="range" id="amount" min="0.05" max="1" step="0.01" value="0.6" /></label>
           <label id="gloss-row">광택 <input type="range" id="gloss" min="0" max="1" step="0.01" value="0.3" /></label>
+          <label id="place-row" hidden>위치 <select id="place"></select></label>
+          <label id="size-row" hidden>크기 <input type="range" id="size" min="0" max="1" step="0.01" value="0.5" /></label>
         </div>
+        <input type="file" id="tattoo-file" accept="image/*" hidden />
       </nav>
 
       <aside class="panel" id="panel" hidden>

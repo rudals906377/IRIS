@@ -4,12 +4,16 @@
 //   ?src=sample            예시 영상으로 바로 시작
 //   ?src=<경로>             같은 사이트의 동영상으로 바로 시작(시험용)
 //   ?look=<룩 이름>         처음 적용할 룩(daily, coral, red, smoky, rose, clear)
+//   ?hair=<번호|이름>       헤어 색
+//   ?tattoo=<도안 id>&place=<위치>&tsize=0~1   타투(예: tattoo=moon&place=forearmL)
 //   ?hud=1                  측정 표시 켜기
 //   ?debug=lm,seg           개발자 표시(얼굴 점, 분할)
 //   ?delegate=CPU|GPU       처리 장치
 
 import { LOOKS, PALETTES, PART_LABELS, type LookName, type PartName } from '../beauty/palettes.ts';
 import type { MakeupLook, RGB } from '../beauty/makeup.ts';
+import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
+import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
 import { BeautyEngine } from '../engine/engine.ts';
 import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
@@ -34,6 +38,11 @@ const amountRowEl = $<HTMLElement>('amount-row');
 const glossRowEl = $<HTMLElement>('gloss-row');
 const glossEl = $<HTMLInputElement>('gloss');
 const loopbackEl = $<HTMLPreElement>('loopback-result');
+const placeRowEl = $<HTMLElement>('place-row');
+const placeEl = $<HTMLSelectElement>('place');
+const sizeRowEl = $<HTMLElement>('size-row');
+const sizeEl = $<HTMLInputElement>('size');
+const tattooFileEl = $<HTMLInputElement>('tattoo-file');
 
 const engine = new BeautyEngine({
   video: $<HTMLVideoElement>('video'),
@@ -74,7 +83,28 @@ const chosen: Record<PartName, { color: RGB | null; amount: number }> = {
 /** 헤어 그라데이션 끝 색(옴브레) */
 let hairTip: RGB | null = null;
 let gloss = 0.3;
-let tab: PartName | 'look' = 'look';
+let tab: PartName | 'look' | 'tattoo' = 'look';
+
+// ---- 타투 선택 ----
+const designs: TattooDesign[] = builtinDesigns();
+const tattoo = {
+  design: null as TattooDesign | null,
+  place: 'forearmL' as TattooPlace,
+  size: 0.5,
+  amount: 0.85,
+};
+const INK: [number, number, number] = [0.16, 0.17, 0.2];
+for (const [k, label] of Object.entries(PLACE_LABELS)) placeEl.append(new Option(label, k));
+
+function applyTattooToEngine(): void {
+  const d = tattoo.design;
+  engine.tattoo = d ? { design: d, place: tattoo.place, size: tattoo.size, amount: tattoo.amount, ink: INK } : null;
+  // 타투는 몸 관절점이 필요하다: 처음 켤 때 자세 추적을 켠다(모델을 한 번 내려받음)
+  if (d && !trackerConfig.pose) {
+    trackerConfig.pose = true;
+    if (running) void engine.tracker.configure(trackerConfig, setStatus).then(() => setStatus(`처리 장치 ${engine.tracker.delegate}`));
+  }
+}
 let currentLook: LookName | null = null;
 
 function applyLookToEngine(): void {
@@ -124,10 +154,10 @@ function swatch(label: string, color: RGB | null, selected: boolean, onClick: ()
 
 function renderRail(): void {
   tabsEl.replaceChildren(
-    ...(['look', 'lip', 'shadow', 'blush', 'liner', 'brow', 'hair'] as const).map((t) => {
+    ...(['look', 'lip', 'shadow', 'blush', 'liner', 'brow', 'hair', 'tattoo'] as const).map((t) => {
       const b = document.createElement('button');
       b.className = 'tab' + (tab === t ? ' on' : '');
-      b.textContent = t === 'look' ? '룩' : PART_LABELS[t];
+      b.textContent = t === 'look' ? '룩' : t === 'tattoo' ? '타투' : PART_LABELS[t];
       b.addEventListener('click', () => {
         tab = t;
         renderRail();
@@ -144,8 +174,16 @@ function renderRail(): void {
     );
     amountRowEl.hidden = true;
     glossRowEl.hidden = true;
+    placeRowEl.hidden = true;
+    sizeRowEl.hidden = true;
     return;
   }
+  if (tab === 'tattoo') {
+    renderTattooRail();
+    return;
+  }
+  placeRowEl.hidden = true;
+  sizeRowEl.hidden = true;
   const part = tab;
   const c = chosen[part];
   const items = [
@@ -189,8 +227,63 @@ function renderRail(): void {
   glossRowEl.hidden = part !== 'lip';
 }
 
+function renderTattooRail(): void {
+  const pick = (d: TattooDesign | null): void => {
+    tattoo.design = d;
+    applyTattooToEngine();
+    renderRail();
+  };
+  const items = [
+    swatch('없음', null, !tattoo.design, () => pick(null)),
+    ...designs.map((d) => {
+      const b = swatch(d.name, null, tattoo.design === d, () => pick(d));
+      const dot = b.querySelector<HTMLElement>('.dot')!;
+      dot.className = 'dot design';
+      dot.style.backgroundImage = `url(${d.canvas.toDataURL()})`;
+      return b;
+    }),
+  ];
+  const up = swatch('내 도안', null, tattoo.design?.id === 'upload', () => tattooFileEl.click());
+  up.querySelector<HTMLElement>('.dot')!.className = 'dot custom';
+  items.push(up);
+  swatchesEl.replaceChildren(...items);
+  amountRowEl.hidden = false;
+  amountEl.value = String(tattoo.amount);
+  glossRowEl.hidden = true;
+  placeRowEl.hidden = false;
+  placeEl.value = tattoo.place;
+  sizeRowEl.hidden = false;
+  sizeEl.value = String(tattoo.size);
+}
+
+tattooFileEl.addEventListener('change', async () => {
+  const f = tattooFileEl.files?.[0];
+  tattooFileEl.value = '';
+  if (!f) return;
+  try {
+    tattoo.design = await designFromFile(f);
+    applyTattooToEngine();
+    renderRail();
+  } catch (err) {
+    setStatus(`도안을 열지 못했습니다: ${(err as Error).message}`);
+  }
+});
+placeEl.addEventListener('change', () => {
+  tattoo.place = placeEl.value as TattooPlace;
+  applyTattooToEngine();
+});
+sizeEl.addEventListener('input', () => {
+  tattoo.size = Number(sizeEl.value);
+  applyTattooToEngine();
+});
+
 amountEl.addEventListener('input', () => {
   if (tab === 'look') return;
+  if (tab === 'tattoo') {
+    tattoo.amount = Number(amountEl.value);
+    applyTattooToEngine();
+    return;
+  }
   chosen[tab].amount = Number(amountEl.value);
   applyLookToEngine();
 });
@@ -375,6 +468,16 @@ function applyParams(): void {
       hairTip = item.tip ?? null;
       applyLookToEngine();
     }
+  }
+  const tp = params.get('tattoo');
+  const d = tp ? designs.find((x) => x.id === tp) : undefined;
+  if (d) {
+    tattoo.design = d;
+    const pl = params.get('place');
+    if (pl && pl in PLACE_LABELS) tattoo.place = pl as TattooPlace;
+    const ts = params.get('tsize');
+    if (ts) tattoo.size = Number(ts);
+    applyTattooToEngine();
   }
 }
 

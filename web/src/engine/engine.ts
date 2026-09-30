@@ -5,6 +5,9 @@
 import { faceRegions, type FaceRegions } from '../beauty/face-regions.ts';
 import { HairColorRenderer, type HairLook } from '../beauty/hair.ts';
 import { MakeupRenderer, type MakeupLook } from '../beauty/makeup.ts';
+import { TattooRenderer } from '../beauty/tattoo.ts';
+import { FACE_FOR_POSE, measureLimbWidth, placeAxis, tattooMesh, type PosePoints, type TattooPlace } from '../beauty/tattoo-place.ts';
+import { PointFilter } from './filters.ts';
 import { FaceTracker, type FaceFrame } from './face.ts';
 import { LoopbackTest } from './loopback.ts';
 import { Metrics } from './metrics.ts';
@@ -29,6 +32,17 @@ export const DEFAULT_SETTINGS: EngineSettings = {
   debugLandmarks: false,
 };
 
+export interface TattooSettings {
+  design: { canvas: TexImageSource; aspect: number };
+  place: TattooPlace;
+  /** 0~1 */
+  size: number;
+  /** 0~1 잉크 진하기 */
+  amount: number;
+  /** 검은 도안의 잉크 색 */
+  ink: [number, number, number];
+}
+
 export class BeautyEngine {
   readonly source: VideoSource;
   readonly tracker: Tracker;
@@ -40,12 +54,19 @@ export class BeautyEngine {
   look: MakeupLook = {};
   /** 지금 적용 중인 헤어 컬러(없으면 null) */
   hair: HairLook | null = null;
+  /** 지금 적용 중인 타투(없으면 null). 켜려면 추적기의 자세 추적(pose)이 켜져 있어야 한다 */
+  tattoo: TattooSettings | null = null;
+  lastPose: PosePoints | null = null;
   loopback: LoopbackTest | null = null;
   lastFace: FaceFrame | null = null;
   lastRegions: FaceRegions | null = null;
   lastTrack: TrackResult | null = null;
   private readonly makeup: MakeupRenderer;
   private readonly hairFx: HairColorRenderer;
+  private readonly tattooFx: TattooRenderer;
+  private readonly poseFilters = new Map<number, PointFilter>();
+  private poseSeen = -1;
+  private limbWidth: { place: TattooPlace; w: number } | null = null;
   private readonly overlay: CanvasRenderingContext2D;
   private readonly lumaCtx: CanvasRenderingContext2D;
   private loopRaf = 0;
@@ -55,6 +76,7 @@ export class BeautyEngine {
     this.renderer = new Renderer(opts.canvas);
     this.makeup = new MakeupRenderer(this.renderer.gl);
     this.hairFx = new HairColorRenderer(this.renderer.gl);
+    this.tattooFx = new TattooRenderer(this.renderer.gl);
     this.tracker = new Tracker(opts.wasmBase);
     this.overlay = opts.overlay.getContext('2d')!;
     const luma = document.createElement('canvas');
@@ -108,6 +130,16 @@ export class BeautyEngine {
     const regions = face ? faceRegions(face.p) : null;
     this.lastRegions = regions;
     const effects: ((t: FrameTextures) => void)[] = [];
+    const pose = this.updatePose(track, info.now, w, h, face);
+    const tat = this.tattoo;
+    if (tat && pose) {
+      const width = this.updateLimbWidth(tat.place, pose, track, w, h);
+      const mesh = tattooMesh(tat.place, pose, { size: tat.size, aspect: tat.design.aspect, width });
+      if (mesh) {
+        this.tattooFx.setDesign(tat.design.canvas);
+        effects.push((t) => this.tattooFx.draw(mesh, t, tat.amount, tat.ink));
+      }
+    }
     const hair = this.hair;
     if (hair && this.settings.useSeg) {
       effects.push((t) => this.hairFx.draw(hair, t, hairSpan(face, h)));
@@ -133,6 +165,60 @@ export class BeautyEngine {
       skipped,
       person: face !== null,
     });
+  }
+
+  /** 몸 관절점(0~16번)을 픽셀 좌표로 바꾸고 떨림을 줄인다. 잠깐 놓치면 마지막 값을 유지. */
+  private updatePose(track: TrackResult | null, t: number, w: number, h: number, face: FaceFrame | null): PosePoints | null {
+    const lm = track?.pose;
+    const p: PosePoints['p'] = {};
+    const vis: PosePoints['vis'] = {};
+    if (lm) {
+      for (let i = 0; i <= 16 && i < lm.length; i++) {
+        let f = this.poseFilters.get(i);
+        if (!f) {
+          f = new PointFilter({ minCutoff: 1.0, beta: 0.02, dCutoff: 1.0 });
+          this.poseFilters.set(i, f);
+        }
+        p[i] = f.filter(lm[i].x * w, lm[i].y * h, t);
+        vis[i] = lm[i].visibility ?? 1;
+      }
+      this.poseSeen = t;
+    } else if (this.lastPose && t - this.poseSeen <= 300) {
+      // 잠깐 놓치면 마지막 관절점을 유지
+      for (let i = 0; i <= 16; i++) {
+        if (this.lastPose.p[i]) {
+          p[i] = this.lastPose.p[i];
+          vis[i] = this.lastPose.vis[i];
+        }
+      }
+    }
+    // 얼굴 점(이미 떨림을 줄인 값)에서 목 위치용 보조점: 어깨가 화면 밖이어도 목 타투는 된다
+    if (face && face.confidence > 0.5) {
+      for (const [k, fi] of Object.entries(FACE_FOR_POSE)) {
+        p[Number(k)] = face.p[fi];
+        vis[Number(k)] = face.confidence;
+      }
+    }
+    this.lastPose = Object.keys(p).length > 0 ? { p, vis } : null;
+    return this.lastPose;
+  }
+
+  /** 팔·목 굵기를 분할에서 재고 천천히 따라가게 평활한다(분할이 없으면 null → 길이 비율로 추정). */
+  private updateLimbWidth(place: TattooPlace, pose: PosePoints, track: TrackResult | null, w: number, h: number): number | null {
+    if (this.limbWidth && this.limbWidth.place !== place) this.limbWidth = null;
+    const seg = track?.seg;
+    const ax = placeAxis(place, pose);
+    if (seg && ax) {
+      const m = measureLimbWidth(seg.flags, seg.width, seg.height, w, h, ax.a, ax.b);
+      if (m !== null) {
+        const len = Math.hypot(ax.b.x - ax.a.x, ax.b.y - ax.a.y);
+        // 말이 안 되는 값(옷·배경 섞임)은 버린다
+        if (m > len * 0.12 && m < len * 1.2) {
+          this.limbWidth = this.limbWidth ? { place, w: this.limbWidth.w * 0.85 + m * 0.15 } : { place, w: m };
+        }
+      }
+    }
+    return this.limbWidth?.w ?? null;
   }
 
   private drawOverlay(face: FaceFrame | null, w: number, h: number): void {

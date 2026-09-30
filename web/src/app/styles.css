@@ -298,6 +298,11 @@ button.on {
   background: repeating-linear-gradient(45deg, #2a2f3a 0 5px, #3a404d 5px 10px);
 }
 
+.swatch .dot.design {
+  background: #f3ede6 center / 80% no-repeat;
+  border-radius: 8px;
+}
+
 .swatch .dot.custom {
   background: conic-gradient(#e53, #eb3, #5c5, #3be, #a5e, #e53);
 }
