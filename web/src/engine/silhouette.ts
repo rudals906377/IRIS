@@ -141,12 +141,19 @@ function measureArm(body: BodyFrame, prob: (p: Vec2) => number, step: number, si
     let n = { x: -dir.y, y: dir.x };
     // 바깥쪽 = 몸 중심에서 멀어지는 쪽
     if (dot(n, sub(c, body.shoulderMid)) < 0) n = scale(n, -1);
-    let d = 0;
-    while (d < sw * 0.4) {
-      d += step;
-      if (prob(add(c, scale(n, d))) < 128) break;
-    }
-    if (d > sw * 0.04 && d < sw * 0.38) out[k] = d;
+    // 양쪽으로 재서 얇은 쪽을 쓴다(팔을 들면 한쪽이 머리·몸통과 붙어 두께가 부풀려진다)
+    const reach = (dirN: Vec2): number => {
+      let d = 0;
+      while (d < sw * 0.4) {
+        d += step;
+        if (prob(add(c, scale(dirN, d))) < 128) break;
+      }
+      return d;
+    };
+    const dOut = reach(n);
+    const dIn = reach(scale(n, -1));
+    const d = Math.min(dOut, dIn * 1.1);
+    if (d > sw * 0.04 && d < sw * 0.25) out[k] = d;
   }
   return out;
 }

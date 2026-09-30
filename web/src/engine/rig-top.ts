@@ -192,6 +192,7 @@ export class TopRig {
       let off0 = sl.halfW[0] * k;
       const am0 = torsoFit ? torsoFit.armAt(sl.side, 0.05, w) : NaN;
       off0 = Number.isFinite(am0) ? Math.min(Math.max(off0, am0 * 1.15), am0 * 2.2) : Math.max(off0, w * 0.15);
+      off0 = Math.min(off0, w * 0.25);
       const drop = Math.max(0, (this.gw / 2 - this.chestHalf * 0.95) * k);
       // 어깨 관절점은 어깨 윗면보다 아래에 있으므로, 드롭숄더가 아닐수록 어깨점을 위로 올린다
       // 어깨점은 관절 높이 근처(어깨선은 목에서 여기로 기울어 내려온다), 바깥쪽은 소매 뿌리 폭에 맞춘다
@@ -335,7 +336,9 @@ export class TopRig {
         let half = (sl.halfW[b0] + (sl.halfW[b1] - sl.halfW[b0]) * (x - b0)) * k;
         // 실제 팔(원래 입은 옷 소매 포함) 두께를 쟀으면: 그보다 조금 넉넉히 덮되, 상품 사진 폭이 과하면 줄인다.
         const am = torsoFit ? torsoFit.armAt(sl.side, Math.min(1, a / arm.length), w) : NaN;
-        return Number.isFinite(am) ? Math.min(Math.max(half, am * 1.15), am * 2.2) : Math.max(half, armR(a));
+        const h = Number.isFinite(am) ? Math.min(Math.max(half, am * 1.15), am * 2.2) : Math.max(half, armR(a));
+        // 절대 상한: 소매 반폭은 어깨 폭의 25%(넉넉한 소매)를 넘지 않는다
+        return Math.min(h, Math.max(half, w * 0.12), w * 0.25);
       };
       const outerAt = (a: number, off: number): Vec2 => add(arm.at(a), scale(arm.normal(a), sign * off));
       const innerAt = (a: number, off: number): Vec2 => add(arm.at(a), scale(arm.normal(a), -sign * off));
