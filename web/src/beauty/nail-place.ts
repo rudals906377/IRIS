@@ -32,6 +32,8 @@ export interface NailQuad {
   width: number;
   /** 0~1: 손등이 카메라를 향한 정도(손톱이 보이는 정도) */
   vis: number;
+  /** 손가락 피부 기준점(마지막 마디 관절 조금 뒤): 손톱과 피부를 밝기로 가르는 기준 */
+  ref: Vec2;
 }
 
 /**
@@ -80,7 +82,8 @@ export function nailQuads(h: HandPoints, facingSign = 1): NailQuad[] {
     // 손가락 끝이 카메라 쪽으로 향하면(깊이 차이가 크면) 손톱이 짧아 보인다
     const dz = h.z[tip] - h.z[dip];
     const foreshort = Math.max(0.35, 1 - Math.abs(dz) * 6);
-    out.push({ c, dir, len: len * foreshort, width, vis: handVis * fingerVis });
+    const ref = { x: d.x - dir.x * seg * 0.2, y: d.y - dir.y * seg * 0.2 };
+    out.push({ c, dir, len: len * foreshort, width, vis: handVis * fingerVis, ref });
   });
   return out;
 }

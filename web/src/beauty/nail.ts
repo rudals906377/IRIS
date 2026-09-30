@@ -24,14 +24,17 @@ in vec2 aLocal;   // x: 폭 방향 −1~1, y: 길이 방향 0(뿌리)~1(끝) —
 in float aVis;
 in float aSeed;
 in float aAspect;  // 손톱 폭 / 길이
+in vec2 aRef;      // 손가락 피부 기준점(카메라 uv)
 uniform vec2 uSize;
 out vec2 vLocal;
 out float vVis;
 out float vSeed;
 out float vAspect;
+out vec2 vRef;
 void main() {
   vLocal = aLocal;
   vAspect = aAspect;
+  vRef = aRef;
   vVis = aVis;
   vSeed = aSeed;
   gl_Position = vec4(aPos.x / uSize.x * 2.0 - 1.0, 1.0 - aPos.y / uSize.y * 2.0, 0.0, 1.0);
@@ -52,6 +55,7 @@ in vec2 vLocal;
 in float vVis;
 in float vSeed;
 in float vAspect;
+in vec2 vRef;
 out vec4 o;
 const vec3 W = vec3(0.299, 0.587, 0.114);
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -68,7 +72,14 @@ void main() {
   vec2 dq = q - bq;
   float sd = length(max(dq, 0.0)) + min(max(dq.x, dq.y), 0.0) - r;   // 음수 = 안쪽
   float aa = fwidth(sd) * 1.2 + 1e-4;
-  float shape = smoothstep(aa, -aa, sd);
+  // 영상으로 경계 다듬기: 손톱은 같은 손가락 피부보다 밝다(기준점은 마지막 마디 관절 뒤 피부).
+  // 추정 손톱의 안쪽은 늘 칠하고, 가장자리 근처(안팎 0.35·반폭)는 밝기로 손톱인지 판단해 넓히거나 줄인다.
+  float Lref = dot(textureLod(uCam, vRef, 2.0).rgb, W);
+  float Ls = dot(textureLod(uCam, camUv, 1.0).rgb, W);
+  float bright = smoothstep(0.0, 0.07, Ls - Lref);
+  float core = smoothstep(0.0, -0.3 * hx, sd);
+  float reach = smoothstep(0.35 * hx + aa, 0.35 * hx - aa, sd);
+  float shape = reach * max(core, bright * smoothstep(0.35 * hx, 0.0, sd));
   // 실제로 피부(손)가 보이는 곳에만: 물건 뒤로 숨은 손가락 끝은 칠하지 않는다
   float skin = texture(uSeg, camUv).g;
   if (uUseGF > 0.5) {
@@ -128,13 +139,14 @@ export class NailRenderer {
       const loc = gl.getAttribLocation(this.prog.prog, name);
       if (loc < 0) return;
       gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 28, offset);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 36, offset);
     };
     attr('aPos', 2, 0);
     attr('aLocal', 2, 8);
     attr('aVis', 1, 16);
     attr('aSeed', 1, 20);
     attr('aAspect', 1, 24);
+    attr('aRef', 2, 28);
     gl.bindVertexArray(null);
   }
 
@@ -142,24 +154,25 @@ export class NailRenderer {
     if (nails.length === 0) return;
     const gl = this.gl;
     // 손톱마다 두 삼각형(6정점). 가장자리 흐림 여유로 10% 크게
-    const data = new Float32Array(nails.length * 6 * 7);
+    const data = new Float32Array(nails.length * 6 * 9);
     let k = 0;
     nails.forEach((n, idx) => {
       const px = -n.dir.y;
       const py = n.dir.x;
-      const hw = (n.width / 2) * 1.1;
+      // 경계 다듬기용 여유: 폭 1.4배, 길이 앞뒤로 더
+      const hw = (n.width / 2) * 1.4;
       const corner = (sx: number, sy: number): number[] => {
-        // sy: 0 뿌리 ~ 1 끝, 여유 포함 −0.05 ~ 1.05
+        // sy: 0 뿌리 ~ 1 끝, 여유 포함 −0.2 ~ 1.2
         const along = (sy - 0.5) * n.len;
-        return [n.c.x + n.dir.x * along + px * sx * hw, n.c.y + n.dir.y * along + py * sx * hw, sx * 1.1, sy, n.vis, idx + 1, n.width / n.len];
+        return [n.c.x + n.dir.x * along + px * sx * hw, n.c.y + n.dir.y * along + py * sx * hw, sx * 1.4, sy, n.vis, idx + 1, n.width / n.len, n.ref.x / t.width, n.ref.y / t.height];
       };
-      const a = corner(-1, -0.05);
-      const b = corner(1, -0.05);
-      const c = corner(-1, 1.05);
-      const d = corner(1, 1.05);
+      const a = corner(-1, -0.2);
+      const b = corner(1, -0.2);
+      const c = corner(-1, 1.2);
+      const d = corner(1, 1.2);
       for (const v of [a, b, c, b, d, c]) {
         data.set(v, k);
-        k += 7;
+        k += 9;
       }
     });
     const u = this.prog.u;
