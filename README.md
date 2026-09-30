@@ -15,7 +15,7 @@
 - **마스크 기반 합성**: 얼굴 점 478개(MediaPipe Face Landmarker) → 부위별 영역(입술·눈꺼풀·볼·눈썹·아이라인) → 부드러운 마스크 → 원래 피부의 밝기·주름을 살린 색 입히기.
   - 입을 벌리면 입 안은 칠하지 않고, 손이 얼굴 앞에 오면 그 부분은 화장을 숨깁니다(피부 분할).
   - 아이섀도는 눈동자·흰자로 번지지 않고, 속눈썹 쪽이 진하고 위로 갈수록 옅어집니다. 펄(고개를 움직이면 반짝이는 반짝이)도 고를 수 있습니다.
-  - 립은 광택과 입술 라인(윤곽보다 도톰하게 칠하는 오버립)을 조절할 수 있습니다.
+  - 립은 모양(풀 립·그라데이션·블러), 광택, 입술 라인(윤곽보다 도톰하게 칠하는 오버립)을 고를 수 있습니다.
   - **조명 맞춤 색**: 볼 피부의 평균색으로 조명의 밝기·색온도·채도를 추정해 화장 색을 그 조명에 맞춥니다(어두운 방에서 립만 형광처럼 뜨지 않음). 블러셔·섀도·눈썹은 원래 피부에 색 비율을 곱해 피부 결이 그대로 비칩니다.
   - 눈썹은 눈썹 올은 진하게, 올 사이는 옅게 채우고 꼬리는 가늘게 모읍니다. 얼굴을 옆으로 돌리면 먼 쪽 화장은 옅어집니다.
 - **피부 보정(베이스)**: 얼굴 피부에서 이목구비를 뺀 곳의 작은 잡티·결만 줄이고(큰 경계는 유지) 붉은기·얼룩을 고르게, 파운데이션 호수(17~25호 등)로 톤을 맞춥니다.
@@ -63,7 +63,7 @@ npm run build      # dist/ 생성
 
 헤드리스 브라우저 시험 도구: [tools/harness](tools/harness/README.md)
 
-주소 인자(개발·시험용): `?src=sample`(예시 영상으로 바로 시작), `?look=daily|coral|red|smoky|rose|glam|clear`, `?over=-1~1`(입술 라인), `?pearl=0~1`(섀도 펄), `?hair=<헤어 색 번호>`, `?tattoo=<도안 id>&place=<위치>&tsize=0~1`, `?nail=<번호>&nstyle=solid|french|gradient|glitter|dots`, `?hud=1`, `?debug=lm,seg`, `?delegate=CPU|GPU`
+주소 인자(개발·시험용): `?src=sample`(예시 영상으로 바로 시작), `?look=daily|coral|red|smoky|rose|glam|clear`, `?over=-1~1`(입술 라인), `?lstyle=full|gradient|blur`(립 모양), `?pearl=0~1`(섀도 펄), `?hair=<헤어 색 번호>`, `?tattoo=<도안 id>&place=<위치>&tsize=0~1`, `?nail=<번호>&nstyle=solid|french|gradient|glitter|dots`, `?hud=1`, `?debug=lm,seg`, `?delegate=CPU|GPU`
 
 ### 구조
 

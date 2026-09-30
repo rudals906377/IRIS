@@ -5,6 +5,7 @@
 //   ?src=<경로>             같은 사이트의 동영상으로 바로 시작(시험용)
 //   ?look=<룩 이름>         처음 적용할 룩(daily, coral, red, smoky, rose, glam, clear)
 //   ?over=-1~1 ?pearl=0~1   입술 라인(오버립), 아이섀도 펄
+//   ?lstyle=full|gradient|blur  립 모양
 //   ?hair=<번호|이름>       헤어 색
 //   ?nail=<번호|이름>&nstyle=solid|french|gradient|glitter|dots   네일
 //   ?tattoo=<도안 id>&place=<위치>&tsize=0~1   타투(예: tattoo=moon&place=forearmL)
@@ -14,6 +15,7 @@
 
 import { LOOKS, PALETTES, PART_LABELS, type LookName, type PartName } from '../beauty/palettes.ts';
 import type { MakeupLook, RGB } from '../beauty/makeup.ts';
+import type { LipStyle } from '../beauty/face-regions.ts';
 import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
 import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
 import type { NailStyle } from '../beauty/nail.ts';
@@ -41,6 +43,8 @@ const amountRowEl = $<HTMLElement>('amount-row');
 const glossRowEl = $<HTMLElement>('gloss-row');
 const glossEl = $<HTMLInputElement>('gloss');
 const overRowEl = $<HTMLElement>('over-row');
+const lstyleRowEl = $<HTMLElement>('lstyle-row');
+const lstyleEl = $<HTMLSelectElement>('lstyle');
 const overEl = $<HTMLInputElement>('over');
 const pearlRowEl = $<HTMLElement>('pearl-row');
 const pearlEl = $<HTMLInputElement>('pearl');
@@ -99,6 +103,7 @@ let hairTip: RGB | null = null;
 let gloss = 0.3;
 /** 입술 라인(-1~1)과 아이섀도 펄(0~1) */
 let overlip = 0;
+let lipStyle: LipStyle = 'full';
 let pearl = 0;
 let tab: PartName | 'look' | 'tattoo' = 'look';
 
@@ -129,7 +134,7 @@ function applyLookToEngine(): void {
   for (const part of Object.keys(chosen) as PartName[]) {
     const c = chosen[part];
     if (!c.color || part === 'hair' || part === 'nail') continue;
-    if (part === 'lip') look.lip = { color: c.color, amount: c.amount, gloss, over: overlip };
+    if (part === 'lip') look.lip = { color: c.color, amount: c.amount, gloss, over: overlip, style: lipStyle };
     else if (part === 'shadow') look.shadow = { color: c.color, amount: c.amount, pearl };
     else look[part] = { color: c.color, amount: c.amount };
   }
@@ -202,6 +207,7 @@ function renderRail(): void {
     amountRowEl.hidden = true;
     glossRowEl.hidden = true;
     overRowEl.hidden = true;
+    lstyleRowEl.hidden = true;
     pearlRowEl.hidden = true;
     placeRowEl.hidden = true;
     sizeRowEl.hidden = true;
@@ -257,6 +263,7 @@ function renderRail(): void {
   amountEl.value = String(c.amount);
   glossRowEl.hidden = part !== 'lip';
   overRowEl.hidden = part !== 'lip';
+  lstyleRowEl.hidden = part !== 'lip';
   pearlRowEl.hidden = part !== 'shadow';
 }
 
@@ -284,6 +291,7 @@ function renderTattooRail(): void {
   amountEl.value = String(tattoo.amount);
   glossRowEl.hidden = true;
   overRowEl.hidden = true;
+  lstyleRowEl.hidden = true;
   pearlRowEl.hidden = true;
   placeRowEl.hidden = false;
   placeEl.value = tattoo.place;
@@ -329,6 +337,10 @@ amountEl.addEventListener('input', () => {
 });
 glossEl.addEventListener('input', () => {
   gloss = Number(glossEl.value);
+  applyLookToEngine();
+});
+lstyleEl.addEventListener('change', () => {
+  lipStyle = lstyleEl.value as LipStyle;
   applyLookToEngine();
 });
 overEl.addEventListener('input', () => {
@@ -510,6 +522,8 @@ function applyParams(): void {
   // ?over=-1~1(입술 라인), ?pearl=0~1(아이섀도 펄)
   if (params.has('over')) overEl.value = String((overlip = Number(params.get('over'))));
   if (params.has('pearl')) pearlEl.value = String((pearl = Number(params.get('pearl'))));
+  const ls = params.get('lstyle');
+  if (ls === 'full' || ls === 'gradient' || ls === 'blur') lstyleEl.value = lipStyle = ls;
   applyLookToEngine();
   // ?hair=<색상표 번호 또는 이름>
   const hp = params.get('hair');

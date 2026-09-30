@@ -2,13 +2,13 @@
 // 카메라를 그린 직후, 같은 WebGL 문맥에서 화면에 덧그린다(영상은 기기 밖으로 나가지 않는다).
 
 import type { Vec2 } from '../engine/math.ts';
-import { triangulate, type FaceRegions, type MVert } from './face-regions.ts';
+import { triangulate, type FaceRegions, type LipStyle, type MVert } from './face-regions.ts';
 
 export type RGB = [number, number, number];
 
 export interface MakeupLook {
   /** over: 입술 라인(-1 안쪽만 ~ 0 윤곽 그대로 ~ 1 오버립) */
-  lip?: { color: RGB; amount: number; gloss: number; over?: number };
+  lip?: { color: RGB; amount: number; gloss: number; over?: number; style?: LipStyle };
   /** pearl: 펄(반짝이·윤기) 0~1 */
   shadow?: { color: RGB; amount: number; pearl?: number };
   blush?: { color: RGB; amount: number };
@@ -370,11 +370,8 @@ export class MakeupRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo[0]);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    if (look.lip) {
-      this.mesh(poly(regions.lipsOuter), [1, 0, 0, 0], gl.MAX);
-      // 입 벌린 안쪽은 비운다(R만 0으로)
-      this.mesh(poly(regions.lipsInner), [0, 1, 1, 1], gl.MIN);
-    }
+    // 립: 안쪽 → 바깥 윤곽 띠(입 벌린 안쪽은 원래 비어 있다)
+    if (look.lip) this.mesh(regions.lip, [1, 0, 0, 0], gl.MAX);
     if (look.shadow) this.mesh(regions.shadow, [0, 1, 0, 0], gl.MAX);
     if (look.blush) this.mesh(regions.blush, [0, 0, 1, 0], gl.MAX);
     if (look.brow) this.mesh(regions.brow, [0, 0, 0, 1], gl.MAX);

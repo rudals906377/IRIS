@@ -47,6 +47,9 @@ export interface MVert {
   t: number;
 }
 
+/** 립 모양: 풀 립(윤곽 가득), 그라데이션(안쪽 진하고 바깥으로 옅게), 블러(가운데 진하고 경계를 흐리게) */
+export type LipStyle = 'full' | 'gradient' | 'blur';
+
 export interface FaceRegions {
   /** 얼굴 폭(px) — 경계 흐림 크기 등의 기준 */
   faceW: number;
@@ -58,6 +61,8 @@ export interface FaceRegions {
   visL: number;
   lipsOuter: Vec2[];
   lipsInner: Vec2[];
+  /** 립: 안쪽 윤곽 → 바깥 윤곽 띠(입 벌린 안쪽은 비어 있음). 진하기는 립 모양에 따라 */
+  lip: MVert[];
   /** 입술 살 가운데(바깥·안쪽 윤곽의 중간) — 입술 평균 밝기 표본 위치 */
   lipBody: Vec2[];
   /** 볼 피부 표본 위치 — 조명(밝기·색온도) 추정용 */
@@ -145,6 +150,25 @@ function shadowMesh(p: Vec2[], upper: number[], browLower: number[], height: num
   return bandMesh(rows, (r, c) => vals[r] * vis * (0.55 + 0.45 * smooth(n - 1, n - 4, c)), faceW);
 }
 
+/** 아래 속눈썹 선 아래 음영(눈꼬리 쪽이 진하고 앞쪽은 옅게). lower: 안쪽 → 바깥 */
+function underMesh(p: Vec2[], lower: number[], upper: number[], faceW: number, vis: number): MVert[] {
+  const lid = lower.map((i) => p[i]);
+  const eye = [...upper, ...lower].map((i) => p[i]);
+  const ctr = eye.reduce((a, q) => ({ x: a.x + q.x / eye.length, y: a.y + q.y / eye.length }), { x: 0, y: 0 });
+  // 눈 높이: 윗·아랫 눈꺼풀 가운데 사이
+  const h = Math.max(dist(p[upper[4]], p[lower[4]]), faceW * 0.02);
+  const off = (k: number): Vec2[] =>
+    lid.map((q) => {
+      const dx = q.x - ctr.x;
+      const dy = q.y - ctr.y;
+      const l = Math.hypot(dx, dy) || 1;
+      return { x: q.x + (dx / l) * h * k, y: q.y + (dy / l) * h * k };
+    });
+  const n = lid.length;
+  // 첫 줄은 눈 안쪽(합성 때 빠짐)으로 조금 들여 흐림 뒤에도 속눈썹 선에서 진하기 유지
+  return bandMesh([off(-0.25), lid, off(0.45)], (r, c) => [0.5, 0.5, 0][r] * vis * (0.3 + 0.7 * smooth(0, n - 3, c)), faceW);
+}
+
 /** 윗눈꺼풀 속눈썹 선 위로 두께가 있는 아이라이너 띠(눈꼬리로 갈수록 두껍고, 날개 끝에서 한 점으로 모임) */
 function linerMesh(p: Vec2[], upper: number[], lower: number[], wing: number, faceW: number, vis: number): MVert[] {
   const lash = upper.map((i) => p[i]); // 바깥 → 안쪽
@@ -213,7 +237,7 @@ function browMesh(p: Vec2[], lower: number[], upper: number[], faceW: number, vi
 }
 
 /** 478점(픽셀 좌표)에서 메이크업 영역을 만든다. overlip: -1(입술 안쪽으로) ~ 1(윤곽보다 크게) */
-export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?: number; overlip?: number } = {}): FaceRegions {
+export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?: number; overlip?: number; lipStyle?: LipStyle } = {}): FaceRegions {
   const faceW = dist(p[FACE_SIDE_R], p[FACE_SIDE_L]);
   const sh = opts.shadowHeight ?? 0.62;
   const wing = opts.linerWing ?? 0.25;
@@ -247,6 +271,13 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
   const lc = outer.reduce((a, q) => ({ x: a.x + q.x / outer.length, y: a.y + q.y / outer.length }), { x: 0, y: 0 });
   const lipsOuter = over === 0 ? outer : outer.map((q) => ({ x: lc.x + (q.x - lc.x) * (1 + 0.025 * over), y: lc.y + (q.y - lc.y) * (1 + 0.14 * over) }));
   const lipsInner = LIPS_INNER.map((i) => p[i]);
+  const style = opts.lipStyle ?? 'full';
+  const ring = (pts: Vec2[]): Vec2[] => [...pts, pts[0]];
+  const lipRows =
+    style === 'full'
+      ? [ring(lipsInner), ring(lipsOuter)]
+      : [ring(lipsInner), ring(lipsInner.map((q, k) => lerp(q, lipsOuter[k], 0.5))), ring(lipsOuter)];
+  const lipVals = style === 'full' ? [1, 1] : style === 'gradient' ? [1, 0.7, 0.08] : [1, 0.9, 0.3];
   // 이목구비: 눈은 속눈썹까지 들어가게 가운데에서 1.35배로 넓힌다
   const grow = (pts: Vec2[], k: number): Vec2[] => {
     const c = pts.reduce((a, q) => ({ x: a.x + q.x / pts.length, y: a.y + q.y / pts.length }), { x: 0, y: 0 });
@@ -272,9 +303,15 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
     visL,
     lipsOuter,
     lipsInner,
+    lip: bandMesh(lipRows, (r) => lipVals[r], faceW),
     lipBody: LIP_BODY.map((k) => lerp(outer[k], lipsInner[k], 0.5)),
     skinPts: SKIN_SAMPLES.map((i) => p[i]),
-    shadow: [...shadowMesh(p, EYE_R_UPPER, BROW_R_LOWER, sh, faceW, visR), ...shadowMesh(p, EYE_L_UPPER, BROW_L_LOWER, sh, faceW, visL)],
+    shadow: [
+      ...shadowMesh(p, EYE_R_UPPER, BROW_R_LOWER, sh, faceW, visR),
+      ...shadowMesh(p, EYE_L_UPPER, BROW_L_LOWER, sh, faceW, visL),
+      ...underMesh(p, EYE_R_LOWER, EYE_R_UPPER, faceW, visR),
+      ...underMesh(p, EYE_L_LOWER, EYE_L_UPPER, faceW, visL),
+    ],
     liner: [...linerMesh(p, EYE_R_UPPER, EYE_R_LOWER, wing, faceW, visR), ...linerMesh(p, EYE_L_UPPER, EYE_L_LOWER, wing, faceW, visL)],
     eyeR,
     eyeL,
