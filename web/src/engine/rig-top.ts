@@ -156,12 +156,12 @@ export class TopRig {
   update(body: BodyFrame, fit: TopFit = DEFAULT_TOP_FIT, torsoFit?: TorsoTracker): void {
     // 크기 기준: 상품 가슴 폭(겨드랑이~겨드랑이). 보통 옷은 어깨점 폭 ≈ 가슴 폭 × 0.95이므로 기존 어깨 기준과 같은 크기가 된다.
     // 몸을 돌리면 화면상 어깨 폭이 줄므로, 회전 각도로 되돌린 정면 어깨 폭으로 크기를 정한다
-    const frontW = body.shoulderW / Math.max(0.6, Math.abs(Math.cos(body.turn)));
+    const frontW = body.frontW;
     const k = (frontW * fit.seamWidth) / Math.max(this.gw * 0.6, this.chestHalf * 1.9);
     // 세로 배율: 몸통 길이에 맞춰 밑단 위치를 정하되 상품의 기장 비율을 반영한다.
     const hemT = STD_HEM_T * (this.gLen / this.gw / STD_LENGTH_RATIO) * fit.length;
     const kv = (hemT * body.axisLen) / this.gLen;
-    const lift = fit.lift * body.shoulderW;
+    const lift = fit.lift * body.frontW;
     const sm = body.shoulderMid;
     const axisDir = norm(sub(body.hipMid, sm), body.down);
     const { u, down, hipU } = body;
@@ -183,12 +183,12 @@ export class TopRig {
     const capAx: Record<1 | -1, number> = { 1: NaN, [-1]: NaN };
     // 겨드랑이 높이의 몸판 반폭: 측정한 옷 가장자리와 팔 안쪽 가장자리 중 좁은 쪽
     // (팔을 내리면 측정값에 지금 입은 옷의 소매까지 들어오므로 팔 안쪽에서 끊는다)
-    const measPit = torsoFit ? torsoFit.at(armpitYr / body.axisLen, body.shoulderW) : { left: defaultHalf(armpitYr / body.axisLen) * body.shoulderW, right: defaultHalf(armpitYr / body.axisLen) * body.shoulderW };
+    const measPit = torsoFit ? torsoFit.at(armpitYr / body.axisLen, body.frontW) : { left: defaultHalf(armpitYr / body.axisLen) * body.frontW, right: defaultHalf(armpitYr / body.axisLen) * body.frontW };
     const pitLat: Record<1 | -1, number> = { 1: measPit.left, [-1]: measPit.right };
     for (const sl of this.sleeves) {
       const arm = new ArmPath(body, sl.lmShoulder, sl.lmElbow, sl.lmWrist, sl.side);
       const sign = dot(arm.normal(0), sub(arm.at(0), sm)) >= 0 ? 1 : -1;
-      const w = body.shoulderW;
+      const w = body.frontW;
       let off0 = sl.halfW[0] * k;
       const am0 = torsoFit ? torsoFit.armAt(sl.side, 0.05, w) : NaN;
       off0 = Number.isFinite(am0) ? Math.min(Math.max(off0, am0 * 1.15), am0 * 2.2) : Math.max(off0, w * 0.15);
@@ -202,12 +202,12 @@ export class TopRig {
       capAx[sl.side] = dot(sub(cap, sm), axisDir);
       const inner = add(arm.at(armpitYr), scale(arm.normal(armpitYr), -sign * off0));
       const innerLat = dot(sub(inner, sm), u) * sl.side;
-      if (innerLat > body.shoulderW * 0.2) pitLat[sl.side] = Math.min(pitLat[sl.side], innerLat);
+      if (innerLat > body.frontW * 0.2) pitLat[sl.side] = Math.min(pitLat[sl.side], innerLat);
     }
-    if (!Number.isFinite(capLat[1])) capLat[1] = body.shoulderW * 0.62;
-    if (!Number.isFinite(capLat[-1])) capLat[-1] = body.shoulderW * 0.62;
-    if (!Number.isFinite(capAx[1])) capAx[1] = body.shoulderW * 0.1;
-    if (!Number.isFinite(capAx[-1])) capAx[-1] = body.shoulderW * 0.1;
+    if (!Number.isFinite(capLat[1])) capLat[1] = body.frontW * 0.62;
+    if (!Number.isFinite(capLat[-1])) capLat[-1] = body.frontW * 0.62;
+    if (!Number.isFinite(capAx[1])) capAx[1] = body.frontW * 0.1;
+    if (!Number.isFinite(capAx[-1])) capAx[-1] = body.frontW * 0.1;
 
     const mapInto = (gx: number, gy: number, out: Float32Array, o: number, back = false, aux?: Float32Array): void => {
       // 어깨선 위(목둘레)는 가로와 같은 배율, 아래(몸통)는 몸통 길이 배율
@@ -255,7 +255,7 @@ export class TopRig {
       const Zr = -X * sinP + Z * cosP;
       const sN = Xr / E;
       const t = Math.max(0, yr) / body.axisLen;
-      const meas = torsoFit ? torsoFit.at(t, body.shoulderW) : { left: defaultHalf(t) * body.shoulderW, right: defaultHalf(t) * body.shoulderW };
+      const meas = torsoFit ? torsoFit.at(t, body.frontW) : { left: defaultHalf(t) * body.frontW, right: defaultHalf(t) * body.frontW };
       // 겨드랑이 위(어깨 경사·진동 둘레)는 상품 비율 그대로(가슴 폭 × 배율), 아래로 갈수록 몸 윤곽에 맞춘다.
       // 어깨 높이에서 잰 윤곽에는 어깨 근육·소매가 포함돼 몸판을 거기 맞추면 어깨가 네모나게 부푼다.
       // 어깨점 가로 위치 → 겨드랑이 반폭 → 그 아래는 측정 폭(단, 겨드랑이에서 갑자기 넓어지지 않게)
@@ -317,7 +317,7 @@ export class TopRig {
       const { arm, sign, cap, off0, drop } = arms.get(sl)!;
       // 겨드랑이: 몸판 옆선 위(몸판과 같은 변형이라 이음새 틈이 없다)
       const pit = mapPoint(this.asset.kp[sl.side === 1 ? 'armpitL' : 'armpitR']);
-      const w = body.shoulderW;
+      const w = body.frontW;
       const armR = (a: number): number => w * (0.15 - 0.045 * Math.min(1, Math.max(0, a / arm.length)));
       // 바깥선은 어깨점에서, 안쪽선은 겨드랑이에서 시작해 각자 길이만큼 팔을 따라 내려간다.
       // (상품 사진에서 소매가 옆으로 뻗어 있어도 겨드랑이 쪽이 접히며 무늬가 팔 방향으로 통째로 돌지 않는다)
@@ -449,7 +449,7 @@ export function inverseBilinear(p: Vec2, p00: Vec2, p10: Vec2, p01: Vec2, p11: V
 
 /** 팔 랜드마크가 잘 보이지 않으면 몸 옆으로 내린 자세로 대신한다. */
 export function armPose(body: BodyFrame, lmS: number, lmE: number, lmW: number, side: 1 | -1): { shoulder: Vec2; elbow: Vec2; wrist: Vec2 } {
-  const w = body.shoulderW;
+  const w = body.frontW;
   const shoulder = body.p[lmS];
   const hang = norm(add(body.down, scale(body.u, side * 0.18)));
   const elbowDefault = add(shoulder, scale(hang, 0.8 * w));

@@ -66,6 +66,11 @@ export interface BodyFrame {
    * 어깨 깊이(z) 차이와 어깨 폭 ÷ 몸통 길이의 줄어듦을 함께 쓴다.
    */
   turn: number;
+  /**
+   * 정면 기준 어깨 폭(px): 몸을 돌리면 화면상 어깨 폭(shoulderW)은 줄지만 몸통 길이는 그대로이므로,
+   * 엉덩이가 보이면 몸통 길이 × 정면 비율로 되돌린다. 옷 크기의 기준.
+   */
+  frontW: number;
 }
 
 /** 엉덩이가 보이지 않을 때 쓰는 체형 비율(어깨 랜드마크 간 거리 대비 어깨–엉덩이 거리). */
@@ -82,7 +87,9 @@ export class BodyTracker {
   private confidence = 0;
   private lastT = -1;
   /** 정면일 때의 어깨 폭 ÷ 몸통 길이(사람마다 다르므로 관찰하며 갱신, 처음엔 관찰값으로 시작) */
-  private frontRatio = NaN;
+  private frontRatio = 0.72;
+  /** 최근에 믿을 만했던 몸통 길이(px). 어깨가 옆으로 돌아 짧아져도 엉덩이 위치를 버리지 않기 위한 기준 */
+  private refAxis = NaN;
   private turnS = 0;
   private turnC = 1;
 
@@ -152,10 +159,15 @@ export class BodyTracker {
     // 엉덩이 예측이 비정상적으로 짧거나 길면 보정한다.
     const axis = sub(hipMid, shoulderMid);
     const axisLenRaw = Math.hypot(axis.x, axis.y);
-    const minLen = 0.8 * shoulderW;
-    const maxLen = 2.2 * shoulderW;
+    // 길이 검사: 어깨 폭 기준(정면일 때)과 최근 몸통 길이 기준 중 넓은 범위를 허용한다(옆·뒤로 돌면 어깨 폭만 줄어든다).
+    const ref = Number.isFinite(this.refAxis) ? this.refAxis : TORSO_RATIO * shoulderW;
+    const minLen = Math.min(0.8 * shoulderW, 0.6 * ref);
+    const maxLen = Math.max(2.2 * shoulderW, 1.5 * ref);
     if (axisLenRaw < minLen || axisLenRaw > maxLen || dot(axis, down) < 0.3 * axisLenRaw) {
-      hipMid = priorHip;
+      hipMid = Number.isFinite(this.refAxis) ? add(shoulderMid, scale(down, this.refAxis)) : priorHip;
+    } else if (hipW > 0.5) {
+      const a = dt > 0 ? Math.min(1, dt / 300) : 1;
+      this.refAxis = Number.isFinite(this.refAxis) ? this.refAxis + (axisLenRaw - this.refAxis) * a : axisLenRaw;
     }
     const axisLen = Math.max(1, dist(hipMid, shoulderMid));
     const hipUMeasured = norm(sub(p[LM.leftHip], p[LM.rightHip]), u);
@@ -170,7 +182,8 @@ export class BodyTracker {
     const backView = sL.x < sR.x;
     if (hipW > 0.8) {
       const r = shoulderW / axisLen;
-      this.frontRatio = Number.isFinite(this.frontRatio) ? Math.min(0.95, Math.max(0.55, Math.max(this.frontRatio * 0.998, r))) : r;
+      // 정면 비율: 관찰한 최댓값(천천히 기본값 쪽으로 복귀). 뒤나 옆에서 시작해도 너무 작아지지 않게 하한을 둔다.
+      this.frontRatio = Math.min(0.95, Math.max(0.62, Math.max(this.frontRatio * 0.999, r)));
       let mag = Math.acos(Math.min(1, r / this.frontRatio));
       if (backView) mag = Math.PI - mag;
       const dead = 0.22;
@@ -206,6 +219,7 @@ export class BodyTracker {
       axisLen,
       yaw,
       turn,
+      frontW: hipW > 0.5 ? Math.max(shoulderW, axisLen * this.frontRatio) : shoulderW / Math.max(0.6, Math.abs(Math.cos(turn))),
     };
     this.last = frame;
     return frame;
@@ -218,6 +232,7 @@ export class BodyTracker {
     this.confidence = 0;
     this.turnS = 0;
     this.turnC = 1;
-    this.frontRatio = NaN;
+    this.frontRatio = 0.72;
+    this.refAxis = NaN;
   }
 }

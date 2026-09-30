@@ -42,7 +42,7 @@ export function measureTorso(seg: SegPlane, body: BodyFrame): TorsoWidths {
   const { width: vw, height: vh } = body;
   const sx = seg.width / vw;
   const sy = seg.height / vh;
-  const sw = body.shoulderW;
+  const sw = body.frontW;
   const axis = sub(body.hipMid, body.shoulderMid);
   const axisDir = norm(axis, body.down);
   const left = new Float32Array(TORSO_SAMPLES).fill(NaN);
@@ -127,8 +127,8 @@ function measureArm(body: BodyFrame, prob: (p: Vec2) => number, step: number, si
   if (body.vis[e] < 0.4) return out;
   const S = body.p[s];
   const E = body.p[e];
-  const W = body.vis[w] > 0.4 ? body.p[w] : add(E, scale(norm(sub(E, S), body.down), 0.7 * body.shoulderW));
-  const sw = body.shoulderW;
+  const W = body.vis[w] > 0.4 ? body.p[w] : add(E, scale(norm(sub(E, S), body.down), 0.7 * body.frontW));
+  const sw = body.frontW;
   const l1 = Math.hypot(E.x - S.x, E.y - S.y);
   const l2 = Math.hypot(W.x - E.x, W.y - E.y);
   const L = l1 + l2 || 1;

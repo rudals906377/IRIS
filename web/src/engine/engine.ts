@@ -164,7 +164,7 @@ export class TryOnEngine {
     const layers = [];
     let capsules: ReturnType<typeof buildArmOccluders> = [];
     if (!body) this.torso.reset();
-    else if (track?.seg && this.settings.useSeg) this.torso.update(measureTorso(track.seg, body), body.shoulderW);
+    else if (track?.seg && this.settings.useSeg) this.torso.update(measureTorso(track.seg, body), body.frontW);
     if (body && this.garment) {
       const rigBody = this.settings.forceTurn !== null ? { ...body, turn: this.settings.forceTurn } : body;
       this.garment.rig.update(rigBody, this.settings.fit, this.settings.useSeg ? this.torso : undefined);
@@ -180,7 +180,7 @@ export class TryOnEngine {
         ? (() => {
             const axis = { x: body.hipMid.x - body.shoulderMid.x, y: body.hipMid.y - body.shoulderMid.y };
             const l = Math.hypot(axis.x, axis.y) || 1;
-            const mid = this.torso.at(0.6, body.shoulderW);
+            const mid = this.torso.at(0.6, body.frontW);
             return {
               sm: body.shoulderMid,
               lat: body.u,
@@ -188,7 +188,7 @@ export class TryOnEngine {
               axisLen: body.axisLen,
               torsoHalf: (mid.left + mid.right) / 2,
               pitAx: body.axisLen * 0.33,
-              shoulderW: body.shoulderW,
+              shoulderW: body.frontW,
               turn: body.turn,
             };
           })()
