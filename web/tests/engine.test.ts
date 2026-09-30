@@ -2,7 +2,7 @@
 // 측정·필터 로직 단위 테스트(브라우저 없이 Node에서 실행: npm test)
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AdaptiveFilter2, OneEuro } from '../src/engine/filters.ts';
+import { AdaptiveFilter2, OneEuro, RigidShapeFilter } from '../src/engine/filters.ts';
 import { FaceTracker } from '../src/engine/face.ts';
 import { DEFAULT_LOOPBACK_CONFIG, LoopbackTest } from '../src/engine/loopback.ts';
 import { Rolling, quantileSorted, summarize } from '../src/engine/stats.ts';
@@ -112,4 +112,17 @@ test('얼굴 점 필터: 머리 전체가 빠르게 움직이면 지연 없이, 
   const out = ft.update(norm(moved), 40 * 33.333, 640, 480)!;
   const err = out.p.reduce((a, q, j) => a + Math.hypot(q.x - moved[j].x, q.y - moved[j].y), 0) / 478;
   assert.ok(err < 1.5, `이동 오차 ${err}`);
+});
+
+test('묶음 필터(손): 손 전체가 빠르게 움직이고 손가락이 접혀도 곧바로 따라감', () => {
+  const f = new RigidShapeFilter({ rigid: [0, 1, 5, 9, 13, 17], poseD0: 0.008, poseD1: 0.035, poseAMin: 0.06, shapeD0: 0.01, shapeD1: 0.035, shapeAMin: 0.08 });
+  // 손 점 21개: 손목(0), 손가락 뿌리(5,9,13,17), 나머지는 손가락
+  const hand = Array.from({ length: 21 }, (_, i) => ({ x: 300 + (i % 5) * 12, y: 300 - Math.floor(i / 5) * 25 }));
+  const size = 2 * Math.hypot(hand[9].x - hand[0].x, hand[9].y - hand[0].y);
+  for (let i = 0; i < 10; i++) f.filter(hand, size, i * 33.333);
+  // 한 프레임에 손 전체 40px 이동 + 검지 끝(8번) 20px 접힘
+  const moved = hand.map((q, i) => ({ x: q.x + 40, y: q.y + (i === 8 ? 20 : 0) }));
+  const out = f.filter(moved, size, 10 * 33.333);
+  assert.ok(Math.hypot(out[0].x - moved[0].x, out[0].y - moved[0].y) < 1, '손목');
+  assert.ok(Math.hypot(out[8].x - moved[8].x, out[8].y - moved[8].y) < 2, `검지 끝 ${out[8].x - moved[8].x},${out[8].y - moved[8].y}`);
 });

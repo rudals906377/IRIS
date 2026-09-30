@@ -31,3 +31,5 @@ node --experimental-strip-types ../tools/harness/jitter/talk.ts /tmp/jit 12     
 ```
 
 2026-09-30 결과(잡음 0.5/0.4px): 이전 점별 One Euro → 앱의 2단 필터 — 정지 떨림 0.18 → 0.06px/프레임, 빠른 흔들기 오차 16.7 → 4.2px, 급정지 후 2.6 → 1.6px, 말할 때 입술 오차 3.0 → 1.2px.
+
+손(네일)도 같은 방식: MediaPipe 예시 사진(`storage.googleapis.com/mediapipe-tasks/hand_landmarker/woman_hands.jpg`, 시험 전용)으로 합성 영상을 만들고 손 점을 기록해(`?nail=0`으로 손 추적을 켠 뒤 `r.hands.landmarks`) `jitter/hands.ts`로 비교한다. 결과(잡음 0.6/0.6px): 이전 점별 One Euro → 앱 묶음 필터 — 빠른 흔들기 오차 11.4 → 2.5px, 정지 떨림 0.30 → 0.13px, 급정지 후 1.8 → 1.2px.

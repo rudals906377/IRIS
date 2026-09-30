@@ -116,3 +116,99 @@ export class AdaptiveFilter2 {
     this.lastT = -1;
   }
 }
+
+export interface RigidShapeParams {
+  /** 자세(닮음 변환)를 잴 때 쓰는, 모양이 잘 안 변하는 점 번호 */
+  rigid: number[];
+  /** 기준값은 모두 size(얼굴 폭·손 크기 px)에 곱하는 비율 */
+  poseD0: number;
+  poseD1: number;
+  poseAMin: number;
+  shapeD0: number;
+  shapeD1: number;
+  shapeAMin: number;
+}
+
+/**
+ * 2단 점 묶음 필터(Procrustes 분해).
+ *  ① 전체 움직임(이동·회전·크기)을 rigid 점으로 재어 변위 적응 필터로 거르고,
+ *  ② 그 움직임을 되돌린 좌표에서 점마다(표정·손가락 움직임·잔떨림) 변위 적응 필터로 거른 뒤 다시 합친다.
+ * 점마다 따로 거르면 빠르게 움직일 때 크게 늦고 점마다 늦는 정도가 달라 모양이 일그러진다.
+ */
+export class RigidShapeFilter {
+  private readonly params: RigidShapeParams;
+  private readonly pose = [new AdaptiveFilter2(0, 1, 1), new AdaptiveFilter2(0, 1, 1)];
+  private shape: AdaptiveFilter2[] = [];
+  private ref: { x: number; y: number }[] | null = null;
+  private refScale = 1;
+
+  constructor(params: RigidShapeParams) {
+    this.params = params;
+  }
+
+  /** raw: 픽셀 좌표, size: 기준 크기(px) */
+  filter(raw: { x: number; y: number }[], size: number, tMs: number): { x: number; y: number }[] {
+    const P = this.params;
+    const rigid = P.rigid;
+    let cx = 0;
+    let cy = 0;
+    for (const j of rigid) {
+      cx += raw[j].x / rigid.length;
+      cy += raw[j].y / rigid.length;
+    }
+    if (!this.ref || this.shape.length !== raw.length) {
+      const ref = raw.map((q) => ({ x: q.x - cx, y: q.y - cy }));
+      this.ref = ref;
+      this.refScale = Math.sqrt(rigid.reduce((a, j) => a + ref[j].x ** 2 + ref[j].y ** 2, 0) / rigid.length) || 1;
+      this.shape = raw.map(() => new AdaptiveFilter2(0, 1, 1));
+      for (const f of this.pose) f.reset();
+    }
+    // ① 기준 모양 → 현재의 닮음 변환(회전 th, 크기 s)
+    let sxx = 0;
+    let sxy = 0;
+    let ss = 0;
+    for (const j of rigid) {
+      const r = this.ref[j];
+      const x = raw[j].x - cx;
+      const y = raw[j].y - cy;
+      sxx += r.x * x + r.y * y;
+      sxy += r.x * y - r.y * x;
+      ss += r.x * r.x + r.y * r.y;
+    }
+    const th = Math.atan2(sxy, sxx);
+    const s = Math.hypot(sxx, sxy) / ss || 1;
+    // 이동은 px, 회전·크기는 기준 크기를 곱해 px로 환산해 같은 기준으로 거른다
+    const k = this.refScale;
+    for (const f of this.pose) {
+      f.d0 = P.poseD0 * size;
+      f.d1 = P.poseD1 * size;
+      f.aMin = P.poseAMin;
+    }
+    const pc = this.pose[0].filter(cx, cy, tMs);
+    const pr = this.pose[1].filter(s * k, th * k, tMs);
+    const fs = pr.x / k;
+    const fth = pr.y / k;
+    // ② 움직임을 되돌린 좌표(기준 크기 px)에서 점마다
+    const c = Math.cos(th);
+    const sn = Math.sin(th);
+    const fc = Math.cos(fth);
+    const fsn = Math.sin(fth);
+    const refSize = size / s;
+    return raw.map((q, j) => {
+      const f = this.shape[j];
+      f.d0 = P.shapeD0 * refSize;
+      f.d1 = P.shapeD1 * refSize;
+      f.aMin = P.shapeAMin;
+      const u = q.x - cx;
+      const v = q.y - cy;
+      const l = f.filter((u * c + v * sn) / s, (-u * sn + v * c) / s, tMs);
+      return { x: pc.x + fs * (l.x * fc - l.y * fsn), y: pc.y + fs * (l.x * fsn + l.y * fc) };
+    });
+  }
+
+  reset(): void {
+    this.ref = null;
+    this.shape = [];
+    for (const f of this.pose) f.reset();
+  }
+}

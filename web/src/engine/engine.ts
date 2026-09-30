@@ -9,7 +9,7 @@ import { NailRenderer, type NailLook } from '../beauty/nail.ts';
 import { nailQuads, type HandPoints } from '../beauty/nail-place.ts';
 import { TattooRenderer } from '../beauty/tattoo.ts';
 import { FACE_FOR_POSE, measureLimbWidth, placeAxis, tattooMesh, type PosePoints, type TattooPlace } from '../beauty/tattoo-place.ts';
-import { PointFilter } from './filters.ts';
+import { PointFilter, RigidShapeFilter, type RigidShapeParams } from './filters.ts';
 import { FaceTracker, type FaceFrame } from './face.ts';
 import { LoopbackTest } from './loopback.ts';
 import { Metrics } from './metrics.ts';
@@ -17,6 +17,17 @@ import { Renderer, type FrameTextures } from './renderer.ts';
 import { VideoSource, type FrameInfo } from './source.ts';
 import { Tracker, type TrackResult } from './tracker.ts';
 
+
+/** 손 점 떨림 필터: 손바닥(손목·손가락 뿌리)을 기준 강체로, 손가락 움직임은 얼굴 안 모양처럼 따로 */
+export const HAND_FILTER: RigidShapeParams = {
+  rigid: [0, 1, 5, 9, 13, 17],
+  poseD0: 0.008,
+  poseD1: 0.035,
+  poseAMin: 0.06,
+  shapeD0: 0.01,
+  shapeD1: 0.035,
+  shapeAMin: 0.08,
+};
 export interface EngineSettings {
   /** 분할(머리카락·피부) 사용: 손이 얼굴을 가릴 때 효과를 숨기는 데 쓴다 */
   useSeg: boolean;
@@ -71,7 +82,7 @@ export class BeautyEngine {
   private readonly tattooFx: TattooRenderer;
   private readonly nailFx: NailRenderer;
   /** 손 종류('Left'/'Right')별 21점 필터 */
-  private readonly handFilters = new Map<string, PointFilter[]>();
+  private handTracks: { filter: RigidShapeFilter; c: { x: number; y: number } }[] = [];
   private readonly poseFilters = new Map<number, PointFilter>();
   private poseSeen = -1;
   private limbWidth: { place: TattooPlace; w: number } | null = null;
@@ -218,27 +229,39 @@ export class BeautyEngine {
     return this.lastPose;
   }
 
-  /** 손 점을 픽셀 좌표로 바꾸고 손 종류별로 떨림을 줄인다. */
+  /**
+   * 손 점을 픽셀 좌표로 바꾸고 떨림을 줄인다.
+   * 필터는 '왼손/오른손' 판정이 아니라 위치로 짝짓는다(판정이 프레임마다 뒤바뀌면 다른 손의 필터를 쓰게 되므로).
+   */
   private updateHands(track: TrackResult | null, t: number, w: number, h: number): HandPoints[] {
     const r = track?.hands;
     if (!r) return this.lastHands;
     const out: HandPoints[] = [];
-    const keys: string[] = [];
+    const prev = this.handTracks;
+    const next: typeof prev = [];
     r.landmarks.forEach((lm, i) => {
       const handed = r.handedness[i]?.[0]?.categoryName ?? 'Right';
-      // 두 손이 같은 종류로 판정될 수 있으므로 순번을 붙여 필터를 따로 둔다
-      let key = handed;
-      for (let n = 2; keys.includes(key); n++) key = `${handed}${n}`;
-      keys.push(key);
-      let fs = this.handFilters.get(key);
-      if (!fs) {
-        fs = lm.map(() => new PointFilter({ minCutoff: 1.5, beta: 0.03, dCutoff: 1.0 }));
-        this.handFilters.set(key, fs);
-      }
-      out.push({ p: lm.map((q, k) => fs![k].filter(q.x * w, q.y * h, t)), z: lm.map((q) => q.z), handed });
+      const raw = lm.map((q) => ({ x: q.x * w, y: q.y * h }));
+      // 손 크기: 손목 → 가운데 손가락 뿌리 거리의 2배(얼굴 폭과 비슷한 크기)
+      const size = 2 * Math.hypot(raw[9].x - raw[0].x, raw[9].y - raw[0].y) || 1;
+      const c = [0, 5, 9, 13, 17].reduce((a, j) => ({ x: a.x + raw[j].x / 5, y: a.y + raw[j].y / 5 }), { x: 0, y: 0 });
+      // 앞 프레임에서 가장 가까운(손 크기 안) 손의 필터를 이어 쓴다
+      let best = -1;
+      let bestD = size;
+      prev.forEach((pt, k) => {
+        const d = Math.hypot(pt.c.x - c.x, pt.c.y - c.y);
+        if (d < bestD && !next.includes(pt)) {
+          best = k;
+          bestD = d;
+        }
+      });
+      const tr = best >= 0 ? prev[best] : { filter: new RigidShapeFilter(HAND_FILTER), c };
+      tr.c = c;
+      next.push(tr);
+      out.push({ p: tr.filter.filter(raw, size, t), z: lm.map((q) => q.z), handed });
     });
-    // 사라진 손의 필터는 비워서 다시 나타날 때 옛 위치에서 끌려오지 않게
-    for (const key of [...this.handFilters.keys()]) if (!keys.includes(key)) this.handFilters.delete(key);
+    // 사라진 손의 필터는 버려서 다시 나타날 때 옛 위치에서 끌려오지 않게
+    this.handTracks = next;
     this.lastHands = out;
     return out;
   }
