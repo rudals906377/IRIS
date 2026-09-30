@@ -74,3 +74,45 @@ export class PointFilter {
     this.fy.reset();
   }
 }
+
+/**
+ * 변위 적응 필터(2차원). 걸러 둔 값과의 차이가 d0 이하(잡음 수준)면 aMin으로 강하게 누르고,
+ * d1 이상이면 바로 따라간다. 속도(미분)를 추정하지 않으므로 잡음에 흔들리지 않고, 큰 움직임엔 지연이 거의 없다.
+ * aMin은 30fps 한 프레임 기준이며 프레임 간격에 맞춰 환산한다.
+ */
+export class AdaptiveFilter2 {
+  private x = 0;
+  private y = 0;
+  private lastT = -1;
+  d0: number;
+  d1: number;
+  aMin: number;
+
+  constructor(d0: number, d1: number, aMin: number) {
+    this.d0 = d0;
+    this.d1 = d1;
+    this.aMin = aMin;
+  }
+
+  filter(x: number, y: number, tMs: number): { x: number; y: number } {
+    if (this.lastT < 0) {
+      this.x = x;
+      this.y = y;
+      this.lastT = tMs;
+      return { x, y };
+    }
+    if (tMs <= this.lastT) return { x: this.x, y: this.y };
+    const dt = Math.min(200, tMs - this.lastT);
+    this.lastT = tMs;
+    const e = Math.hypot(x - this.x, y - this.y);
+    const a1 = Math.min(1, Math.max(this.aMin, (e - this.d0) / (this.d1 - this.d0)));
+    const a = 1 - Math.pow(1 - a1, dt / 33.333);
+    this.x += a * (x - this.x);
+    this.y += a * (y - this.y);
+    return { x: this.x, y: this.y };
+  }
+
+  reset(): void {
+    this.lastT = -1;
+  }
+}

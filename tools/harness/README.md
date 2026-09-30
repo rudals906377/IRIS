@@ -18,3 +18,16 @@ node tools/harness/freeze.mjs 'src=testdata/female.webm&look=daily&delegate=CPU'
 디버그 설정(`settings`): `debugLandmarks` 얼굴 점 / `debugSeg` 분할(빨강 머리카락, 초록 몸 피부, 파랑 얼굴 피부).
 
 클라우드 환경의 헤드리스 Chromium은 GPU가 없어 CPU·소프트웨어 렌더링으로 느리다(초당 1프레임 안팎). 속도는 반드시 실제 기기(맥북 브라우저)에서 앱의 **측정** 표시로 확인한다.
+
+## 얼굴 점 떨림·지연 측정(jitter/)
+
+정답을 아는 합성 영상(얼굴 사진을 알려진 이동·회전·크기로 움직임)으로 떨림 필터를 비교한다. 원본 점에 웹캠과 비슷한 잡음(얼굴 전체 + 점별)을 섞어 같은 조건에서 잰다.
+
+```bash
+python3 tools/harness/jitter/make_motion.py web/public/testdata/face/01992_00.png /tmp/jit && cp /tmp/jit/motion.webm web/dist/testdata/
+node tools/harness/jitter/record.mjs /tmp/jit                                   # 프레임별 원본 얼굴 점
+cd web && node --experimental-strip-types ../tools/harness/jitter/bench.ts /tmp/jit 0.5 0.4   # 머리 움직임
+node --experimental-strip-types ../tools/harness/jitter/talk.ts /tmp/jit 12                    # 말하기(입 벌림)
+```
+
+2026-09-30 결과(잡음 0.5/0.4px): 이전 점별 One Euro → 앱의 2단 필터 — 정지 떨림 0.18 → 0.06px/프레임, 빠른 흔들기 오차 16.7 → 4.2px, 급정지 후 2.6 → 1.6px, 말할 때 입술 오차 3.0 → 1.2px.

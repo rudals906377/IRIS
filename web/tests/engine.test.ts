@@ -2,7 +2,8 @@
 // 측정·필터 로직 단위 테스트(브라우저 없이 Node에서 실행: npm test)
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { OneEuro } from '../src/engine/filters.ts';
+import { AdaptiveFilter2, OneEuro } from '../src/engine/filters.ts';
+import { FaceTracker } from '../src/engine/face.ts';
 import { DEFAULT_LOOPBACK_CONFIG, LoopbackTest } from '../src/engine/loopback.ts';
 import { Rolling, quantileSorted, summarize } from '../src/engine/stats.ts';
 
@@ -74,3 +75,41 @@ test('거울 루프백: 카메라가 화면을 못 보면 실패로 끝남', () 
   assert.equal(lb.phase, 'failed');
 });
 
+
+test('변위 적응 필터: 잡음 수준 흔들림은 누르고, 큰 이동은 바로 따라감', () => {
+  const f = new AdaptiveFilter2(1, 5, 0.05);
+  f.filter(0, 0, 0);
+  let maxJ = 0;
+  for (let i = 1; i <= 30; i++) {
+    const q = f.filter((i % 2 ? 0.8 : -0.8), 0, i * 33.333);
+    maxJ = Math.max(maxJ, Math.abs(q.x));
+  }
+  assert.ok(maxJ < 0.1, `잡음 ${maxJ}`);
+  const q = f.filter(40, 0, 31 * 33.333);
+  assert.ok(q.x > 39, `큰 이동 ${q.x}`);
+});
+
+test('얼굴 점 필터: 머리 전체가 빠르게 움직이면 지연 없이, 가만히 있으면 떨림을 줄인다', () => {
+  // 가짜 얼굴 점: 폭 200px, 점 478개
+  const base = Array.from({ length: 478 }, (_, i) => ({ x: 320 + 90 * Math.cos(i * 0.37), y: 240 + 110 * Math.sin(i * 0.61) }));
+  base[234] = { x: 220, y: 240 };
+  base[454] = { x: 420, y: 240 };
+  const ft = new FaceTracker();
+  const norm = (pts: { x: number; y: number }[]) => pts.map((q) => ({ x: q.x / 640, y: q.y / 480 }));
+  let seed = 3;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5) * 1.2;
+  let jit = 0;
+  let prev: { x: number; y: number }[] | null = null;
+  for (let i = 0; i < 40; i++) {
+    const out = ft.update(norm(base.map((q) => ({ x: q.x + rnd(), y: q.y + rnd() }))), i * 33.333, 640, 480)!;
+    if (prev && i > 10) jit += out.p.reduce((a, q, j) => a + Math.hypot(q.x - prev![j].x, q.y - prev![j].y), 0) / 478;
+    prev = out.p;
+  }
+  assert.ok(jit / 29 < 0.2, `정지 떨림 ${jit / 29}`);
+  // 한 프레임에 30px 이동 + 5° 회전: 다음 프레임에 거의 그대로 따라가야 한다
+  const t = (5 * Math.PI) / 180;
+  const moved = base.map((q) => ({ x: 350 + (q.x - 320) * Math.cos(t) - (q.y - 240) * Math.sin(t), y: 240 + (q.x - 320) * Math.sin(t) + (q.y - 240) * Math.cos(t) }));
+  const out = ft.update(norm(moved), 40 * 33.333, 640, 480)!;
+  const err = out.p.reduce((a, q, j) => a + Math.hypot(q.x - moved[j].x, q.y - moved[j].y), 0) / 478;
+  assert.ok(err < 1.5, `이동 오차 ${err}`);
+});
