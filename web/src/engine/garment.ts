@@ -19,6 +19,8 @@ export interface ProductInfo {
   widthScale?: number;
   /** 깃이 목을 덮는 옷(목폴라·하이넥): 목 피부 위에도 그린다 */
   highNeck?: boolean;
+  /** 후드: 목 안쪽 부위를 이 y(상품 픽셀) 아래만 그린다 */
+  innerTopY?: number;
   credit?: string;
 }
 

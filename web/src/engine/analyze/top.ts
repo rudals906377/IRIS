@@ -22,6 +22,8 @@ export interface TopAnalysis {
   widthScale?: number;
   /** 깃이 어깨선보다 높이 올라오는 옷(목폴라·하이넥·지퍼 올린 져지): 목을 덮어 그린다 */
   highNeck?: boolean;
+  /** 후드: 목 안쪽 부위(모자)는 이 y(상품 픽셀) 아래만 그린다 */
+  innerTopY?: number;
 }
 
 interface Run {
@@ -495,7 +497,9 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number, rgba?: Uint8
   if (confidence < 0.6) warnings.push('자동 분석 신뢰도가 낮습니다. 기준점을 확인해 주세요');
 
   for (let i = 0; i < labels.length; i++) if (!mask0[i]) labels[i] = 0;
-  return { keypoints, labels, sleeve, confidence, warnings, highNeck };
+  // 후드 모자는 착용 시 뒤로 넘어가 목둘레 위 띠만 보이므로 그 위는 그리지 않는다
+  const innerTopY = hood ? neckY - neckW * 0.35 : undefined;
+  return { keypoints, labels, sleeve, confidence, warnings, highNeck, innerTopY };
   }
 }
 

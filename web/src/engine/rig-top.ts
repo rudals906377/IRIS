@@ -239,6 +239,8 @@ export class TopRig {
       let Z: number;
       let th: number;
       if (above && Math.abs(q) > 1) {
+        // 어깨 봉제선 밖(소매 뿌리 쪽으로 번진 몸판)은 조금만 넘어가게 눌러 뾰족한 날개가 생기지 않게 한다
+        q = Math.sign(q) * (1 + Math.min(0.15, (Math.abs(q) - 1) * 0.3));
         X = back ? -q : q;
         Z = (back ? -0.3 : 0.3) * B; // 앞면은 확실히 보이고 뒷면은 숨긴다
         th = back ? Math.PI - Math.sign(q) * (Math.PI / 2) : Math.sign(q) * (Math.PI / 2);

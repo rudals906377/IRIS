@@ -335,6 +335,7 @@ export async function analyzeProductImage(
     sleeve: best.a.sleeve === 'none' ? null : best.a.sleeve,
     widthScale: best.a.widthScale,
     highNeck: best.a.highNeck,
+    innerTopY: best.a.innerTopY === undefined ? undefined : best.a.innerTopY * k,
   };
   const asset: GarmentAsset = {
     info,

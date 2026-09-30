@@ -169,6 +169,8 @@ uniform vec2 uAxis;      // 몸통 축(아래 방향)
 uniform vec2 uLat;       // 몸 가로 방향
 uniform float uSw;       // 어깨 폭(px)
 uniform float uNeckCover; // 1이면 하이넥(목을 덮어도 됨)
+uniform float uInnerTopY; // 목 안쪽 부위를 그리는 상한(상품 px, 후드 모자 잘라내기). 음수면 제한 없음
+uniform vec2 uTexSize;    // 상품 이미지 크기(px)
 in vec2 vUv;
 in vec2 vAux;
 out vec4 o;
@@ -197,6 +199,7 @@ void main() {
   bool mine = abs(part - uPart) < 0.5 || (uIsTorso > 0.5 && lab.g > 0.5);
   if (uDebug > 0.5 && uDebug < 1.5) { o = vec4(part / 3.0, 0.0, 1.0 - part / 3.0, 1.0); return; }
   if (!mine || c.a < 0.004) discard;
+  if (uIsInner > 0.5 && uInnerTopY >= 0.0 && vUv.y * uTexSize.y < uInnerTopY) discard;
   if (uDebug > 1.5 && uDebug < 2.5) { o = vec4(1.0, 0.0, 0.0, 1.0); return; }
   if (uDebug > 2.5 && uDebug < 3.5) { o = vec4(occ.rgb, 1.0); return; }
   // 확률을 경계 폭만 남기고 선명하게: 0.35 이하는 0, 0.65 이상은 1
