@@ -1,7 +1,7 @@
 // 여러 (영상, 룩) 조합을 차례로 열어 메이크업 결과를 캡처한다.
-// 사용법: node batch.mjs <출력 접두어> '<[{src, look?, settings?, crop?}] JSON>' [대기ms]
+// 사용법: node batch.mjs <출력 접두어> '<[{src, look?, hair?, settings?, crop?}] JSON>' [대기ms]
 //   src: web/public 기준 동영상 경로(예: testdata/female.webm)
-//   look: 룩 이름(daily, coral, red, smoky, rose, clear)
+//   look: 룩 이름(daily, coral, red, smoky, rose, clear) / hair: 헤어 색상표 번호(0~)
 //   settings: 엔진 설정 덮어쓰기(예: {"debugLandmarks":true})
 //   crop: true면 얼굴 부분만 잘라 저장
 import { BASE, launch, query, waitReady } from './common.mjs';
@@ -13,7 +13,7 @@ const page = await browser.newPage({ viewport: { width: 900, height: 1100 } });
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 for (let i = 0; i < combos.length; i++) {
   const c = combos[i];
-  await page.goto(`${BASE}/?${query({ src: c.src, delegate: 'CPU', look: c.look })}`);
+  await page.goto(`${BASE}/?${query({ src: c.src, delegate: 'CPU', look: c.look, hair: c.hair })}`);
   try {
     await waitReady(page, 60000);
   } catch {

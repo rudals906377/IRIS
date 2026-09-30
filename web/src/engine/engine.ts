@@ -3,6 +3,7 @@
 // 영상은 이 기기 안에서만 처리되며 어디에도 전송하지 않는다.
 
 import { faceRegions, type FaceRegions } from '../beauty/face-regions.ts';
+import { HairColorRenderer, type HairLook } from '../beauty/hair.ts';
 import { MakeupRenderer, type MakeupLook } from '../beauty/makeup.ts';
 import { FaceTracker, type FaceFrame } from './face.ts';
 import { LoopbackTest } from './loopback.ts';
@@ -37,11 +38,14 @@ export class BeautyEngine {
   settings: EngineSettings = { ...DEFAULT_SETTINGS };
   /** 지금 적용 중인 메이크업 */
   look: MakeupLook = {};
+  /** 지금 적용 중인 헤어 컬러(없으면 null) */
+  hair: HairLook | null = null;
   loopback: LoopbackTest | null = null;
   lastFace: FaceFrame | null = null;
   lastRegions: FaceRegions | null = null;
   lastTrack: TrackResult | null = null;
   private readonly makeup: MakeupRenderer;
+  private readonly hairFx: HairColorRenderer;
   private readonly overlay: CanvasRenderingContext2D;
   private readonly lumaCtx: CanvasRenderingContext2D;
   private loopRaf = 0;
@@ -50,6 +54,7 @@ export class BeautyEngine {
     this.source = new VideoSource(opts.video);
     this.renderer = new Renderer(opts.canvas);
     this.makeup = new MakeupRenderer(this.renderer.gl);
+    this.hairFx = new HairColorRenderer(this.renderer.gl);
     this.tracker = new Tracker(opts.wasmBase);
     this.overlay = opts.overlay.getContext('2d')!;
     const luma = document.createElement('canvas');
@@ -103,6 +108,10 @@ export class BeautyEngine {
     const regions = face ? faceRegions(face.p) : null;
     this.lastRegions = regions;
     const effects: ((t: FrameTextures) => void)[] = [];
+    const hair = this.hair;
+    if (hair && this.settings.useSeg) {
+      effects.push((t) => this.hairFx.draw(hair, t, hairSpan(face, h)));
+    }
     if (face && regions && hasAnyMakeup(this.look)) {
       effects.push((t) => this.makeup.draw(regions, this.look, t.cam, t.seg, t, face.confidence));
     }
@@ -183,6 +192,15 @@ export class BeautyEngine {
     this.stopLoopback();
     this.source.close();
   }
+}
+
+/** 머리카락 세로 범위(uv): 뿌리 = 이마 위, 끝 = 턱 아래. 얼굴이 없으면 화면 기준 기본값 */
+function hairSpan(face: FaceFrame | null, h: number): [number, number] {
+  if (!face) return [0.1, 0.8];
+  const top = face.p[10].y;
+  const chin = face.p[152].y;
+  const fh = chin - top;
+  return [(top - fh * 0.35) / h, (chin + fh * 0.9) / h];
 }
 
 function hasAnyMakeup(look: MakeupLook): boolean {

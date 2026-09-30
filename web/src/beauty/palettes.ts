@@ -3,7 +3,7 @@
 
 import type { RGB } from './makeup.ts';
 
-export type PartName = 'lip' | 'shadow' | 'blush' | 'liner' | 'brow';
+export type PartName = 'lip' | 'shadow' | 'blush' | 'liner' | 'brow' | 'hair';
 
 export const PART_LABELS: Record<PartName, string> = {
   lip: '립',
@@ -11,11 +11,13 @@ export const PART_LABELS: Record<PartName, string> = {
   blush: '블러셔',
   liner: '아이라이너',
   brow: '눈썹',
+  hair: '헤어',
 };
 
 const c = (hex: string): RGB => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as RGB;
 
-export const PALETTES: Record<PartName, { name: string; color: RGB }[]> = {
+/** tip: 끝 색(뿌리 → 끝 그라데이션, 헤어만) */
+export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[]> = {
   lip: [
     { name: '로지 핑크', color: c('#c7545f') },
     { name: '코랄', color: c('#e0664e') },
@@ -48,6 +50,21 @@ export const PALETTES: Record<PartName, { name: string; color: RGB }[]> = {
     { name: '다크 브라운', color: c('#3a2a20') },
     { name: '브라운', color: c('#5a4030') },
     { name: '그레이', color: c('#454040') },
+  ],
+  // 헤어: 머리카락 **평균** 색 기준(각 올은 원래 명암만큼 밝거나 어둡게 바뀐다)
+  hair: [
+    { name: '초코 브라운', color: c('#4a3024') },
+    { name: '애쉬 브라운', color: c('#6b5a4e') },
+    { name: '밀크 브라운', color: c('#8a6a50') },
+    { name: '블론드', color: c('#c9a26a') },
+    { name: '애쉬 그레이', color: c('#8a8a8e') },
+    { name: '와인', color: c('#6e1e2a') },
+    { name: '체리 레드', color: c('#a0282a') },
+    { name: '핑크', color: c('#d88aa0') },
+    { name: '라벤더', color: c('#9a86b8') },
+    { name: '블루 블랙', color: c('#1c2230') },
+    { name: '옴브레 브라운', color: c('#3a2a22'), tip: c('#c9a26a') },
+    { name: '옴브레 핑크', color: c('#2a2226'), tip: c('#d88aa0') },
   ],
 };
 

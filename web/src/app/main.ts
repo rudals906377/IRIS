@@ -69,7 +69,10 @@ const chosen: Record<PartName, { color: RGB | null; amount: number }> = {
   blush: { color: null, amount: 0.35 },
   liner: { color: null, amount: 0.85 },
   brow: { color: null, amount: 0.35 },
+  hair: { color: null, amount: 0.7 },
 };
+/** 헤어 그라데이션 끝 색(옴브레) */
+let hairTip: RGB | null = null;
 let gloss = 0.3;
 let tab: PartName | 'look' = 'look';
 let currentLook: LookName | null = null;
@@ -78,17 +81,21 @@ function applyLookToEngine(): void {
   const look: MakeupLook = {};
   for (const part of Object.keys(chosen) as PartName[]) {
     const c = chosen[part];
-    if (!c.color) continue;
+    if (!c.color || part === 'hair') continue;
     if (part === 'lip') look.lip = { color: c.color, amount: c.amount, gloss };
     else look[part] = { color: c.color, amount: c.amount };
   }
   engine.look = look;
+  const h = chosen.hair;
+  engine.hair = h.color ? { color: h.color, amount: h.amount, tip: hairTip ?? undefined } : null;
 }
 
 function selectLook(name: LookName): void {
   const l = LOOKS[name];
   currentLook = name;
+  // 룩은 메이크업만 바꾼다(헤어 색은 그대로)
   for (const part of Object.keys(chosen) as PartName[]) {
+    if (part === 'hair') continue;
     const v = l.parts[part];
     chosen[part].color = v ? v.color : null;
     if (v) chosen[part].amount = v.amount;
@@ -117,7 +124,7 @@ function swatch(label: string, color: RGB | null, selected: boolean, onClick: ()
 
 function renderRail(): void {
   tabsEl.replaceChildren(
-    ...(['look', 'lip', 'shadow', 'blush', 'liner', 'brow'] as const).map((t) => {
+    ...(['look', 'lip', 'shadow', 'blush', 'liner', 'brow', 'hair'] as const).map((t) => {
       const b = document.createElement('button');
       b.className = 'tab' + (tab === t ? ' on' : '');
       b.textContent = t === 'look' ? '룩' : PART_LABELS[t];
@@ -144,13 +151,15 @@ function renderRail(): void {
   const items = [
     swatch('없음', null, !c.color, () => {
       c.color = null;
+      if (part === 'hair') hairTip = null;
       currentLook = null;
       applyLookToEngine();
       renderRail();
     }),
     ...PALETTES[part].map((p) =>
-      swatch(p.name, p.color, same(c.color, p.color), () => {
+      swatch(p.name, p.tip ?? p.color, same(c.color, p.color) && (part !== 'hair' || same(hairTip, p.tip ?? null) || (!hairTip && !p.tip)), () => {
         c.color = p.color;
+        if (part === 'hair') hairTip = p.tip ?? null;
         currentLook = null;
         applyLookToEngine();
         renderRail();
@@ -166,6 +175,7 @@ function renderRail(): void {
   input.value = c.color ? hex(c.color) : '#c0404a';
   input.addEventListener('input', () => {
     c.color = fromHex(input.value);
+    if (part === 'hair') hairTip = null;
     currentLook = null;
     applyLookToEngine();
   });
@@ -355,6 +365,17 @@ function applyParams(): void {
   applySettings();
   const look = params.get('look') as LookName | null;
   selectLook(look && look in LOOKS ? look : 'daily');
+  // ?hair=<색상표 번호 또는 이름>
+  const hp = params.get('hair');
+  if (hp) {
+    const list = PALETTES.hair;
+    const item = list[Number(hp)] ?? list.find((p) => p.name === hp);
+    if (item) {
+      chosen.hair.color = item.color;
+      hairTip = item.tip ?? null;
+      applyLookToEngine();
+    }
+  }
 }
 
 applyParams();
