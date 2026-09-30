@@ -10,6 +10,7 @@ import { Renderer, type GarmentGPU } from './renderer.ts';
 import { DEFAULT_TOP_FIT, TopRig, type TopFit } from './rig-top.ts';
 import { VideoSource, type FrameInfo } from './source.ts';
 import { Tracker, type TrackResult } from './tracker.ts';
+import { measureTorso, TorsoTracker } from './silhouette.ts';
 
 export interface EngineSettings {
   /** 셰이딩 전이 강도 0~1 */
@@ -23,6 +24,14 @@ export interface EngineSettings {
   debugLandmarks: boolean;
   /** 개발용: 0 정상, 1 라벨 색, 2 통과 픽셀, 3 가림 버퍼, 4 가림 원인, 5 소매만 */
   debugGarment: number;
+  /** 새 옷에 덮이지 않은 원래 옷(후드 모자, 긴 소매 등)을 배경·맨살로 지운다 */
+  removeOriginal: boolean;
+  /** 개발용: 지울 곳을 분홍색으로 표시 */
+  debugRemove: boolean;
+  /** 개발용: 지운 자리에 채울 색을 화면 전체에 표시 */
+  debugRemoveFill: boolean;
+  /** 개발용: 몸통 회전 각도(라디안)를 강제로 지정(null이면 추적값) */
+  forceTurn: number | null;
   fit: TopFit;
 }
 
@@ -34,6 +43,10 @@ export const DEFAULT_SETTINGS: EngineSettings = {
   debugOcc: false,
   debugLandmarks: false,
   debugGarment: 0,
+  removeOriginal: true,
+  debugRemove: false,
+  debugRemoveFill: false,
+  forceTurn: null,
   fit: { ...DEFAULT_TOP_FIT },
 };
 
@@ -47,6 +60,8 @@ export class TryOnEngine {
   readonly source: VideoSource;
   readonly tracker: Tracker;
   readonly body = new BodyTracker();
+  /** 착용자 몸통 윤곽(분할에서 측정, 시간 평활) */
+  readonly torso = new TorsoTracker();
   readonly renderer: Renderer;
   readonly metrics = new Metrics();
   settings: EngineSettings = { ...DEFAULT_SETTINGS };
@@ -95,7 +110,8 @@ export class TryOnEngine {
     this.loadingId = asset.info.id;
     this.lastAsset = asset;
     this.clearGarment();
-    this.garment = { info: asset.info, gpu: this.renderer.createGarment(asset), rig: new TopRig(asset) };
+    const rig = new TopRig(asset);
+    this.garment = { info: asset.info, gpu: this.renderer.createGarment(asset, rig.backTorso ? [rig.backTorso] : []), rig };
   }
 
   private clearGarment(): void {
@@ -147,14 +163,35 @@ export class TryOnEngine {
     const t1 = performance.now();
     const layers = [];
     let capsules: ReturnType<typeof buildArmOccluders> = [];
+    if (!body) this.torso.reset();
+    else if (track?.seg && this.settings.useSeg) this.torso.update(measureTorso(track.seg, body), body.shoulderW);
     if (body && this.garment) {
-      this.garment.rig.update(body, this.settings.fit);
+      const rigBody = this.settings.forceTurn !== null ? { ...body, turn: this.settings.forceTurn } : body;
+      this.garment.rig.update(rigBody, this.settings.fit, this.settings.useSeg ? this.torso : undefined);
       const order =
         this.settings.debugGarment === 5 ? this.garment.rig.order.filter((m) => m.partId === 2 || m.partId === 3) : this.garment.rig.order;
-      layers.push({ gpu: this.garment.gpu, order, alpha: body.confidence * frontFacing(body) });
+      layers.push({ gpu: this.garment.gpu, order, alpha: body.confidence });
       capsules = buildArmOccluders(body);
     }
     const t2 = performance.now();
+    // 합성기에 넘길 몸 정보(목 보존·원래 옷 지우기)
+    const bodyInfo =
+      body && this.garment
+        ? (() => {
+            const axis = { x: body.hipMid.x - body.shoulderMid.x, y: body.hipMid.y - body.shoulderMid.y };
+            const l = Math.hypot(axis.x, axis.y) || 1;
+            const mid = this.torso.at(0.6, body.shoulderW);
+            return {
+              sm: body.shoulderMid,
+              lat: body.u,
+              axis: { x: axis.x / l, y: axis.y / l },
+              axisLen: body.axisLen,
+              torsoHalf: (mid.left + mid.right) / 2,
+              pitAx: body.axisLen * 0.33,
+              shoulderW: body.shoulderW,
+            };
+          })()
+        : null;
     this.renderer.draw({
       layers,
       capsules,
@@ -164,6 +201,8 @@ export class TryOnEngine {
       debugSeg: this.settings.debugSeg,
       debugOcc: this.settings.debugOcc,
       debugGarment: this.settings.debugGarment === 5 ? 0 : this.settings.debugGarment,
+      removal: bodyInfo && this.settings.removeOriginal ? { ...bodyInfo, debug: this.settings.debugRemove, debugFill: this.settings.debugRemoveFill } : undefined,
+      body: bodyInfo ?? undefined,
     });
     this.drawOverlay(body, w, h);
     const t3 = performance.now();
@@ -253,19 +292,4 @@ export class TryOnEngine {
     this.stopLoopback();
     this.source.close();
   }
-}
-
-/**
- * 정면에서 많이 돌아서면(상품 사진에 없는 옆·뒷면) 옷을 서서히 흐리게 한다.
- * 깊이(z) 추정은 흔들림이 커서 쓰지 않고, 2D 어깨 폭 ÷ 몸통 길이로 판단한다(정면 ≈ 0.7).
- * 등을 보이면(왼쪽 어깨가 화면 왼쪽) 바로 사라진다.
- */
-function frontFacing(body: BodyFrame): number {
-  const sL = body.p[LM.leftShoulder];
-  const sR = body.p[LM.rightShoulder];
-  if (sL.x - sR.x < body.shoulderW * 0.1) return 0;
-  const hipsSeen = Math.min(body.vis[LM.leftHip], body.vis[LM.rightHip]) > 0.6;
-  if (!hipsSeen) return 1;
-  const r = body.shoulderW / body.axisLen;
-  return Math.min(1, Math.max(0, (r - 0.25) / 0.2));
 }

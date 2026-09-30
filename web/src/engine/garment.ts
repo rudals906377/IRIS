@@ -37,6 +37,10 @@ export interface PartMesh {
   dst: Float32Array;
   indices: Uint16Array;
   vertexCount: number;
+  /** 정점별 (음영, 보이는 정도). 매 프레임 갱신. 없으면 (1, 1). */
+  aux?: Float32Array;
+  /** 뒷면으로 그린다(원단 바탕색) */
+  back?: boolean;
 }
 
 export interface GarmentAsset {

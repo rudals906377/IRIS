@@ -210,10 +210,22 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number, rgba?: Uint8
     };
     const shoulderY = (topAt(fold.xL - chest * 0.04) + topAt(fold.xR + chest * 0.04)) / 2;
     const y = shoulderY + chest * 0.45;
+    // 어깨점: 윤곽의 바깥 위 모서리(접힌 소매가 시작되는 곳). 소매 곡면의 윗 모서리가 바깥 윤곽을 따라 내려가게 한다.
+    const corner = (side: 1 | -1): Vec2 => {
+      let best = { x: cx, y: top, v: -Infinity };
+      for (let yy = top; yy <= top + H * 0.5; yy++) {
+        const rs = runs[yy];
+        if (!rs.length) continue;
+        const xx = side === 1 ? rs[rs.length - 1].x1 : rs[0].x0;
+        const v = (xx - cx) * side - (yy - top) * 0.8;
+        if (v > best.v) best = { x: xx, y: yy, v };
+      }
+      return { x: best.x, y: best.y };
+    };
     const r = finish({ x: fold.xL, y }, { x: fold.xR, y }, [...warnings, '소매가 몸판 옆에 접혀 있어 접힘선으로 몸판을 나눴습니다'], {
       L: { x: fold.xL, y: hemY },
       R: { x: fold.xR, y: hemY },
-    });
+    }, { L: corner(1), R: corner(-1) });
     r.confidence *= 0.92;
     consider(r);
   }
@@ -244,7 +256,7 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number, rgba?: Uint8
   }
   return bestResult;
 
-  function finish(armpitL: Vec2, armpitR: Vec2, warnings: string[], hemO?: { L: Vec2; R: Vec2 }): TopAnalysis {
+  function finish(armpitL: Vec2, armpitR: Vec2, warnings: string[], hemO?: { L: Vec2; R: Vec2 }, shoulderO?: { L: Vec2; R: Vec2 }): TopAnalysis {
   const hemL = hemO?.L ?? hemL0;
   const hemR = hemO?.R ?? hemR0;
   const hemHalf = (hemL.x - hemR.x) / 2;
@@ -312,8 +324,8 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number, rgba?: Uint8
     const y = Number.isFinite(ytop[x]) ? ytop[x] : neckY + (armpit.y - neckY) * 0.25;
     return { x, y };
   };
-  const shoulderL = shoulderAt(armpitL, 1);
-  const shoulderR = shoulderAt(armpitR, -1);
+  const shoulderL = shoulderO?.L ?? shoulderAt(armpitL, 1);
+  const shoulderR = shoulderO?.R ?? shoulderAt(armpitR, -1);
 
   // 부위 라벨
   const labels = new Uint8Array(w * h);
@@ -459,9 +471,10 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number, rgba?: Uint8
   const shoulderW = shoulderL.x - shoulderR.x;
   const armpitDrop = (armpitL.y + armpitR.y) / 2 - (shoulderL.y + shoulderR.y) / 2;
   const checks: [string, number, number, number][] = [
-    ['어깨/가슴', shoulderW / chest, 0.65, 1.35],
+    // 접힌 소매 사진은 어깨점이 윤곽 바깥 모서리라 넓다
+    ['어깨/가슴', shoulderW / chest, 0.65, shoulderO ? 1.8 : 1.35],
     ['밑단/가슴', (hemHalf * 2) / chest, 0.6, 1.7],
-    ['목/어깨', neckW / Math.max(1, shoulderW), 0.18, 0.75],
+    ['목/어깨', neckW / Math.max(1, shoulderW), shoulderO ? 0.06 : 0.18, 0.75],
     ['기장/가슴', (hemY - (shoulderL.y + shoulderR.y) / 2) / chest, 0.7, 2.4],
     ['진동 깊이/가슴', armpitDrop / chest, 0.18, 1.1],
   ];

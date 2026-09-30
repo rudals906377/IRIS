@@ -4,7 +4,7 @@
 
 import type { Capsule } from './occluders.ts';
 import { PART, type GarmentAsset, type PartMesh } from './garment.ts';
-import { CAMERA_FS, FULLSCREEN_VS, GARMENT_FS, GARMENT_VS, GF_MEAN_FS, GF_STATS_FS, OCC_FS, OCC_VS } from './shaders.ts';
+import { BG_UPDATE_FS, CAMERA_FS, FULLSCREEN_VS, GARMENT_FS, GARMENT_VS, GF_MEAN_FS, GF_STATS_FS, MASKED_FS, OCC_FS, OCC_VS } from './shaders.ts';
 
 type Uniforms = Record<string, WebGLUniformLocation | null>;
 
@@ -17,6 +17,7 @@ interface PartGPU {
   mesh: PartMesh;
   vao: WebGLVertexArrayObject;
   dstBuf: WebGLBuffer;
+  auxBuf: WebGLBuffer;
   count: number;
 }
 
@@ -44,6 +45,37 @@ export interface DrawOptions {
   refine?: boolean;
   /** 0 정상, 1 라벨 색, 2 통과 픽셀 빨강, 3 가림 버퍼 */
   debugGarment?: number;
+  /** 새 옷에 덮이지 않은 원래 옷 지우기(몸 정보가 있을 때만). debug이면 지울 곳을 분홍으로 표시 */
+  removal?: RemovalInfo & { debug?: boolean; debugFill?: boolean };
+  /** 몸 정보(목 보존 등에 사용). 없으면 목 보존을 하지 않는다 */
+  body?: RemovalInfo;
+}
+
+export interface RemovalInfo {
+  sm: { x: number; y: number };
+  lat: { x: number; y: number };
+  axis: { x: number; y: number };
+  axisLen: number;
+  torsoHalf: number;
+  pitAx: number;
+  shoulderW: number;
+}
+
+const SKIN_SIZE = 32;
+
+/** 원래 옷 지우기용 보조 버퍼 */
+interface RemovalBuffers {
+  maskedProg: Program;
+  bgProg: Program;
+  cov: WebGLTexture;
+  covFbo: WebGLFramebuffer;
+  bg: [WebGLTexture, WebGLTexture];
+  bgFbo: [WebGLFramebuffer, WebGLFramebuffer];
+  bgIdx: number;
+  fill: WebGLTexture;
+  fillFbo: WebGLFramebuffer;
+  skin: WebGLTexture;
+  skinFbo: WebGLFramebuffer;
 }
 
 const OCC_SCALE = 0.5;
@@ -82,6 +114,7 @@ export class Renderer {
   private occData = new Float32Array(0);
   private hasSeg = false;
   private readonly gf: GuidedFilter | null;
+  private readonly rm: RemovalBuffers;
 
   constructor(canvas: HTMLCanvasElement, lowLatency = true) {
     const gl = canvas.getContext('webgl2', {
@@ -97,10 +130,13 @@ export class Renderer {
     });
     if (!gl) throw new Error('이 브라우저는 WebGL2를 지원하지 않습니다.');
     this.gl = gl;
-    this.camProg = this.program(FULLSCREEN_VS, CAMERA_FS, ['uCam', 'uSeg', 'uOcc', 'uGF', 'uUseGF', 'uDebugSeg', 'uDebugOcc']);
+    this.camProg = this.program(FULLSCREEN_VS, CAMERA_FS, [
+      'uCam', 'uSeg', 'uOcc', 'uGF', 'uUseGF', 'uDebugSeg', 'uDebugOcc',
+      'uRemove', 'uCov', 'uBg', 'uFill', 'uSkin', 'uSize', 'uSm', 'uLat', 'uAxis', 'uAxisLen', 'uTorsoHalf', 'uPitAx', 'uSw',
+    ]);
     this.occProg = this.program(OCC_VS, OCC_FS, ['uSize', 'uFeather']);
     this.garmentProg = this.program(GARMENT_VS, GARMENT_FS, [
-      'uSize', 'uTexSize', 'uTex', 'uLabel', 'uCam', 'uSeg', 'uOcc', 'uPart', 'uIsTorso', 'uIsInner', 'uAlpha', 'uShade', 'uUseSeg', 'uDebug', 'uGF', 'uUseGF',
+      'uSize', 'uTexSize', 'uTex', 'uLabel', 'uCam', 'uSeg', 'uOcc', 'uPart', 'uIsTorso', 'uIsInner', 'uAlpha', 'uShade', 'uUseSeg', 'uDebug', 'uGF', 'uUseGF', 'uIsBack', 'uCovOnly', 'uSm', 'uAxis', 'uLat', 'uSw',
     ]);
     this.camTex = this.texture(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
     this.segTex = this.texture(gl.LINEAR, gl.LINEAR);
@@ -113,6 +149,81 @@ export class Renderer {
     this.occBuf = gl.createBuffer()!;
     this.setupOccVao();
     this.gf = this.createGuidedFilter();
+    this.rm = this.createRemoval();
+  }
+
+  private createRemoval(): RemovalBuffers {
+    const gl = this.gl;
+    const fbo = (t: WebGLTexture): WebGLFramebuffer => {
+      const f = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return f;
+    };
+    const skin = this.texture(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
+    gl.bindTexture(gl.TEXTURE_2D, skin);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, SKIN_SIZE, SKIN_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    const cov = this.texture(gl.LINEAR, gl.LINEAR);
+    const bg0 = this.texture(gl.LINEAR, gl.LINEAR);
+    const bg1 = this.texture(gl.LINEAR, gl.LINEAR);
+    const fill = this.texture(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
+    for (const t of [cov, bg0, bg1, fill]) {
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    return {
+      maskedProg: this.program(FULLSCREEN_VS, MASKED_FS, ['uCam', 'uSeg', 'uPick', 'uInvert']),
+      bgProg: this.program(FULLSCREEN_VS, BG_UPDATE_FS, ['uCam', 'uSeg', 'uPrev', 'uRate']),
+      cov,
+      covFbo: fbo(cov),
+      bg: [bg0, bg1],
+      bgFbo: [fbo(bg0), fbo(bg1)],
+      bgIdx: 0,
+      fill,
+      fillFbo: fbo(fill),
+      skin,
+      skinFbo: fbo(skin),
+    };
+  }
+
+  /** 배경 기억·주변 배경·피부 평균색 갱신 */
+  private updateRemovalBuffers(): void {
+    const gl = this.gl;
+    const r = this.rm;
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(this.emptyVao);
+    // 배경 기억(핑퐁)
+    const src = r.bgIdx;
+    const dst = 1 - src;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, r.bgFbo[dst]);
+    gl.viewport(0, 0, this.occW, this.occH);
+    gl.useProgram(r.bgProg.prog);
+    this.bindTex(0, this.camTex, r.bgProg.u.uCam);
+    this.bindTex(1, this.segTex, r.bgProg.u.uSeg);
+    this.bindTex(2, r.bg[src], r.bgProg.u.uPrev);
+    gl.uniform1f(r.bgProg.u.uRate, 0.1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    r.bgIdx = dst;
+    // 사람 뺀 배경(주변 배경으로 메우기)
+    gl.useProgram(r.maskedProg.prog);
+    this.bindTex(0, this.camTex, r.maskedProg.u.uCam);
+    this.bindTex(1, this.segTex, r.maskedProg.u.uSeg);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, r.fillFbo);
+    gl.uniform4f(r.maskedProg.u.uPick, 0, 0, 0, 1);
+    gl.uniform1f(r.maskedProg.u.uInvert, 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindTexture(gl.TEXTURE_2D, r.fill);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    // 몸 피부(팔·손) 평균색
+    gl.bindFramebuffer(gl.FRAMEBUFFER, r.skinFbo);
+    gl.viewport(0, 0, SKIN_SIZE, SKIN_SIZE);
+    gl.uniform4f(r.maskedProg.u.uPick, 0, 1, 0, 0);
+    gl.uniform1f(r.maskedProg.u.uInvert, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindTexture(gl.TEXTURE_2D, r.skin);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   /** 부동소수점 렌더 타깃이 없으면(일부 구형 기기) 정밀화를 끈다. */
@@ -155,6 +266,16 @@ export class Renderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.occW, this.occH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.occFbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.occTex, 0);
+    if (this.rm) {
+      for (const t of [this.rm.cov, this.rm.bg[0], this.rm.bg[1], this.rm.fill]) {
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.occW, this.occH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      }
+      for (const [t, f] of [[this.rm.cov, this.rm.covFbo], [this.rm.bg[0], this.rm.bgFbo[0]], [this.rm.bg[1], this.rm.bgFbo[1]], [this.rm.fill, this.rm.fillFbo]] as const) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+      }
+    }
     if (this.gf) {
       const g = this.gf;
       g.w = Math.max(1, Math.ceil(width / GF_DOWN));
@@ -216,7 +337,7 @@ export class Renderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, flags);
   }
 
-  createGarment(asset: GarmentAsset): GarmentGPU {
+  createGarment(asset: GarmentAsset, extra: PartMesh[] = []): GarmentGPU {
     const gl = this.gl;
     const tex = this.texture(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
@@ -256,7 +377,9 @@ export class Renderer {
     const prog = this.garmentProg.prog;
     const locSrc = gl.getAttribLocation(prog, 'aSrc');
     const locDst = gl.getAttribLocation(prog, 'aDst');
-    for (const mesh of asset.meshes) {
+    const locAux = gl.getAttribLocation(prog, 'aAux');
+    for (const mesh of [...asset.meshes, ...extra]) {
+      mesh.aux ??= new Float32Array(mesh.vertexCount * 2).fill(1);
       const vao = gl.createVertexArray()!;
       gl.bindVertexArray(vao);
       const srcBuf = gl.createBuffer()!;
@@ -269,11 +392,16 @@ export class Renderer {
       gl.bufferData(gl.ARRAY_BUFFER, mesh.dst.byteLength, gl.DYNAMIC_DRAW);
       gl.enableVertexAttribArray(locDst);
       gl.vertexAttribPointer(locDst, 2, gl.FLOAT, false, 0, 0);
+      const auxBuf = gl.createBuffer()!;
+      gl.bindBuffer(gl.ARRAY_BUFFER, auxBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, mesh.aux.byteLength, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(locAux);
+      gl.vertexAttribPointer(locAux, 2, gl.FLOAT, false, 0, 0);
       const ib = gl.createBuffer()!;
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      parts.set(mesh, { mesh, vao, dstBuf, count: mesh.indices.length });
+      parts.set(mesh, { mesh, vao, dstBuf, auxBuf, count: mesh.indices.length });
     }
     return { asset, tex, label, parts };
   }
@@ -285,6 +413,7 @@ export class Renderer {
     for (const p of g.parts.values()) {
       gl.deleteVertexArray(p.vao);
       gl.deleteBuffer(p.dstBuf);
+      gl.deleteBuffer(p.auxBuf);
     }
   }
 
@@ -300,32 +429,76 @@ export class Renderer {
     const useGF = this.gf !== null && (opts.refine ?? true) && opts.useSeg && this.hasSeg;
     if (useGF) this.runGuidedFilter();
 
+    // 원래 옷 지우기 준비: 배경 기억·피부색, 새 옷이 덮는 영역
+    const removal = opts.removal && this.hasSeg && opts.useSeg && opts.layers.length > 0 ? opts.removal : null;
+    if (removal) {
+      this.updateRemovalBuffers();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.rm.covFbo);
+      gl.viewport(0, 0, this.occW, this.occH);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      this.drawGarments(opts, useGF, true);
+    }
+
     // ① 카메라
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, W, H);
     gl.disable(gl.BLEND);
-    gl.useProgram(this.camProg.prog);
-    this.bindTex(0, this.camTex, this.camProg.u.uCam);
-    this.bindTex(1, this.segTex, this.camProg.u.uSeg);
-    this.bindTex(2, this.occTex, this.camProg.u.uOcc);
-    gl.uniform1f(this.camProg.u.uDebugSeg, opts.debugSeg && this.hasSeg ? 1 : 0);
-    gl.uniform1f(this.camProg.u.uDebugOcc, opts.debugOcc ? 1 : 0);
-    gl.uniform1f(this.camProg.u.uUseGF, useGF ? 1 : 0);
-    if (this.gf) this.bindTex(5, this.gf.mean, this.camProg.u.uGF);
+    const cp = this.camProg;
+    gl.useProgram(cp.prog);
+    this.bindTex(0, this.camTex, cp.u.uCam);
+    this.bindTex(1, this.segTex, cp.u.uSeg);
+    this.bindTex(2, this.occTex, cp.u.uOcc);
+    gl.uniform1f(cp.u.uDebugSeg, opts.debugSeg && this.hasSeg ? 1 : 0);
+    gl.uniform1f(cp.u.uDebugOcc, opts.debugOcc ? 1 : 0);
+    gl.uniform1f(cp.u.uUseGF, useGF ? 1 : 0);
+    if (this.gf) this.bindTex(5, this.gf.mean, cp.u.uGF);
+    gl.uniform1f(cp.u.uRemove, removal ? (removal.debugFill ? 3 : removal.debug ? 2 : 1) : 0);
+    if (removal) {
+      this.bindTex(6, this.rm.cov, cp.u.uCov);
+      this.bindTex(7, this.rm.bg[this.rm.bgIdx], cp.u.uBg);
+      this.bindTex(8, this.rm.fill, cp.u.uFill);
+      this.bindTex(9, this.rm.skin, cp.u.uSkin);
+      gl.uniform2f(cp.u.uSize, W, H);
+      gl.uniform2f(cp.u.uSm, removal.sm.x, removal.sm.y);
+      gl.uniform2f(cp.u.uLat, removal.lat.x, removal.lat.y);
+      gl.uniform2f(cp.u.uAxis, removal.axis.x, removal.axis.y);
+      gl.uniform1f(cp.u.uAxisLen, removal.axisLen);
+      gl.uniform1f(cp.u.uTorsoHalf, removal.torsoHalf);
+      gl.uniform1f(cp.u.uPitAx, removal.pitAx);
+      gl.uniform1f(cp.u.uSw, removal.shoulderW);
+    }
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     // ③ 옷
     if (opts.layers.length === 0) return;
+    this.drawGarments(opts, useGF, false);
+  }
+
+  /** 옷 부위들을 그린다. covOnly이면 덮는 정도만(원래 옷 지우기용, 이미 바인딩된 프레임버퍼에). */
+  private drawGarments(opts: DrawOptions, useGF: boolean, covOnly: boolean): void {
+    const gl = this.gl;
     gl.enable(gl.BLEND);
-    gl.blendEquation(gl.FUNC_ADD);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    if (covOnly) {
+      gl.blendEquation(gl.MAX);
+      gl.blendFunc(gl.ONE, gl.ONE);
+    } else {
+      gl.blendEquation(gl.FUNC_ADD);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    }
     const p = this.garmentProg;
     gl.useProgram(p.prog);
-    gl.uniform2f(p.u.uSize, W, H);
+    gl.uniform2f(p.u.uSize, this.width, this.height);
     gl.uniform1f(p.u.uShade, opts.shade);
     gl.uniform1f(p.u.uUseSeg, opts.useSeg && this.hasSeg ? 1 : 0);
-    gl.uniform1f(p.u.uDebug, opts.debugGarment ?? 0);
+    gl.uniform1f(p.u.uDebug, covOnly ? 0 : (opts.debugGarment ?? 0));
+    gl.uniform1f(p.u.uCovOnly, covOnly ? 1 : 0);
+    const b = opts.body;
+    gl.uniform2f(p.u.uSm, b?.sm.x ?? -1e6, b?.sm.y ?? -1e6);
+    gl.uniform2f(p.u.uAxis, b?.axis.x ?? 0, b?.axis.y ?? 1);
+    gl.uniform2f(p.u.uLat, b?.lat.x ?? 1, b?.lat.y ?? 0);
+    gl.uniform1f(p.u.uSw, b?.shoulderW ?? 1);
     this.bindTex(2, this.camTex, p.u.uCam);
     this.bindTex(3, this.segTex, p.u.uSeg);
     this.bindTex(4, this.occTex, p.u.uOcc);
@@ -343,13 +516,17 @@ export class Renderer {
         gl.uniform1f(p.u.uPart, mesh.partId);
         gl.uniform1f(p.u.uIsTorso, mesh.partId === PART.torso ? 1 : 0);
         gl.uniform1f(p.u.uIsInner, mesh.partId === PART.neckInner ? 1 : 0);
+        gl.uniform1f(p.u.uIsBack, mesh.back ? 1 : 0);
         gl.bindBuffer(gl.ARRAY_BUFFER, part.dstBuf);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh.dst);
+        gl.bindBuffer(gl.ARRAY_BUFFER, part.auxBuf);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh.aux!);
         gl.bindVertexArray(part.vao);
         gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_SHORT, 0);
       }
     }
     gl.bindVertexArray(null);
+    gl.blendEquation(gl.FUNC_ADD);
     gl.disable(gl.BLEND);
   }
 

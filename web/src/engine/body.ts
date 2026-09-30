@@ -59,8 +59,13 @@ export interface BodyFrame {
   hipMid: Vec2;
   hipU: Vec2;
   axisLen: number;
-  /** 몸통 좌우 회전 추정(라디안). 0이면 정면. */
+  /** 몸통 좌우 회전 추정(라디안, 깊이만 사용한 원시값). 0이면 정면. */
   yaw: number;
+  /**
+   * 평활한 몸통 회전(라디안). 0 정면, +는 착용자 왼쪽 어깨가 뒤로 간 방향, ±π는 등을 보인 상태.
+   * 어깨 깊이(z) 차이와 어깨 폭 ÷ 몸통 길이의 줄어듦을 함께 쓴다.
+   */
+  turn: number;
 }
 
 /** 엉덩이가 보이지 않을 때 쓰는 체형 비율(어깨 랜드마크 간 거리 대비 어깨–엉덩이 거리). */
@@ -76,6 +81,10 @@ export class BodyTracker {
   private lastSeen = -1;
   private confidence = 0;
   private lastT = -1;
+  /** 정면일 때의 어깨 폭 ÷ 몸통 길이(사람마다 다르므로 관찰하며 갱신, 처음엔 관찰값으로 시작) */
+  private frontRatio = NaN;
+  private turnS = 0;
+  private turnC = 1;
 
   constructor(params: OneEuroParams = DEFAULT_ONE_EURO) {
     for (let i = 0; i < 33; i++) {
@@ -155,6 +164,31 @@ export class BodyTracker {
     // 정면이면 0, 옆으로 돌수록 커지고, 등을 보이면 ±π에 가까워진다.
     const yaw = Math.atan2(z[LM.leftShoulder] - z[LM.rightShoulder], sL.x - sR.x);
 
+    // 평활 회전. 깊이(z) 추정은 정면에서도 ±20° 흔들리므로 방향(부호)에만 쓰고,
+    // 크기는 어깨 폭이 정면일 때보다 얼마나 줄었는지로 잰다(엉덩이가 보일 때). 등을 보이면 어깨 좌우가 뒤집힌다.
+    let turn = 0;
+    const backView = sL.x < sR.x;
+    if (hipW > 0.8) {
+      const r = shoulderW / axisLen;
+      this.frontRatio = Number.isFinite(this.frontRatio) ? Math.min(0.95, Math.max(0.55, Math.max(this.frontRatio * 0.998, r))) : r;
+      let mag = Math.acos(Math.min(1, r / this.frontRatio));
+      if (backView) mag = Math.PI - mag;
+      const dead = 0.22;
+      mag = mag > dead ? mag - dead * 0.5 : 0;
+      const sign = yaw === 0 ? 1 : Math.sign(yaw);
+      turn = sign * mag;
+    } else {
+      // 엉덩이가 안 보이면(상반신 구도) 깊이 각도만 쓸 수 있다: 작은 값은 잡음으로 보고 무시
+      const dead = 0.4;
+      const a = Math.abs(yaw);
+      turn = a > dead ? Math.sign(yaw) * Math.min(Math.PI, (a - dead) * 1.4) : 0;
+      if (backView) turn = Math.sign(yaw || 1) * Math.PI;
+    }
+    const a = dt > 0 ? Math.min(1, dt / 90) : 1;
+    this.turnS += (Math.sin(turn) - this.turnS) * a;
+    this.turnC += (Math.cos(turn) - this.turnC) * a;
+    turn = Math.atan2(this.turnS, this.turnC);
+
     const frame: BodyFrame = {
       t: tMs,
       width,
@@ -171,6 +205,7 @@ export class BodyTracker {
       hipU,
       axisLen,
       yaw,
+      turn,
     };
     this.last = frame;
     return frame;
@@ -181,5 +216,8 @@ export class BodyTracker {
     for (const f of this.zFilters) f.reset();
     this.last = null;
     this.confidence = 0;
+    this.turnS = 0;
+    this.turnC = 1;
+    this.frontRatio = NaN;
   }
 }

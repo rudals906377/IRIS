@@ -1,8 +1,10 @@
 // 상의 착용 리그: 상품 이미지 좌표 → 화면 좌표 변형.
 //
-// 몸판: 어깨선과 몸통 축(어깨 중점 → 엉덩이 중점)으로 만든 "신체 좌표계"에 얹는다.
-//       가로 배율은 어깨 폭, 세로 배율은 몸통 길이에 맞추되 상품 고유의 기장 비율은 살린다.
-//       팔을 내리면 겨드랑이 아래 옆선이 팔 중심선을 넘지 않게 오므린다(실제 옷처럼 팔 안쪽에 모임).
+// 몸판: 몸통을 타원 기둥으로 보고, 상품 사진의 앞판(옆선~옆선)을 기둥의 앞쪽 반을 감싸게 입힌다.
+//       - 매 줄의 옆선은 착용자의 실제 몸통 윤곽(분할에서 측정)에 맞춘다 → 몸에 달라붙는다.
+//       - 몸을 돌리면 기둥이 같이 돌아 먼 쪽이 압축되고 옆·뒷면이 드러난다(뒷면은 원단 바탕색).
+//       - 기둥의 곡면 방향으로 가장자리를 어둡게 해 입체감을 준다.
+//       세로 배율은 몸통 길이에 맞추되 상품 고유의 기장 비율은 살린다.
 // 소매: 상품 사진의 소매를 네 꼭짓점(어깨점·겨드랑이·끝단 바깥·끝단 안쪽)으로 된 곡면으로 보고,
 //       어깨점·겨드랑이는 몸판 진동 둘레에 그대로 붙이고(틈 없음), 윗선은 팔 바깥쪽,
 //       아랫선은 팔 안쪽을 따라가게 한다. 긴팔은 팔꿈치에서 굽는다.
@@ -10,6 +12,7 @@
 import { LM, type BodyFrame } from './body.ts';
 import { PART, type GarmentAsset, type PartMesh } from './garment.ts';
 import { add, dist, dot, lerp, mid, norm, perp, scale, smoothstep, sub, type Vec2 } from './math.ts';
+import type { TorsoTracker } from './silhouette.ts';
 
 export interface TopFit {
   /** 어깨 봉제선 폭 ÷ 어깨 랜드마크 폭. 봉제선은 관절보다 조금 바깥에 놓인다. */
@@ -28,40 +31,55 @@ export const DEFAULT_TOP_FIT: TopFit = { seamWidth: 1.08, lift: 0.06, length: 1 
  */
 const STD_LENGTH_RATIO = 1.55;
 const STD_HEM_T = 1.12;
+/** 몸통 단면 타원의 깊이 ÷ 폭(가슴 두께 대략 가로 폭의 0.65배) */
+const TORSO_DEPTH = 0.65;
+
+/** 몸통 반폭 기본값(측정이 없을 때, 어깨 관절 폭 비율) */
+function defaultHalf(t: number): number {
+  return t < 0.5 ? 0.55 - 0.16 * t : t < 0.85 ? 0.47 : 0.47 + 0.12 * Math.min(1, (t - 0.85) / 0.4);
+}
 
 interface SleeveRig {
   mesh: PartMesh;
-  shoulderKey: string;
-  armpitKey: string;
   lmShoulder: number;
   lmElbow: number;
   lmWrist: number;
   /** 착용자 왼쪽이면 +1(몸 좌표계 u 방향), 오른쪽이면 -1. */
   side: 1 | -1;
-  /** 정점별 곡면 좌표: s 뿌리(0) → 끝단(1), v 윗선(0) → 아랫선(1) */
+  /** 정점별 관(튜브) 좌표: s 뿌리(0) → 끝단(1), v 폭 안의 위치(-1 안쪽 ~ +1 바깥쪽) */
   s: Float32Array;
   v: Float32Array;
-  /** 윗선(어깨점→끝단 바깥)·아랫선(겨드랑이→끝단 안쪽) 길이(상품 픽셀) */
+  /** 소매 중심선 길이(상품 픽셀) */
+  length: number;
+  /** 바깥선(어깨점→끝단 바깥)·안쪽선(겨드랑이→끝단 안쪽) 길이(상품 픽셀) */
   topLen: number;
   bottomLen: number;
-  /** 뿌리(진동 둘레)·끝단 폭(상품 픽셀) */
-  rootWidth: number;
-  endWidth: number;
+  /** s 구간별 반폭(상품 픽셀), TUBE_BINS개 */
+  halfW: Float32Array;
 }
+
+/** 소매 관 좌표의 길이 방향 구간 수(0 ~ 1.2) */
+const TUBE_BINS = 12;
 
 export class TopRig {
   readonly asset: GarmentAsset;
   /** 그리는 순서(뒤 → 앞). update 후 갱신된다. */
   order: PartMesh[] = [];
   private readonly torso: PartMesh | undefined;
+  /** 몸판 뒷면(앞면 메쉬를 복제, 원단 바탕색으로 그림). 렌더러에 추가 메쉬로 넘긴다. */
+  readonly backTorso: PartMesh | undefined;
+  /** 상품 사진 몸판의 줄별 좌우 끝(4px 간격) */
+  private readonly rowL: Float32Array;
+  private readonly rowR: Float32Array;
+  private readonly chestHalf: number;
+  /** 어깨선 → 겨드랑이 세로 길이(상품 픽셀) */
+  private readonly armpitDy: number;
   private readonly neckInner: PartMesh | undefined;
   private readonly sleeves: SleeveRig[] = [];
   private readonly gMid: Vec2;
   private readonly gw: number;
   /** 어깨선 → 밑단 세로 길이(상품 픽셀) */
   private readonly gLen: number;
-  /** 어깨선 → 겨드랑이 세로 길이(상품 픽셀) */
-  private readonly armpitDy: number;
 
   constructor(asset: GarmentAsset) {
     this.asset = asset;
@@ -73,6 +91,52 @@ export class TopRig {
     const armpitY = kp.armpitL && kp.armpitR ? (kp.armpitL.y + kp.armpitR.y) / 2 : this.gMid.y + this.gLen * 0.28;
     this.armpitDy = Math.max(1, armpitY - this.gMid.y);
     this.torso = asset.meshes.find((m) => m.partId === PART.torso);
+    if (this.torso) {
+      this.backTorso = { ...this.torso, dst: new Float32Array(this.torso.dst.length), aux: new Float32Array(this.torso.vertexCount * 2), back: true };
+    }
+    // 몸판 줄별 좌우 끝(몸판·목 안쪽 라벨)
+    {
+      const { labels, width: w, height: h } = asset;
+      const rows = Math.ceil(h / 4);
+      const L = new Float32Array(rows).fill(NaN);
+      const R = new Float32Array(rows).fill(NaN);
+      for (let r = 0; r < rows; r++) {
+        const y = r * 4;
+        let a = -1;
+        let b = -1;
+        for (let x = 0; x < w; x++) {
+          const l = labels[y * w + x];
+          if (l !== PART.torso && l !== PART.neckInner) continue;
+          if (a < 0) a = x;
+          b = x;
+        }
+        if (a >= 0 && b - a > 4) {
+          L[r] = a;
+          R[r] = b;
+        }
+      }
+      // 빈 줄은 가까운 줄 값으로, 겨드랑이 위는 겨드랑이 줄 폭 이상으로(어깨 경사로 좁아지지 않게)
+      const pitRow = Math.round(armpitY / 4);
+      const fill = (arr: Float32Array): void => {
+        let last = NaN;
+        for (let r = 0; r < rows; r++) if (Number.isFinite(arr[r])) last = arr[r]; else arr[r] = last;
+        last = NaN;
+        for (let r = rows - 1; r >= 0; r--) if (Number.isFinite(arr[r])) last = arr[r]; else arr[r] = last;
+      };
+      fill(L);
+      fill(R);
+      const pr = Math.max(0, Math.min(rows - 1, pitRow));
+      const pl = kp.armpitR ? kp.armpitR.x : L[pr];
+      const prr = kp.armpitL ? kp.armpitL.x : R[pr];
+      // 겨드랑이 위는 몸판 라벨이 소매 쪽으로 파여 있으므로 겨드랑이 폭으로 고정
+      for (let r = 0; r <= pr; r++) {
+        L[r] = pl;
+        R[r] = prr;
+      }
+      this.rowL = L;
+      this.rowR = R;
+      this.chestHalf = Math.max(4, (prr - pl) / 2);
+    }
     this.neckInner = asset.meshes.find((m) => m.partId === PART.neckInner);
     const defs = [
       { partId: PART.sleeveL, sh: 'shoulderL', ap: 'armpitL', out: 'sleeveOuterL', inn: 'sleeveInnerL', side: 1 as const, lms: LM.leftShoulder, lme: LM.leftElbow, lmw: LM.leftWrist },
@@ -81,38 +145,17 @@ export class TopRig {
     for (const d of defs) {
       const mesh = asset.meshes.find((m) => m.partId === d.partId);
       if (!mesh || !kp[d.sh] || !kp[d.ap] || !kp[d.out] || !kp[d.inn]) continue;
-      const p00 = kp[d.sh];
-      const p10 = kp[d.out];
-      const p01 = kp[d.ap];
-      const p11 = kp[d.inn];
-      const s = new Float32Array(mesh.vertexCount);
-      const v = new Float32Array(mesh.vertexCount);
-      for (let i = 0; i < mesh.vertexCount; i++) {
-        const [si, vi] = inverseBilinear({ x: mesh.src[i * 2], y: mesh.src[i * 2 + 1] }, p00, p10, p01, p11);
-        // 소매 사각형 밖(격자 여백)의 외삽이 폭주하지 않게 제한한다.
-        s[i] = Number.isFinite(si) ? Math.min(1.6, Math.max(-0.6, si)) : 0;
-        v[i] = Number.isFinite(vi) ? Math.min(1.8, Math.max(-0.8, vi)) : 0.5;
-      }
+      const tube = buildTube(asset, d.partId, kp[d.sh], kp[d.ap], kp[d.out], kp[d.inn], mesh);
       this.sleeves.push({
-        mesh,
-        shoulderKey: d.sh,
-        armpitKey: d.ap,
-        lmShoulder: d.lms,
-        lmElbow: d.lme,
-        lmWrist: d.lmw,
-        side: d.side,
-        s,
-        v,
-        topLen: dist(p00, p10),
-        bottomLen: dist(p01, p11),
-        rootWidth: sleeveRootWidth(asset, d.partId, p00, p10, p01, p11),
-        endWidth: dist(p10, p11),
+        mesh, lmShoulder: d.lms, lmElbow: d.lme, lmWrist: d.lmw, side: d.side, ...tube,
+        topLen: dist(kp[d.sh], kp[d.out]), bottomLen: dist(kp[d.ap], kp[d.inn]),
       });
     }
   }
 
-  update(body: BodyFrame, fit: TopFit = DEFAULT_TOP_FIT): void {
-    const k = (body.shoulderW * fit.seamWidth) / this.gw;
+  update(body: BodyFrame, fit: TopFit = DEFAULT_TOP_FIT, torsoFit?: TorsoTracker): void {
+    // 크기 기준: 상품 가슴 폭(겨드랑이~겨드랑이). 보통 옷은 어깨점 폭 ≈ 가슴 폭 × 0.95이므로 기존 어깨 기준과 같은 크기가 된다.
+    const k = (body.shoulderW * fit.seamWidth) / Math.max(this.gw * 0.6, this.chestHalf * 1.9);
     // 세로 배율: 몸통 길이에 맞춰 밑단 위치를 정하되 상품의 기장 비율을 반영한다.
     const hemT = STD_HEM_T * (this.gLen / this.gw / STD_LENGTH_RATIO) * fit.length;
     const kv = (hemT * body.axisLen) / this.gLen;
@@ -121,23 +164,112 @@ export class TopRig {
     const axisDir = norm(sub(body.hipMid, sm), body.down);
     const { u, down, hipU } = body;
     const gMid = this.gMid;
+    const psi = body.turn;
+    const cosP = Math.cos(psi);
+    const sinP = Math.sin(psi);
+    // 타원 기둥(가로 반지름 1, 깊이 반지름 B)을 psi만큼 돌렸을 때 화면에 보이는 반폭
+    const B = TORSO_DEPTH;
+    const E = Math.sqrt(cosP * cosP + B * B * sinP * sinP);
+    // 가로 여유: 어깨 폭 맞춤 설정(기본 1.08)을 1로 보고 비례
+    const easeFit = fit.seamWidth / DEFAULT_TOP_FIT.seamWidth;
+    const rows = this.rowL.length;
+    const armpitYr = Math.max(1, this.armpitDy * kv - lift);
+    // 어깨점(소매 뿌리 바깥 끝): 착용자 팔 위. 상품의 어깨 봉제선이 가슴 폭보다 밖으로 나간 만큼(드롭숄더) 팔을 따라 내려간다.
+    const arms = new Map<SleeveRig, { arm: ArmPath; sign: number; cap: Vec2; off0: number; drop: number }>();
+    const capLat: Record<1 | -1, number> = { 1: NaN, [-1]: NaN };
+    /** 어깨점이 어깨선(어깨 중점 높이)보다 몸통 축 방향으로 얼마나 아래인지(어깨 경사 + 드롭숄더) */
+    const capAx: Record<1 | -1, number> = { 1: NaN, [-1]: NaN };
+    // 겨드랑이 높이의 몸판 반폭: 측정한 옷 가장자리와 팔 안쪽 가장자리 중 좁은 쪽
+    // (팔을 내리면 측정값에 지금 입은 옷의 소매까지 들어오므로 팔 안쪽에서 끊는다)
+    const measPit = torsoFit ? torsoFit.at(armpitYr / body.axisLen, body.shoulderW) : { left: defaultHalf(armpitYr / body.axisLen) * body.shoulderW, right: defaultHalf(armpitYr / body.axisLen) * body.shoulderW };
+    const pitLat: Record<1 | -1, number> = { 1: measPit.left, [-1]: measPit.right };
+    for (const sl of this.sleeves) {
+      const arm = new ArmPath(body, sl.lmShoulder, sl.lmElbow, sl.lmWrist, sl.side);
+      const sign = dot(arm.normal(0), sub(arm.at(0), sm)) >= 0 ? 1 : -1;
+      const w = body.shoulderW;
+      let off0 = sl.halfW[0] * k;
+      const am0 = torsoFit ? torsoFit.armAt(sl.side, 0.05, w) : NaN;
+      off0 = Number.isFinite(am0) ? Math.min(Math.max(off0, am0 * 1.15), am0 * 2.2) : Math.max(off0, w * 0.15);
+      const drop = Math.max(0, (this.gw / 2 - this.chestHalf * 0.95) * k);
+      // 어깨 관절점은 어깨 윗면보다 아래에 있으므로, 드롭숄더가 아닐수록 어깨점을 위로 올린다
+      const raise = Math.max(0, w * 0.06 - drop * 0.5) + lift * 0.5;
+      const cap = add(add(arm.at(drop), scale(arm.normal(drop), sign * off0 * 0.6)), scale(axisDir, -raise));
+      arms.set(sl, { arm, sign, cap, off0, drop });
+      capLat[sl.side] = Math.max(0, dot(sub(cap, sm), u) * sl.side);
+      capAx[sl.side] = dot(sub(cap, sm), axisDir);
+      const inner = add(arm.at(armpitYr), scale(arm.normal(armpitYr), -sign * off0));
+      const innerLat = dot(sub(inner, sm), u) * sl.side;
+      if (innerLat > body.shoulderW * 0.2) pitLat[sl.side] = Math.min(pitLat[sl.side], innerLat);
+    }
+    if (!Number.isFinite(capLat[1])) capLat[1] = body.shoulderW * 0.62;
+    if (!Number.isFinite(capLat[-1])) capLat[-1] = body.shoulderW * 0.62;
+    if (!Number.isFinite(capAx[1])) capAx[1] = body.shoulderW * 0.1;
+    if (!Number.isFinite(capAx[-1])) capAx[-1] = body.shoulderW * 0.1;
 
-    // 팔을 내려 팔이 몸통 옆에 있으면, 겨드랑이 아래 몸판 옆선이 팔 중심선을 넘지 않게 오므린다.
-    const armLim = [1, -1].map((side) => armLateralLimit(body, sm, axisDir, u, side as 1 | -1));
-    const armpitYr = this.armpitDy * kv - lift;
-    const mapInto = (gx: number, gy: number, out: Float32Array, o: number, constrain = false): void => {
-      let xr = (gx - gMid.x) * k;
+    const mapInto = (gx: number, gy: number, out: Float32Array, o: number, back = false, aux?: Float32Array): void => {
       // 어깨선 위(목둘레)는 가로와 같은 배율, 아래(몸통)는 몸통 길이 배율
       const dy = gy - gMid.y;
-      const yr = (dy < 0 ? dy * k : dy * kv) - lift;
-      if (constrain && yr > 0) {
-        const lim = armLim[xr >= 0 ? 0 : 1](yr);
-        const ax = Math.abs(xr);
-        if (ax > lim) {
-          const squeezed = lim + (ax - lim) * 0.2;
-          const rw = smoothstep(armpitYr * 0.3, armpitYr, yr);
-          xr = Math.sign(xr) * (ax + (squeezed - ax) * rw);
-        }
+      let yr = (dy < 0 ? dy * k : dy * kv) - lift;
+      const r = Math.max(0, Math.min(rows - 1, Math.round(gy / 4)));
+      const gl = this.rowL[r];
+      const gr = this.rowR[r];
+      const halfL = Math.max(4, gr - gMid.x);
+      const halfR = Math.max(4, gMid.x - gl);
+      // 옆선(-1~1) 기준 가로 위치. 옆선 바깥(소매 쪽으로 번진 몸판)은 조금 더 감긴다.
+      // 겨드랑이 위(목둘레·어깨 요크·후드 모자)는 가슴 폭 기준 비율로 재고, 옆선 밖(어깨 봉제선 쪽)은
+      // 감지 않고 평평하게 늘린다(어깨점이 몸통 안으로 말려 들어가 소매 뿌리가 뒤집히지 않게).
+      const above = dy < this.armpitDy;
+      // 겨드랑이 위: 상품 반폭을 어깨 봉제선 반폭(gw/2) → 가슴 반폭으로 보간해 비율을 잰다
+      const fracUp = above ? Math.max(0, Math.min(1, (dy + lift / k) / this.armpitDy)) : 1;
+      const halfAbove = this.gw / 2 + (this.chestHalf - this.gw / 2) * fracUp;
+      let q = above ? (gx - gMid.x) / halfAbove : gx >= gMid.x ? (gx - gMid.x) / halfL : (gx - gMid.x) / halfR;
+      // 상품 고유 실루엣(밑단이 퍼진 옷 등)을 일부 살린다
+      const rowHalf = above ? this.chestHalf : (halfL + halfR) / 2;
+      const ease = easeFit * Math.max(0.9, Math.min(1.35, 1 + 0.35 * (rowHalf / this.chestHalf - 1)));
+      // 어깨 경사: 겨드랑이 위 구간은 옆으로 갈수록(|q|→1) 어깨점 높이까지 내려간다(착용자 어깨 기울기 + 드롭숄더)
+      if (above) {
+        const side = q >= 0 ? 1 : -1;
+        const shoulderRowY = -lift;
+        yr += Math.min(1, Math.abs(q)) * (capAx[side] - shoulderRowY) * (1 - fracUp);
+      }
+      let X: number;
+      let Z: number;
+      let th: number;
+      if (above && Math.abs(q) > 1) {
+        X = back ? -q : q;
+        Z = (back ? -0.3 : 0.3) * B; // 앞면은 확실히 보이고 뒷면은 숨긴다
+        th = back ? Math.PI - Math.sign(q) * (Math.PI / 2) : Math.sign(q) * (Math.PI / 2);
+      } else {
+        q = Math.max(-1.3, Math.min(1.3, q));
+        th = (q * Math.PI) / 2;
+        if (back) th = Math.PI - th;
+        X = Math.sin(th);
+        Z = B * Math.cos(th);
+      }
+      const Xr = X * cosP + Z * sinP;
+      const Zr = -X * sinP + Z * cosP;
+      const sN = Xr / E;
+      const t = Math.max(0, yr) / body.axisLen;
+      const meas = torsoFit ? torsoFit.at(t, body.shoulderW) : { left: defaultHalf(t) * body.shoulderW, right: defaultHalf(t) * body.shoulderW };
+      // 겨드랑이 위(어깨 경사·진동 둘레)는 상품 비율 그대로(가슴 폭 × 배율), 아래로 갈수록 몸 윤곽에 맞춘다.
+      // 어깨 높이에서 잰 윤곽에는 어깨 근육·소매가 포함돼 몸판을 거기 맞추면 어깨가 네모나게 부푼다.
+      // 어깨점 가로 위치 → 겨드랑이 반폭 → 그 아래는 측정 폭(단, 겨드랑이에서 갑자기 넓어지지 않게)
+      const wFit = smoothstep(0, armpitYr, yr);
+      const below = Math.max(0, yr - armpitYr);
+      const widen = (m: number, p: number): number => Math.min(m, p + below * 0.25);
+      const wdt = {
+        left: yr <= armpitYr ? capLat[1] + (pitLat[1] - capLat[1]) * wFit : widen(meas.left, pitLat[1]),
+        right: yr <= armpitYr ? capLat[-1] + (pitLat[-1] - capLat[-1]) * wFit : widen(meas.right, pitLat[-1]),
+      };
+      const xr = (sN >= 0 ? sN * wdt.left : sN * wdt.right) * ease;
+      if (aux) {
+        // 곡면 법선의 카메라 쪽 성분으로 음영, 뒤로 돌아간 면은 숨김
+        const nx = Math.sin(th);
+        const nz = Math.cos(th) / B;
+        const nl = Math.hypot(nx, nz) || 1;
+        const nzr = (-nx * sinP + nz * cosP) / nl;
+        aux[o] = 0.7 + 0.3 * Math.max(0, nzr);
+        aux[o + 1] = smoothstep(-0.02, 0.1, Zr / B);
       }
       let ox: number;
       let oy: number;
@@ -159,63 +291,84 @@ export class TopRig {
       out[o] = ox + lx * xr;
       out[o + 1] = oy + ly * xr;
     };
-    const tmp = new Float32Array(2);
-    const mapPoint = (p: Vec2, constrain = false): Vec2 => {
-      mapInto(p.x, p.y, tmp, 0, constrain);
-      return { x: tmp[0], y: tmp[1] };
-    };
 
-    // 소매가 진동 둘레에 붙어 몸판 옆을 덮으므로 몸판은 오므리지 않는다(오므리면 겨드랑이 아래 틈이 생김).
-    // 팔 위치 제한(armLim)은 겨드랑이 위치를 팔 안쪽으로 당길 때만 쓴다.
     for (const m of [this.torso, this.neckInner]) {
       if (!m) continue;
-      for (let i = 0; i < m.vertexCount; i++) mapInto(m.src[i * 2], m.src[i * 2 + 1], m.dst, i * 2);
+      m.aux ??= new Float32Array(m.vertexCount * 2);
+      for (let i = 0; i < m.vertexCount; i++) mapInto(m.src[i * 2], m.src[i * 2 + 1], m.dst, i * 2, false, m.aux);
+    }
+    const bt = this.backTorso;
+    if (bt) {
+      for (let i = 0; i < bt.vertexCount; i++) mapInto(bt.src[i * 2], bt.src[i * 2 + 1], bt.dst, i * 2, true, bt.aux);
     }
 
     const sleeveOrder: { mesh: PartMesh; z: number }[] = [];
+    const tmpP = new Float32Array(2);
+    const mapPoint = (p: Vec2): Vec2 => {
+      mapInto(p.x, p.y, tmpP, 0);
+      return { x: tmpP[0], y: tmpP[1] };
+    };
     for (const sl of this.sleeves) {
-      const kp = this.asset.kp;
-      // 진동 둘레 양 끝: 몸판과 똑같이 변형해 소매 뿌리가 몸판에 틈 없이 붙게 한다.
-      const cap = mapPoint(kp[sl.shoulderKey]);
-      const pit = mapPoint(kp[sl.armpitKey], true);
-      const arm = new ArmPath(body, sl.lmShoulder, sl.lmElbow, sl.lmWrist, sl.side);
-      // 바깥쪽(몸 중심 → 어깨 쪽) 법선 부호
-      const sign = dot(arm.normal(0), sub(cap, sm)) >= 0 ? 1 : -1;
+      const { arm, sign, cap, off0, drop } = arms.get(sl)!;
+      // 겨드랑이: 몸판 옆선 위(몸판과 같은 변형이라 이음새 틈이 없다)
+      const pit = mapPoint(this.asset.kp[sl.side === 1 ? 'armpitL' : 'armpitR']);
       const w = body.shoulderW;
       const armR = (a: number): number => w * (0.15 - 0.045 * Math.min(1, Math.max(0, a / arm.length)));
+      // 바깥선은 어깨점에서, 안쪽선은 겨드랑이에서 시작해 각자 길이만큼 팔을 따라 내려간다.
+      // (상품 사진에서 소매가 옆으로 뻗어 있어도 겨드랑이 쪽이 접히며 무늬가 팔 방향으로 통째로 돌지 않는다)
       const topLen = sl.topLen * k;
-      const botLen = sl.bottomLen * k;
-      // 겨드랑이가 팔 중심선 위 어디쯤인지(팔을 내리면 어깨에서 조금 아래)
       const pitArc = Math.max(0, dot(sub(pit, arm.at(0)), arm.dir(0)));
-      const halfW = (s: number): number => ((sl.rootWidth + (sl.endWidth - sl.rootWidth) * Math.min(1, Math.max(0, s))) * k) / 2;
+      // 안쪽선 길이: 상품 값과 "밑단이 팔에 직각이 되는 길이"를 섞는다(팔을 내리면 겨드랑이 쪽이 접히며 밑단이 팔에 직각에 가깝다)
+      const perpLen = Math.max(topLen * 0.3, drop + topLen - pitArc);
+      const botLen = sl.bottomLen * k * 0.4 + perpLen * 0.6;
+      const halfAt = (s: number, a: number): number => {
+        const bin = Math.max(0, Math.min(TUBE_BINS - 1, Math.floor((Math.max(0, s) / 1.2) * TUBE_BINS)));
+        let half = sl.halfW[bin] * k;
+        // 실제 팔(원래 입은 옷 소매 포함) 두께를 쟀으면: 그보다 조금 넉넉히 덮되, 상품 사진 폭이 과하면 줄인다.
+        const am = torsoFit ? torsoFit.armAt(sl.side, Math.min(1, a / arm.length), w) : NaN;
+        return Number.isFinite(am) ? Math.min(Math.max(half, am * 1.15), am * 2.2) : Math.max(half, armR(a));
+      };
       const outerAt = (a: number, off: number): Vec2 => add(arm.at(a), scale(arm.normal(a), sign * off));
       const innerAt = (a: number, off: number): Vec2 => add(arm.at(a), scale(arm.normal(a), -sign * off));
-      const off0 = Math.max(armR(0), halfW(0.35));
       const corrTop = sub(cap, outerAt(0, off0));
       const corrBot = sub(pit, innerAt(pitArc, off0));
       const m = sl.mesh;
       for (let i = 0; i < m.vertexCount; i++) {
-        const s = sl.s[i];
+        const s = Math.max(0, sl.s[i]);
         const v = sl.v[i];
         const aTop = s * topLen;
         const aBot = pitArc + s * botLen;
-        // 소매 폭: 상품 폭(뿌리→끝단)과 팔 두께 중 큰 값. 뿌리 쪽은 진동 둘레 폭이 크므로 35% 지점 폭으로 제한.
-        const off = Math.max(armR((aTop + aBot) / 2), halfW(Math.max(s, 0.35)));
-        const fade = 1 - Math.min(1, Math.max(0, s));
+        const off = halfAt(s, (aTop + aBot) / 2);
+        const fade = 1 - smoothstep(0, 0.35, s);
         const top = add(outerAt(aTop, off), scale(corrTop, fade));
         const bot = add(innerAt(aBot, off), scale(corrBot, fade));
-        m.dst[i * 2] = top.x + (bot.x - top.x) * v;
-        m.dst[i * 2 + 1] = top.y + (bot.y - top.y) * v;
+        // v: +1 바깥선, -1 안쪽선(그 밖은 외삽)
+        const t = (1 - v) / 2;
+        m.dst[i * 2] = top.x + (bot.x - top.x) * t;
+        m.dst[i * 2 + 1] = top.y + (bot.y - top.y) * t;
       }
       // 손목이 카메라에 가까울수록 나중에(앞에) 그린다.
       sleeveOrder.push({ mesh: m, z: body.z[sl.lmWrist] + body.z[sl.lmElbow] });
     }
     sleeveOrder.sort((a, b) => b.z - a.z);
+    // 몸을 돌리면 먼 쪽 팔의 소매는 몸통 뒤로 간다. 등을 보이면 소매도 바탕색(뒷면)으로.
+    const farSide = psi > 0.45 ? 1 : psi < -0.45 ? -1 : 0;
+    const backView = Math.abs(psi) > Math.PI / 2;
+    const behind: PartMesh[] = [];
+    const front: PartMesh[] = [];
+    for (const so of sleeveOrder) {
+      const rig = this.sleeves.find((x) => x.mesh === so.mesh)!;
+      so.mesh.back = backView;
+      if (!backView && farSide !== 0 && rig.side === farSide) behind.push(so.mesh);
+      else front.push(so.mesh);
+    }
     // 소매 뿌리가 진동 둘레에 붙어 있으므로 소매를 몸판 "앞"에 그린다(팔을 내리면 소매가 몸판 옆을 덮음).
     this.order = [
+      ...(this.backTorso ? [this.backTorso] : []),
+      ...behind,
       ...(this.neckInner ? [this.neckInner] : []),
       ...(this.torso ? [this.torso] : []),
-      ...sleeveOrder.map((s) => s.mesh),
+      ...front,
     ];
   }
 }
@@ -300,62 +453,60 @@ export function armPose(body: BodyFrame, lmS: number, lmE: number, lmW: number, 
 }
 
 /**
- * 몸 좌표계(어깨 중점 기준, 가로 u·세로 몸통 축)에서 한쪽 팔 중심선의 가로 위치를 세로 위치의 함수로 돌려준다.
- * 팔이 몸 옆에 내려와 있을 때만 제한(팔 중심선 - 여유)을 주고, 팔을 들었거나 몸 앞을 가로지르면 제한하지 않는다.
+ * 소매를 관(튜브)으로 본 좌표: 뿌리(어깨점·겨드랑이 중점) → 끝단 중점을 중심축으로,
+ * 각 정점의 축 방향 위치 s(0~1)와, 그 높이의 소매 폭 안에서의 위치 v(-1 안쪽 ~ +1 바깥쪽).
+ * 소매가 뻗은 사진·늘어뜨린 사진·모델이 입은 사진 모두 같은 방식으로 다룬다(네 꼭짓점 사각형이 찌그러지지 않음).
  */
-function armLateralLimit(body: BodyFrame, sm: Vec2, axisDir: Vec2, u: Vec2, side: 1 | -1): (yr: number) => number {
-  const lms = side === 1 ? [LM.leftShoulder, LM.leftElbow, LM.leftWrist] : [LM.rightShoulder, LM.rightElbow, LM.rightWrist];
-  const { shoulder, elbow, wrist } = armPose(body, lms[0], lms[1], lms[2], side);
-  const w = body.shoulderW;
-  const toBody = (p: Vec2): { x: number; y: number } => {
-    const d = sub(p, sm);
-    return { x: dot(d, u) * side, y: dot(d, axisDir) };
-  };
-  const pts = [toBody(shoulder), toBody(elbow), toBody(wrist)];
-  return (yr: number): number => {
-    for (let i = 0; i < 2; i++) {
-      const a = pts[i];
-      const b = pts[i + 1];
-      const lo = Math.min(a.y, b.y);
-      const hi = Math.max(a.y, b.y);
-      if (yr < lo || yr > hi || hi - lo < 1e-3) continue;
-      const x = a.x + ((b.x - a.x) * (yr - a.y)) / (b.y - a.y);
-      // 팔이 자기 쪽 옆에 있을 때만(몸 앞을 가로지르면 제한 없음)
-      if (x < 0.3 * w || x > 1.2 * w) return Infinity;
-      return x - 0.05 * w;
-    }
-    return Infinity;
-  };
-}
-
-/**
- * 소매 뿌리 폭(상품 픽셀): 보통은 어깨점~겨드랑이 거리지만, 소매를 몸판 옆에 늘어뜨려 찍은 사진은
- * 그 선이 소매 길이 방향과 거의 나란해 실제 폭보다 훨씬 길다. 그래서 소매 축에 수직인 방향으로
- * 뿌리 근처(축의 10~30%) 소매 픽셀의 실제 폭을 재어, 두 값 중 작은 쪽을 쓴다.
- */
-function sleeveRootWidth(asset: GarmentAsset, partId: number, p00: Vec2, p10: Vec2, p01: Vec2, p11: Vec2): number {
-  const edge = dist(p00, p01);
-  const root = mid(p00, p01);
-  const axis = sub(mid(p10, p11), root);
-  const len = Math.hypot(axis.x, axis.y);
-  if (len < 1) return edge;
-  const a = scale(axis, 1 / len);
-  const n = perp(a);
-  let lo = Infinity;
-  let hi = -Infinity;
+function buildTube(asset: GarmentAsset, partId: number, sh: Vec2, pit: Vec2, out: Vec2, inn: Vec2, mesh: PartMesh): { s: Float32Array; v: Float32Array; length: number; halfW: Float32Array } {
+  const root = mid(sh, pit);
+  const axis = sub(mid(out, inn), root);
+  const length = Math.max(1, Math.hypot(axis.x, axis.y));
+  const a = scale(axis, 1 / length);
+  let n = perp(a);
+  if (dot(sub(sh, root), n) < 0) n = scale(n, -1); // 어깨점 쪽 = 바깥
+  const lo = new Float32Array(TUBE_BINS).fill(Infinity);
+  const hi = new Float32Array(TUBE_BINS).fill(-Infinity);
   const { labels, width: w, height: h } = asset;
-  const step = Math.max(1, Math.round(Math.min(w, h) / 256));
+  const step = Math.max(1, Math.round(Math.min(w, h) / 300));
   for (let y = 0; y < h; y += step) {
     for (let x = 0; x < w; x += step) {
       if (labels[y * w + x] !== partId) continue;
       const d = { x: x - root.x, y: y - root.y };
-      const t = dot(d, a) / len;
-      if (t < 0.1 || t > 0.3) continue;
+      const sv = dot(d, a) / length;
+      const bin = Math.floor((sv / 1.2) * TUBE_BINS);
+      if (bin < 0 || bin >= TUBE_BINS) continue;
       const u = dot(d, n);
-      if (u < lo) lo = u;
-      if (u > hi) hi = u;
+      if (u < lo[bin]) lo[bin] = u;
+      if (u > hi[bin]) hi[bin] = u;
     }
   }
-  const measured = hi - lo;
-  return Number.isFinite(measured) && measured > 2 ? Math.min(edge, measured) : edge;
+  const center = new Float32Array(TUBE_BINS).fill(NaN);
+  const halfW = new Float32Array(TUBE_BINS).fill(NaN);
+  for (let b = 0; b < TUBE_BINS; b++) {
+    if (hi[b] > lo[b]) {
+      center[b] = (hi[b] + lo[b]) / 2;
+      halfW[b] = Math.max(2, (hi[b] - lo[b]) / 2);
+    }
+  }
+  // 빈 구간은 가까운 구간 값으로
+  const fill = (arr: Float32Array, def: number): void => {
+    let last = NaN;
+    for (let b = 0; b < TUBE_BINS; b++) if (Number.isFinite(arr[b])) last = arr[b]; else arr[b] = last;
+    last = NaN;
+    for (let b = TUBE_BINS - 1; b >= 0; b--) if (Number.isFinite(arr[b])) last = arr[b]; else arr[b] = last;
+    for (let b = 0; b < TUBE_BINS; b++) if (!Number.isFinite(arr[b])) arr[b] = def;
+  };
+  fill(center, 0);
+  fill(halfW, dist(out, inn) / 2);
+  const s = new Float32Array(mesh.vertexCount);
+  const v = new Float32Array(mesh.vertexCount);
+  for (let i = 0; i < mesh.vertexCount; i++) {
+    const d = { x: mesh.src[i * 2] - root.x, y: mesh.src[i * 2 + 1] - root.y };
+    const sv = dot(d, a) / length;
+    const bin = Math.max(0, Math.min(TUBE_BINS - 1, Math.floor((sv / 1.2) * TUBE_BINS)));
+    // 격자 여백(라벨 밖) 정점의 외삽은 좁게 제한한다(부풀거나 뒤집히지 않게)
+    s[i] = Math.max(-0.15, Math.min(1.25, sv));
+    v[i] = Math.max(-1.2, Math.min(1.2, (dot(d, n) - center[bin]) / halfW[bin]));
+  }
+  return { s, v, length, halfW };
 }
