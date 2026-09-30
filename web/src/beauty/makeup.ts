@@ -2,13 +2,15 @@
 // 카메라를 그린 직후, 같은 WebGL 문맥에서 화면에 덧그린다(영상은 기기 밖으로 나가지 않는다).
 
 import type { Vec2 } from '../engine/math.ts';
-import { strokeStrip, triangulate, type FaceRegions } from './face-regions.ts';
+import { triangulate, type FaceRegions, type MVert } from './face-regions.ts';
 
 export type RGB = [number, number, number];
 
 export interface MakeupLook {
-  lip?: { color: RGB; amount: number; gloss: number };
-  shadow?: { color: RGB; amount: number };
+  /** over: 입술 라인(-1 안쪽만 ~ 0 윤곽 그대로 ~ 1 오버립) */
+  lip?: { color: RGB; amount: number; gloss: number; over?: number };
+  /** pearl: 펄(반짝이·윤기) 0~1 */
+  shadow?: { color: RGB; amount: number; pearl?: number };
   blush?: { color: RGB; amount: number };
   liner?: { color: RGB; amount: number };
   brow?: { color: RGB; amount: number };
@@ -22,58 +24,129 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-// 다각형 채우기: 정점은 영상 픽셀 좌표
+// 값이 있는 삼각형 망 채우기: 정점은 영상 픽셀 좌표, aVal 진하기, aST 부위 안 좌표(얼굴 폭 단위)
 const FILL_VS = `#version 300 es
 in vec2 aPos;
+in float aVal;
+in vec2 aST;
 uniform vec2 uSize;
-void main() { gl_Position = vec4(aPos.x / uSize.x * 2.0 - 1.0, 1.0 - aPos.y / uSize.y * 2.0, 0.0, 1.0); }`;
+out float vVal;
+out vec2 vST;
+void main() {
+  vVal = aVal;
+  vST = aST;
+  gl_Position = vec4(aPos.x / uSize.x * 2.0 - 1.0, 1.0 - aPos.y / uSize.y * 2.0, 0.0, 1.0);
+}`;
 const FILL_FS = `#version 300 es
 precision highp float;
 uniform vec4 uColor;
+uniform float uSparkle;  // 1이면 B 채널에 펄 반짝이 무늬
+uniform vec2 uPose;      // 얼굴 돌림·끄덕임: 움직일 때 반짝이가 켜졌다 꺼졌다 하게
+in float vVal;
+in vec2 vST;
 out vec4 o;
-void main() { o = uColor; }`;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+void main() {
+  vec4 c = uColor * vVal;
+  if (uSparkle > 0.5) {
+    // 얼굴 폭의 0.9% 크기 칸마다 반짝이 하나를 둘지 정한다(피부에 붙어 함께 움직임)
+    vec2 cell = floor(vST / 0.009);
+    float h = hash(cell);
+    float phase = hash(cell + 17.3) * 6.2832;
+    float tw = 0.5 + 0.5 * sin(phase + uPose.x * 22.0 + uPose.y * 15.0);
+    float on = step(0.76, h) * pow(tw, 3.0);
+    c = vec4(0.0, 0.0, on * smoothstep(0.1, 0.6, vVal), 0.0);
+  }
+  o = c;
+}`;
 
-// 채널별 폭이 다른 가우시안 흐림(가로·세로 두 번)
+// 채널별 폭이 다른 가우시안 흐림(가로·세로 두 번).
+// 표본 간격을 가장 넓은 채널에 맞추면 좁은 채널(립·아이라인)은 거의 안 흐려져 계단이 보이므로,
+// 좁은 채널 무리와 넓은 채널 무리를 각자 간격으로 따로 모은다.
 const BLUR_FS = `#version 300 es
 precision highp float;
 uniform sampler2D uTex;
 uniform vec2 uDir;      // (1,0) 또는 (0,1)
 uniform vec4 uSigma;    // 채널별 표준편차(px)
+uniform vec4 uWide;     // 1이면 넓은 무리
 uniform vec2 uSize;
 out vec4 o;
 void main() {
   vec2 uv = gl_FragCoord.xy / uSize;
-  float maxS = max(max(uSigma.x, uSigma.y), max(uSigma.z, uSigma.w));
-  float step = max(1.0, maxS * 3.0 / 7.0);
+  vec4 sF = mix(uSigma, vec4(0.0), uWide);
+  vec4 sW = mix(vec4(0.0), uSigma, uWide);
+  float stepF = max(0.75, max(max(sF.x, sF.y), max(sF.z, sF.w)) * 3.0 / 7.0);
+  float stepW = max(0.75, max(max(sW.x, sW.y), max(sW.z, sW.w)) * 3.0 / 7.0);
+  vec4 s2 = 2.0 * uSigma * uSigma + 1e-4;
   vec4 acc = vec4(0.0);
   vec4 wsum = vec4(0.0);
   for (int i = -7; i <= 7; i++) {
-    float x = float(i) * step;
-    vec4 w = exp(-x * x / (2.0 * uSigma * uSigma + 1e-4));
-    acc += texture(uTex, uv + uDir * x / uSize) * w;
+    float xf = float(i) * stepF;
+    float xw = float(i) * stepW;
+    vec4 x = mix(vec4(xf), vec4(xw), uWide);
+    vec4 w = exp(-x * x / s2);
+    vec4 tf = texture(uTex, uv + uDir * xf / uSize);
+    vec4 tw = texture(uTex, uv + uDir * xw / uSize);
+    acc += mix(tf, tw, uWide) * w;
     wsum += w;
   }
   o = acc / wsum;
 }`;
 
+// 합성의 정점 셰이더: 화면 전체 삼각형 3개 정점에서 조명(볼 피부 평균색)과 입술 평균 밝기를 한 번만 잰다.
+const COMPOSITE_VS = `#version 300 es
+uniform sampler2D uCam;
+uniform sampler2D uSeg;
+uniform vec2 uSkinPts[4];
+uniform vec2 uLipPts[6];
+uniform float uSkinLod;
+uniform float uLipLod;
+out vec2 vUv;
+flat out vec3 vSkin;
+flat out float vLipL;
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  vUv = vec2(p.x, 1.0 - p.y);
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+  // 볼 피부: 머리카락·손이 가린 표본은 얼굴 피부 확률(분할 B)로 덜 믿는다
+  vec3 acc = vec3(0.0);
+  float ws = 0.0;
+  for (int i = 0; i < 4; i++) {
+    float w = 0.05 + textureLod(uSeg, uSkinPts[i], 0.0).b;
+    acc += pow(textureLod(uCam, uSkinPts[i], uSkinLod).rgb, vec3(2.2)) * w;
+    ws += w;
+  }
+  vSkin = acc / ws;
+  float l = 0.0;
+  for (int i = 0; i < 6; i++) l += dot(pow(textureLod(uCam, uLipPts[i], uLipLod).rgb, vec3(2.2)), vec3(0.2126, 0.7152, 0.0722));
+  vLipL = l / 6.0;
+}`;
+
+// 색 계산은 선형 공간에서 한다.
+//  - 립·아이라이너(덮는 색소): 목표색 × 조명(볼 피부로 추정한 밝기·색온도) × 그 자리의 명암(입술 평균 대비)
+//  - 블러셔·아이섀도·눈썹(얇게 비치는 색): 원래 피부 × (목표색 / 기준 피부색) — 조명과 피부 결이 그대로 남는다
 const COMPOSITE_FS = `#version 300 es
 precision highp float;
 uniform sampler2D uCam;
 uniform sampler2D uSeg;
 uniform sampler2D uM1;   // R 립, G 아이섀도, B 블러셔, A 눈썹
-uniform sampler2D uM2;   // R 아이라이너, G 눈(흰자·눈동자)
+uniform sampler2D uM2;   // R 아이라이너, G 눈(흰자·눈동자), B 펄 반짝이
 uniform vec3 uLip; uniform float uLipAmt; uniform float uGloss;
-uniform vec3 uShadow; uniform float uShadowAmt;
+uniform vec3 uShadow; uniform float uShadowAmt; uniform float uPearl;
 uniform vec3 uBlush; uniform float uBlushAmt;
 uniform vec3 uLiner; uniform float uLinerAmt;
 uniform vec3 uBrow; uniform float uBrowAmt;
 in vec2 vUv;
+flat in vec3 vSkin;
+flat in float vLipL;
 out vec4 o;
-const vec3 W = vec3(0.299, 0.587, 0.114);
-// 원래 밝기(주름·그늘)를 살린 채 색만 바꾼다: 밝기 0.5에서 목표색이 되도록
-vec3 tint(vec3 color, float L) { return color * (0.35 + 1.3 * L); }
+const vec3 WL = vec3(0.2126, 0.7152, 0.0722);
+const vec3 WG = vec3(0.299, 0.587, 0.114);
+// 기준 피부색(밝은 조명의 중간 밝기 피부, sRGB #d1a38a)을 선형으로
+const vec3 REF = vec3(0.637, 0.366, 0.254);
+vec3 lin(vec3 c) { return pow(max(c, 0.0), vec3(2.2)); }
+vec3 gam(vec3 c) { return pow(max(c, 0.0), vec3(1.0 / 2.2)); }
 void main() {
-  vec3 c = textureLod(uCam, vUv, 0.0).rgb;
   vec2 mUv = vec2(vUv.x, 1.0 - vUv.y);
   vec4 m1 = texture(uM1, mUv);
   vec4 m2 = texture(uM2, mUv);
@@ -81,28 +154,55 @@ void main() {
   float hand = smoothstep(0.5, 0.8, texture(uSeg, vUv).g);
   m1 *= 1.0 - hand;
   m2 *= 1.0 - hand;
-  float L = dot(c, W);
-  vec3 out3 = c;
   // 눈 안쪽에는 아이섀도·눈썹이 번지지 않게
   float eye = smoothstep(0.35, 0.75, m2.g);
-  // 넓게 흐린 영역은 가운데 농도가 떨어지므로 다시 끌어올린다
-  float shadowM = smoothstep(0.0, 0.6, m1.g) * (1.0 - eye);
-  // 눈썹: 곱하기로 진하게만
-  out3 = mix(out3, out3 * clamp(uBrow * 2.2, 0.0, 1.0), m1.a * uBrowAmt);
-  // 블러셔·아이섀도: 피부 밝기를 살린 색조
-  out3 = mix(out3, tint(uBlush, L), m1.b * uBlushAmt);
-  // 아이섀도: 색조 절반 + 색소처럼 곱하기 절반(어두운 색은 확실히 어둡게)
-  vec3 shadowC = mix(tint(uShadow, L), out3 * uShadow * 1.6, 0.5);
-  out3 = mix(out3, shadowC, shadowM * uShadowAmt);
-  // 립: 색 + 광택(주변보다 밝은 결을 살려 더함)
-  float Lblur = dot(textureLod(uCam, vUv, 3.0).rgb, W);
-  vec3 lip = tint(uLip, L) + vec3(max(0.0, L - Lblur) * uGloss * 2.5 + smoothstep(0.55, 0.85, L) * uGloss * 0.25);
-  out3 = mix(out3, lip, m1.r * uLipAmt);
-  // 아이라이너
-  out3 = mix(out3, uLiner, m2.r * uLinerAmt);
+  float shadowM = smoothstep(0.0, 0.85, m1.g) * (1.0 - eye);
   float a = max(max(max(m1.r * uLipAmt, shadowM * uShadowAmt), max(m1.b * uBlushAmt, m1.a * uBrowAmt)), m2.r * uLinerAmt);
-  o = vec4(out3, 1.0) * step(0.002, a);
   if (a < 0.002) discard;
+
+  vec3 c = textureLod(uCam, vUv, 0.0).rgb;
+  vec3 cl = lin(c);
+  float Lp = dot(cl, WL);
+  // 조명 추정: 볼 피부 평균의 밝기·색온도를 기준 피부와 비교(피부 톤 차이 때문에 절반 정도만 따른다)
+  float Ls = max(dot(vSkin, WL), 1e-3);
+  vec3 wb = clamp(mix(vec3(1.0), (vSkin / Ls) / (REF / dot(REF, WL)), 0.7), 0.7, 1.35);
+  vec3 illum = wb * pow(clamp(Ls / dot(REF, WL), 0.1, 2.5), 0.6);
+  // 영상의 채도(흐린 영상·저조도 카메라는 색이 옅다)를 볼 피부 채도로 가늠해 덮는 색에도 반영
+  vec3 sg = gam(vSkin);
+  float sat = (max(sg.r, max(sg.g, sg.b)) - min(sg.r, min(sg.g, sg.b))) / max(max(sg.r, max(sg.g, sg.b)), 1e-3);
+  float satK = mix(1.0, clamp(sat / 0.34, 0.45, 1.15), 0.6);
+  // 그 자리의 명암(피부 평균 대비): 그늘·주름
+  float shade = clamp(Lp / Ls, 0.0, 2.5);
+  // 주변보다 어두운 점(눈썹 올)
+  float Lloc = dot(lin(textureLod(uCam, vUv, 2.5).rgb), WL);
+
+  vec3 outL = cl;
+  // 눈썹: 올은 진하게, 올 사이 피부는 옅게 채운다
+  float hairy = smoothstep(0.0, 0.3, 1.0 - Lp / max(Lloc, 1e-3));
+  vec3 browT = clamp(lin(uBrow) / REF, 0.0, 1.0);
+  outL *= mix(vec3(1.0), browT, clamp(m1.a * uBrowAmt * mix(0.9, 1.8, hairy), 0.0, 1.0));
+  // 블러셔: 비치는 색(피부 × 비율) 70% + 가루 색 30%
+  vec3 bl = lin(uBlush);
+  vec3 blushC = mix(outL * clamp(bl / REF, 0.0, 1.4), bl * illum * shade, 0.3);
+  outL = mix(outL, blushC, min(1.0, m1.b * uBlushAmt * 1.5));
+  // 아이섀도: 비치는 색 65% + 색소 35%, 펄은 빛 받는 곳에 윤기와 반짝이
+  vec3 sh = lin(uShadow);
+  vec3 shP = mix(vec3(dot(sh, WL)), sh, satK);
+  vec3 shadowC = mix(outL * clamp(sh / REF, 0.0, 1.4), shP * illum * shade, 0.35);
+  shadowC += (sh * 0.5 + 0.5) * illum * uPearl * (0.3 * smoothstep(0.2, 0.9, shade) + 1.4 * m2.b);
+  outL = mix(outL, shadowC, min(1.0, shadowM * uShadowAmt * 1.3));
+  vec3 outG = gam(outL);
+  // 립: 덮는 색 × 조명 × 입술 명암(입술 평균 대비), 광택은 주변보다 밝은 결을 살려 더한다
+  float lipShade = clamp(Lp / max(vLipL, 1e-3), 0.15, 2.2);
+  vec3 lp = lin(uLip);
+  vec3 lipC = gam(mix(vec3(dot(lp, WL)), lp, satK) * illum * lipShade);
+  float L = dot(c, WG);
+  float Lblur = dot(textureLod(uCam, vUv, 3.0).rgb, WG);
+  lipC += vec3(max(0.0, L - Lblur) * uGloss * 2.5 + smoothstep(0.55, 0.85, L) * uGloss * 0.25);
+  outG = mix(outG, lipC, m1.r * uLipAmt);
+  // 아이라이너
+  outG = mix(outG, gam(lin(uLiner) * illum), m2.r * uLinerAmt);
+  o = vec4(outG, 1.0);
 }`;
 
 interface Prog {
@@ -123,21 +223,29 @@ export class MakeupRenderer {
   private fbo: WebGLFramebuffer[] = [];
   private w = 0;
   private h = 0;
+  private scratch = new Float32Array(4096);
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
-    this.fill = this.program(FILL_VS, FILL_FS, ['uSize', 'uColor']);
-    this.blur = this.program(FULL_VS, BLUR_FS, ['uTex', 'uDir', 'uSigma', 'uSize']);
-    this.comp = this.program(FULL_VS, COMPOSITE_FS, [
-      'uCam', 'uSeg', 'uM1', 'uM2', 'uLip', 'uLipAmt', 'uGloss', 'uShadow', 'uShadowAmt', 'uBlush', 'uBlushAmt', 'uLiner', 'uLinerAmt', 'uBrow', 'uBrowAmt',
+    this.fill = this.program(FILL_VS, FILL_FS, ['uSize', 'uColor', 'uSparkle', 'uPose']);
+    this.blur = this.program(FULL_VS, BLUR_FS, ['uTex', 'uDir', 'uSigma', 'uWide', 'uSize']);
+    this.comp = this.program(COMPOSITE_VS, COMPOSITE_FS, [
+      'uCam', 'uSeg', 'uM1', 'uM2', 'uLip', 'uLipAmt', 'uGloss', 'uShadow', 'uShadowAmt', 'uPearl', 'uBlush', 'uBlushAmt', 'uLiner', 'uLinerAmt', 'uBrow', 'uBrowAmt',
+      'uSkinPts', 'uLipPts', 'uSkinLod', 'uLipLod',
     ]);
     this.vao = gl.createVertexArray()!;
     this.buf = gl.createBuffer()!;
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
-    const loc = gl.getAttribLocation(this.fill.prog, 'aPos');
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    // 정점: x, y, 진하기, s, t
+    const attr = (name: string, size: number, offset: number): void => {
+      const loc = gl.getAttribLocation(this.fill.prog, name);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 20, offset);
+    };
+    attr('aPos', 2, 0);
+    attr('aVal', 1, 8);
+    attr('aST', 2, 12);
     gl.bindVertexArray(null);
     this.empty = gl.createVertexArray()!;
     for (let i = 0; i < 6; i++) {
@@ -170,6 +278,27 @@ export class MakeupRenderer {
     }
   }
 
+  /** 삼각형 망을 현재 틀(framebuffer)에 채운다. color × 정점 진하기, blend 방식 eq */
+  private mesh(verts: MVert[], color: [number, number, number, number], eq: number, sparkle = false): void {
+    if (verts.length < 3) return;
+    const gl = this.gl;
+    const need = verts.length * 5;
+    if (this.scratch.length < need) this.scratch = new Float32Array(need * 2);
+    const d = this.scratch;
+    verts.forEach((q, j) => {
+      d[j * 5] = q.x;
+      d[j * 5 + 1] = q.y;
+      d[j * 5 + 2] = q.v;
+      d[j * 5 + 3] = q.s;
+      d[j * 5 + 4] = q.t;
+    });
+    gl.blendEquation(eq);
+    gl.uniform4f(this.fill.u.uColor, ...color);
+    gl.uniform1f(this.fill.u.uSparkle, sparkle ? 1 : 0);
+    gl.bufferData(gl.ARRAY_BUFFER, d.subarray(0, need), gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.TRIANGLES, 0, verts.length);
+  }
+
   /**
    * 카메라를 그린 화면 위에 메이크업을 덧그린다.
    * @param size 영상 크기(px). regions 좌표와 같은 기준
@@ -183,70 +312,41 @@ export class MakeupRenderer {
     // ① 마스크 그리기
     gl.useProgram(this.fill.prog);
     gl.uniform2f(this.fill.u.uSize, W, H);
+    gl.uniform2f(this.fill.u.uPose, regions.yaw, regions.pitch);
     gl.bindVertexArray(this.vao);
     // ARRAY_BUFFER 연결은 VAO에 저장되지 않는다: 다른 효과(타투·네일)가 바꿔 놓았을 수 있으므로 매번 다시 연결
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
-    const polys = (list: { pts: Vec2[]; tris: number[] }[], color: [number, number, number, number], eq: number): void => {
-      gl.blendEquation(eq);
-      gl.uniform4f(this.fill.u.uColor, ...color);
-      for (const { pts, tris } of list) {
-        if (tris.length < 3) continue;
-        const d = new Float32Array(tris.length * 2);
-        tris.forEach((k, j) => {
-          d[j * 2] = pts[k].x;
-          d[j * 2 + 1] = pts[k].y;
-        });
-        gl.bufferData(gl.ARRAY_BUFFER, d, gl.DYNAMIC_DRAW);
-        gl.drawArrays(gl.TRIANGLES, 0, tris.length);
-      }
-    };
-    const poly = (pts: Vec2[]): { pts: Vec2[]; tris: number[] } => ({ pts, tris: triangulate(pts) });
-    const strip = (pts: Vec2[]): { pts: Vec2[]; tris: number[] } => {
-      const tris: number[] = [];
-      for (let i = 0; i + 3 < pts.length + 1 && i + 2 < pts.length; i += 2) tris.push(i, i + 1, i + 2, i + 1, i + 3, i + 2);
-      return { pts, tris: tris.filter((_, k) => tris[k] < pts.length) };
-    };
-    const ellipse = (e: FaceRegions['blushR']): Vec2[] => {
-      const out: Vec2[] = [];
-      const nx = -e.dir.y;
-      const ny = e.dir.x;
-      for (let k = 0; k < 28; k++) {
-        const a = (k / 28) * Math.PI * 2;
-        const u = Math.cos(a) * e.rx;
-        const v = Math.sin(a) * e.ry;
-        out.push({ x: e.c.x + e.dir.x * u + nx * v, y: e.c.y + e.dir.y * u + ny * v });
-      }
-      return out;
-    };
+    const poly = (pts: Vec2[]): MVert[] => triangulate(pts).map((k) => ({ x: pts[k].x, y: pts[k].y, v: 1, s: 0, t: 0 }));
 
     gl.viewport(0, 0, this.w, this.h);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo[0]);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (look.lip) {
-      polys([poly(regions.lipsOuter)], [1, 0, 0, 0], gl.MAX);
+      this.mesh(poly(regions.lipsOuter), [1, 0, 0, 0], gl.MAX);
       // 입 벌린 안쪽은 비운다(R만 0으로)
-      polys([poly(regions.lipsInner)], [0, 1, 1, 1], gl.MIN);
+      this.mesh(poly(regions.lipsInner), [0, 1, 1, 1], gl.MIN);
     }
-    if (look.shadow) polys([poly(regions.shadowR), poly(regions.shadowL)], [0, 1, 0, 0], gl.MAX);
-    if (look.blush) polys([poly(ellipse(regions.blushR)), poly(ellipse(regions.blushL))], [0, 0, 1, 0], gl.MAX);
-    if (look.brow) polys([poly(regions.browR), poly(regions.browL)], [0, 0, 0, 1], gl.MAX);
+    if (look.shadow) this.mesh(regions.shadow, [0, 1, 0, 0], gl.MAX);
+    if (look.blush) this.mesh(regions.blush, [0, 0, 1, 0], gl.MAX);
+    if (look.brow) this.mesh(regions.brow, [0, 0, 0, 1], gl.MAX);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo[1]);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    if (look.liner) {
-      const lw = fw * 0.012;
-      polys([strip(strokeStrip(regions.linerR, lw)), strip(strokeStrip(regions.linerL, lw))], [1, 0, 0, 0], gl.MAX);
+    if (look.liner) this.mesh(regions.liner, [1, 0, 0, 0], gl.MAX);
+    if (look.shadow) {
+      this.mesh([...poly(regions.eyeR), ...poly(regions.eyeL)], [0, 1, 0, 0], gl.MAX);
+      if ((look.shadow.pearl ?? 0) > 0) this.mesh(regions.shadow, [0, 0, 1, 0], gl.MAX, true);
     }
-    if (look.shadow) polys([poly(regions.eyeR), poly(regions.eyeL)], [0, 1, 0, 0], gl.MAX);
     gl.blendEquation(gl.FUNC_ADD);
     gl.disable(gl.BLEND);
 
-    // ② 흐림: 부위별 폭(얼굴 폭 비율, 반 해상도 px)
+    // ② 흐림: 부위별 폭(얼굴 폭 비율, 반 해상도 px). 섀도·블러셔는 망 자체가 옅어지므로 조금만 흐린다
     const s = fw / 2;
-    this.blurPass(0, 2, 4, [s * 0.008, s * 0.05, s * 0.09, s * 0.012]);
-    this.blurPass(1, 3, 5, [s * 0.004, s * 0.004, 0.5, 0.5]);
+    // 작은 얼굴(흐린 영상)에서도 경계가 오려 붙인 듯 날카롭지 않게 최소 1px
+    this.blurPass(0, 2, 4, [Math.max(0.8, s * 0.005), s * 0.015, s * 0.045, Math.max(1, s * 0.01)], [0, 1, 1, 0]);
+    this.blurPass(1, 3, 5, [Math.max(0.6, s * 0.004), Math.max(0.6, s * 0.004), 0.5, 0.5], [0, 0, 0, 0]);
 
     // ③ 합성(화면)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -269,18 +369,25 @@ export class MakeupRenderer {
     set('uLip', 'uLipAmt', look.lip);
     gl.uniform1f(u.uGloss, look.lip?.gloss ?? 0);
     set('uShadow', 'uShadowAmt', look.shadow);
+    gl.uniform1f(u.uPearl, look.shadow?.pearl ?? 0);
     set('uBlush', 'uBlushAmt', look.blush);
     set('uLiner', 'uLinerAmt', look.liner);
     set('uBrow', 'uBrowAmt', look.brow);
+    // 조명·입술 밝기 표본(영상 좌표 → 텍스처 좌표)과 평균 낼 크기(밉맵 단계)
+    gl.uniform2fv(u.uSkinPts, regions.skinPts.flatMap((q) => [q.x / W, q.y / H]));
+    gl.uniform2fv(u.uLipPts, regions.lipBody.flatMap((q) => [q.x / W, q.y / H]));
+    gl.uniform1f(u.uSkinLod, Math.max(0, Math.log2(fw * 0.07)));
+    gl.uniform1f(u.uLipLod, Math.max(0, Math.log2(fw * 0.02)));
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
   }
 
-  private blurPass(src: number, tmp: number, dst: number, sigma: number[]): void {
+  private blurPass(src: number, tmp: number, dst: number, sigma: number[], wide: number[]): void {
     const gl = this.gl;
     gl.useProgram(this.blur.prog);
     gl.uniform2f(this.blur.u.uSize, this.w, this.h);
+    gl.uniform4f(this.blur.u.uWide, wide[0], wide[1], wide[2], wide[3]);
     gl.uniform4f(this.blur.u.uSigma, Math.max(0.5, sigma[0]), Math.max(0.5, sigma[1]), Math.max(0.5, sigma[2]), Math.max(0.5, sigma[3]));
     gl.bindVertexArray(this.empty);
     gl.activeTexture(gl.TEXTURE0);

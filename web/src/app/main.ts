@@ -3,7 +3,8 @@
 // 개발·시험용 주소 인자:
 //   ?src=sample            예시 영상으로 바로 시작
 //   ?src=<경로>             같은 사이트의 동영상으로 바로 시작(시험용)
-//   ?look=<룩 이름>         처음 적용할 룩(daily, coral, red, smoky, rose, clear)
+//   ?look=<룩 이름>         처음 적용할 룩(daily, coral, red, smoky, rose, glam, clear)
+//   ?over=-1~1 ?pearl=0~1   입술 라인(오버립), 아이섀도 펄
 //   ?hair=<번호|이름>       헤어 색
 //   ?nail=<번호|이름>&nstyle=solid|french|gradient|glitter|dots   네일
 //   ?tattoo=<도안 id>&place=<위치>&tsize=0~1   타투(예: tattoo=moon&place=forearmL)
@@ -39,6 +40,10 @@ const amountEl = $<HTMLInputElement>('amount');
 const amountRowEl = $<HTMLElement>('amount-row');
 const glossRowEl = $<HTMLElement>('gloss-row');
 const glossEl = $<HTMLInputElement>('gloss');
+const overRowEl = $<HTMLElement>('over-row');
+const overEl = $<HTMLInputElement>('over');
+const pearlRowEl = $<HTMLElement>('pearl-row');
+const pearlEl = $<HTMLInputElement>('pearl');
 const loopbackEl = $<HTMLPreElement>('loopback-result');
 const placeRowEl = $<HTMLElement>('place-row');
 const placeEl = $<HTMLSelectElement>('place');
@@ -91,6 +96,9 @@ const NAIL_COLOR2: Record<NailStyle, RGB> = { solid: [1, 1, 1], french: [0.97, 0
 /** 헤어 그라데이션 끝 색(옴브레) */
 let hairTip: RGB | null = null;
 let gloss = 0.3;
+/** 입술 라인(-1~1)과 아이섀도 펄(0~1) */
+let overlip = 0;
+let pearl = 0;
 let tab: PartName | 'look' | 'tattoo' = 'look';
 
 // ---- 타투 선택 ----
@@ -120,7 +128,8 @@ function applyLookToEngine(): void {
   for (const part of Object.keys(chosen) as PartName[]) {
     const c = chosen[part];
     if (!c.color || part === 'hair' || part === 'nail') continue;
-    if (part === 'lip') look.lip = { color: c.color, amount: c.amount, gloss };
+    if (part === 'lip') look.lip = { color: c.color, amount: c.amount, gloss, over: overlip };
+    else if (part === 'shadow') look.shadow = { color: c.color, amount: c.amount, pearl };
     else look[part] = { color: c.color, amount: c.amount };
   }
   engine.look = look;
@@ -147,6 +156,8 @@ function selectLook(name: LookName): void {
   }
   gloss = l.gloss ?? gloss;
   glossEl.value = String(gloss);
+  pearl = l.pearl ?? 0;
+  pearlEl.value = String(pearl);
   applyLookToEngine();
   renderRail();
 }
@@ -189,6 +200,8 @@ function renderRail(): void {
     );
     amountRowEl.hidden = true;
     glossRowEl.hidden = true;
+    overRowEl.hidden = true;
+    pearlRowEl.hidden = true;
     placeRowEl.hidden = true;
     sizeRowEl.hidden = true;
     nstyleRowEl.hidden = true;
@@ -242,6 +255,8 @@ function renderRail(): void {
   amountRowEl.hidden = false;
   amountEl.value = String(c.amount);
   glossRowEl.hidden = part !== 'lip';
+  overRowEl.hidden = part !== 'lip';
+  pearlRowEl.hidden = part !== 'shadow';
 }
 
 function renderTattooRail(): void {
@@ -267,6 +282,8 @@ function renderTattooRail(): void {
   amountRowEl.hidden = false;
   amountEl.value = String(tattoo.amount);
   glossRowEl.hidden = true;
+  overRowEl.hidden = true;
+  pearlRowEl.hidden = true;
   placeRowEl.hidden = false;
   placeEl.value = tattoo.place;
   sizeRowEl.hidden = false;
@@ -311,6 +328,14 @@ amountEl.addEventListener('input', () => {
 });
 glossEl.addEventListener('input', () => {
   gloss = Number(glossEl.value);
+  applyLookToEngine();
+});
+overEl.addEventListener('input', () => {
+  overlip = Number(overEl.value);
+  applyLookToEngine();
+});
+pearlEl.addEventListener('input', () => {
+  pearl = Number(pearlEl.value);
   applyLookToEngine();
 });
 
@@ -481,6 +506,10 @@ function applyParams(): void {
   applySettings();
   const look = params.get('look') as LookName | null;
   selectLook(look && look in LOOKS ? look : 'daily');
+  // ?over=-1~1(입술 라인), ?pearl=0~1(아이섀도 펄)
+  if (params.has('over')) overEl.value = String((overlip = Number(params.get('over'))));
+  if (params.has('pearl')) pearlEl.value = String((pearl = Number(params.get('pearl'))));
+  applyLookToEngine();
   // ?hair=<색상표 번호 또는 이름>
   const hp = params.get('hair');
   if (hp) {

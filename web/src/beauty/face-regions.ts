@@ -31,66 +31,201 @@ export const CHEEK_L = 425;
 /** 광대 바깥쪽(블러셔가 관자놀이 쪽으로 퍼지는 방향) */
 export const CHEEKBONE_R = 116;
 export const CHEEKBONE_L = 345;
+/** 코끝 */
+export const NOSE_TIP = 1;
+/** 조명 추정용 볼 피부 표본(광대 아래·광대 바깥, 양쪽) */
+export const SKIN_SAMPLES = [CHEEK_R, CHEEK_L, CHEEKBONE_R, CHEEKBONE_L];
+/** 입술 살 표본: LIPS_OUTER·LIPS_INNER에서 같은 번호끼리 짝을 이룬다(아랫입술 3곳, 윗입술 3곳) */
+const LIP_BODY = [3, 5, 7, 13, 15, 17];
+
+/** 값이 있는 삼각형 망의 정점. v: 진하기(0~1), s·t: 부위 안 좌표(펄 반짝이 위치 고정용, 얼굴 폭 단위) */
+export interface MVert {
+  x: number;
+  y: number;
+  v: number;
+  s: number;
+  t: number;
+}
 
 export interface FaceRegions {
   /** 얼굴 폭(px) — 경계 흐림 크기 등의 기준 */
   faceW: number;
+  /** 얼굴 좌우 돌림(-1 사람 오른쪽이 멀어짐 ~ 1 사람 왼쪽이 멀어짐, 0 정면)과 위아래 끄덕임(대략값) */
+  yaw: number;
+  pitch: number;
+  /** 사람 오른쪽/왼쪽 절반이 보이는 정도(0~1). 얼굴을 돌려 먼 쪽이 코 뒤로 숨을수록 0 */
+  visR: number;
+  visL: number;
   lipsOuter: Vec2[];
   lipsInner: Vec2[];
-  /** 아이섀도: 윗눈꺼풀 선 + 눈썹 쪽으로 올린 선으로 닫은 다각형 */
-  shadowR: Vec2[];
-  shadowL: Vec2[];
-  /** 아이라이너: 윗눈꺼풀 선(바깥 끝은 꼬리를 살짝 뺌) */
-  linerR: Vec2[];
-  linerL: Vec2[];
+  /** 입술 살 가운데(바깥·안쪽 윤곽의 중간) — 입술 평균 밝기 표본 위치 */
+  lipBody: Vec2[];
+  /** 볼 피부 표본 위치 — 조명(밝기·색온도) 추정용 */
+  skinPts: Vec2[];
+  /** 아이섀도: 속눈썹 쪽 1 → 위로 갈수록 0 */
+  shadow: MVert[];
+  /** 아이라이너: 눈꼬리로 갈수록 두꺼워지고 날개로 이어지는 띠 */
+  liner: MVert[];
   /** 눈을 뜬 부분(흰자·눈동자): 아이섀도가 번져 들어가지 않게 빼는 영역 */
   eyeR: Vec2[];
   eyeL: Vec2[];
-  browR: Vec2[];
-  browL: Vec2[];
-  /** 블러셔: 타원(중심, 가로·세로 반지름, 기울기 방향 단위 벡터) */
-  blushR: { c: Vec2; rx: number; ry: number; dir: Vec2 };
-  blushL: { c: Vec2; rx: number; ry: number; dir: Vec2 };
+  /** 눈썹: 앞머리는 옅게, 꼬리는 가늘게 모이는 띠 */
+  brow: MVert[];
+  /** 블러셔: 가운데 1 → 가장자리 0인 타원 부채꼴 */
+  blush: MVert[];
 }
 
 const lerp = (a: Vec2, b: Vec2, t: number): Vec2 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
 const dist = (a: Vec2, b: Vec2): number => Math.hypot(a.x - b.x, a.y - b.y);
+const smooth = (e0: number, e1: number, x: number): number => {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
 
-/** 눈꺼풀 선(바깥 → 안쪽)과 눈썹 아랫선을 이용해 아이섀도 영역을 만든다. height 0~1: 눈썹까지 얼마나 올릴지 */
-function shadowPoly(p: Vec2[], upper: number[], browLower: number[], height: number): Vec2[] {
+/** 같은 길이의 점 줄(rows)을 이어 삼각형 망으로. val(행, 열)로 정점 진하기, 부위 좌표는 줄을 따라 잰 거리(얼굴 폭 단위) */
+export function bandMesh(rows: Vec2[][], val: (r: number, c: number) => number, faceW = 1): MVert[] {
+  const out: MVert[] = [];
+  const n = rows[0].length;
+  // s: 첫 줄을 따라 잰 길이, t: 줄 사이 거리 — 얼굴이 움직여도 반짝이 무늬가 피부에 붙어 있게
+  const s: number[] = [0];
+  for (let c = 1; c < n; c++) s.push(s[c - 1] + dist(rows[0][c - 1], rows[0][c]) / faceW);
+  const vert = (r: number, c: number): MVert => {
+    const p = rows[r][c];
+    return { x: p.x, y: p.y, v: val(r, c), s: s[c], t: dist(rows[0][c], p) / faceW };
+  };
+  for (let r = 0; r + 1 < rows.length; r++) {
+    for (let c = 0; c + 1 < n; c++) {
+      const a = vert(r, c);
+      const b = vert(r, c + 1);
+      const d = vert(r + 1, c);
+      const e = vert(r + 1, c + 1);
+      out.push(a, b, d, b, e, d);
+    }
+  }
+  return out;
+}
+
+/** 타원을 가운데(val 1)에서 가장자리(0)로 옅어지는 부채꼴 망으로 */
+function ellipseMesh(c: Vec2, rx: number, ry: number, dir: Vec2, peak: number): MVert[] {
+  const nx = -dir.y;
+  const ny = dir.x;
+  const K = 24;
+  const ring = (f: number): Vec2[] =>
+    Array.from({ length: K + 1 }, (_, k) => {
+      const a = (k / K) * Math.PI * 2;
+      const u = Math.cos(a) * rx * f;
+      const v = Math.sin(a) * ry * f;
+      return { x: c.x + dir.x * u + nx * v, y: c.y + dir.y * u + ny * v };
+    });
+  const center = Array.from({ length: K + 1 }, () => c);
+  // 가운데 → 0.5 → 가장자리: 가우시안에 가까운 모양
+  return bandMesh([center, ring(0.5), ring(1)], (r) => peak * [1, 0.72, 0][r]);
+}
+
+/** 눈꺼풀 선(바깥 → 안쪽)과 눈썹 아랫선 사이를 여러 줄로 나눈 아이섀도 망. height 0~1: 눈썹까지 얼마나 올릴지 */
+function shadowMesh(p: Vec2[], upper: number[], browLower: number[], height: number, faceW: number, vis: number): MVert[] {
   const lid = upper.map((i) => p[i]);
-  // 눈썹 아랫선을 눈꺼풀 점 수에 맞춰 다시 표본(바깥 → 안쪽)
   const brow = browLower.map((i) => p[i]);
-  const top: Vec2[] = lid.map((_, k) => {
-    const t = k / (lid.length - 1);
-    const f = t * (brow.length - 1);
+  const browAt = (k: number): Vec2 => {
+    const f = (k / (lid.length - 1)) * (brow.length - 1);
     const i = Math.min(brow.length - 2, Math.floor(f));
-    const b = lerp(brow[i], brow[i + 1], f - i);
-    return lerp(lid[k], b, height);
-  });
-  return [...lid, ...top.reverse()];
+    return lerp(brow[i], brow[i + 1], f - i);
+  };
+  // 속눈썹 쪽이 가장 진하고 위로 갈수록 옅다(그라데이션 섀도)
+  // 첫 줄은 속눈썹 선 아래(눈 안쪽 — 합성 때 눈 영역으로 빠짐): 흐려도 속눈썹 선에서 진하기가 빠지지 않게
+  const hs = [-0.25, 0, 0.4, 0.75, 1];
+  const vals = [1, 1, 0.95, 0.65, 0];
+  const rows = hs.map((h) => lid.map((q, k) => lerp(q, browAt(k), height * h)));
+  // 눈 앞머리(안쪽 끝)는 옅게: 콧대 쪽으로 번지지 않게
+  const n = lid.length;
+  return bandMesh(rows, (r, c) => vals[r] * vis * (0.55 + 0.45 * smooth(n - 1, n - 4, c)), faceW);
 }
 
-/** 눈꼬리 쪽으로 살짝 빠지는 아이라이너 선 */
-function linerLine(p: Vec2[], upper: number[], lower: number[], wing: number): Vec2[] {
-  const line = upper.map((i) => p[i]);
-  const outer = line[0];
-  // 꼬리 방향: 아랫눈꺼풀 바깥쪽에서 바깥 끝으로 향하는 방향을 조금 위로
-  const lowOuter = p[lower[lower.length - 2]];
-  const dx = outer.x - lowOuter.x;
-  const dy = outer.y - lowOuter.y;
-  const l = Math.hypot(dx, dy) || 1;
-  const eyeW = dist(p[upper[0]], p[upper[upper.length - 1]]);
-  const tip = { x: outer.x + (dx / l) * eyeW * wing, y: outer.y + (dy / l) * eyeW * wing - eyeW * wing * 0.35 };
-  return wing > 0 ? [tip, ...line] : line;
+/** 윗눈꺼풀 속눈썹 선 위로 두께가 있는 아이라이너 띠(눈꼬리로 갈수록 두껍고, 날개 끝에서 한 점으로 모임) */
+function linerMesh(p: Vec2[], upper: number[], lower: number[], wing: number, faceW: number, vis: number): MVert[] {
+  const lash = upper.map((i) => p[i]); // 바깥 → 안쪽
+  const eye = [...upper, ...lower].map((i) => p[i]);
+  const ctr = eye.reduce((a, q) => ({ x: a.x + q.x / eye.length, y: a.y + q.y / eye.length }), { x: 0, y: 0 });
+  const eyeW = dist(lash[0], lash[lash.length - 1]);
+  const T = faceW * 0.011;
+  const n = lash.length;
+  const up: Vec2[] = [];
+  const low: Vec2[] = [];
+  for (let k = 0; k < n; k++) {
+    const a = lash[Math.max(0, k - 1)];
+    const b = lash[Math.min(n - 1, k + 1)];
+    let nx = -(b.y - a.y);
+    let ny = b.x - a.x;
+    const l = Math.hypot(nx, ny) || 1;
+    nx /= l;
+    ny /= l;
+    // 눈 가운데에서 멀어지는 쪽(위)으로
+    if (nx * (lash[k].x - ctr.x) + ny * (lash[k].y - ctr.y) < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    // 두께: 안쪽 끝 0.25T → 바깥 끝 1.1T
+    const f = 1 - k / (n - 1);
+    const t = T * (0.25 + 0.85 * Math.pow(f, 1.4));
+    up.push({ x: lash[k].x + nx * t, y: lash[k].y + ny * t });
+    // 속눈썹 선과 틈이 생기지 않게 눈 쪽으로 살짝 겹친다
+    low.push({ x: lash[k].x - nx * t * 0.2, y: lash[k].y - ny * t * 0.2 });
+  }
+  if (wing > 0) {
+    // 날개 방향: 아랫눈꺼풀 바깥쪽 → 눈꼬리 방향을 조금 위로
+    const outer = lash[0];
+    const lowOuter = p[lower[lower.length - 2]];
+    const dx = outer.x - lowOuter.x;
+    const dy = outer.y - lowOuter.y;
+    const l = Math.hypot(dx, dy) || 1;
+    const upDir = { x: up[0].x - outer.x, y: up[0].y - outer.y };
+    const ul = Math.hypot(upDir.x, upDir.y) || 1;
+    const tip = {
+      x: outer.x + (dx / l) * eyeW * wing + (upDir.x / ul) * eyeW * wing * 0.35,
+      y: outer.y + (dy / l) * eyeW * wing + (upDir.y / ul) * eyeW * wing * 0.35,
+    };
+    up.unshift(tip);
+    low.unshift(tip);
+  }
+  const m = low.length;
+  return bandMesh([low, up], (_, c) => vis * (0.7 + 0.3 * smooth(m - 1, m - 4, c)), faceW);
 }
 
-/** 478점(픽셀 좌표)에서 메이크업 영역을 만든다. */
-export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?: number } = {}): FaceRegions {
+/** 눈썹 띠: 아랫선·윗선을 짝지어, 꼬리는 한 점으로 모으고 앞머리는 옅게 */
+function browMesh(p: Vec2[], lower: number[], upper: number[], faceW: number, vis: number): MVert[] {
+  const lo = lower.map((i) => p[i]); // 바깥 → 안쪽
+  const hi = [...upper].reverse().map((i) => p[i]); // 바깥 → 안쪽
+  // 얼굴 점 눈썹 영역은 실제 눈썹보다 조금 크다: 가운데 선 쪽으로 10% 좁힌다
+  const a = lo.map((q, k) => lerp(q, hi[k], 0.1));
+  const b = hi.map((q, k) => lerp(q, lo[k], 0.1));
+  // 꼬리: 바깥 끝 두 점의 가운데에서 조금 더 나간 한 점
+  const m0 = lerp(a[0], b[0], 0.5);
+  const m1 = lerp(a[1], b[1], 0.5);
+  const tail = { x: m0.x + (m0.x - m1.x) * 0.3, y: m0.y + (m0.y - m1.y) * 0.3 };
+  a[0] = lerp(a[0], m0, 0.35);
+  b[0] = lerp(b[0], m0, 0.35);
+  const vals = [0.75, 0.95, 1, 1, 0.8, 0.35]; // 꼬리 → 앞머리
+  return bandMesh([[tail, ...a], [tail, ...b]], (_, c) => vals[c] * vis, faceW);
+}
+
+/** 478점(픽셀 좌표)에서 메이크업 영역을 만든다. overlip: -1(입술 안쪽으로) ~ 1(윤곽보다 크게) */
+export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?: number; overlip?: number } = {}): FaceRegions {
   const faceW = dist(p[FACE_SIDE_R], p[FACE_SIDE_L]);
   const sh = opts.shadowHeight ?? 0.62;
   const wing = opts.linerWing ?? 0.25;
-  const blush = (cheek: number, bone: number): FaceRegions['blushR'] => {
+  // 얼굴 돌림: 코끝에서 양쪽 얼굴 옆까지 거리 비율(정면 0.5)
+  const nose = p[NOSE_TIP];
+  const dR = dist(nose, p[FACE_SIDE_R]);
+  const dL = dist(nose, p[FACE_SIDE_L]);
+  const fracR = dR / (dR + dL || 1);
+  const yaw = Math.max(-1, Math.min(1, (0.5 - fracR) * 2.5));
+  const eyeMid = lerp(p[EYE_R_UPPER[0]], p[EYE_L_UPPER[0]], 0.5);
+  const mouthMid = lerp(p[61], p[291], 0.5);
+  const pitch = Math.max(-1, Math.min(1, (dist(eyeMid, nose) / (dist(eyeMid, mouthMid) || 1) - 0.55) * 3));
+  // 먼 쪽 절반이 좁아질수록 옅게(코 뒤로 숨는 부분)
+  const visR = smooth(0.1, 0.3, fracR);
+  const visL = smooth(0.1, 0.3, 1 - fracR);
+  const blush = (cheek: number, bone: number, frac: number, vis: number): MVert[] => {
     const c0 = p[cheek];
     const b = p[bone];
     // 볼 중심과 광대 바깥의 사이, 광대 쪽으로 조금 올린 위치
@@ -98,22 +233,32 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
     const dx = b.x - c0.x;
     const dy = b.y - c0.y;
     const l = Math.hypot(dx, dy) || 1;
-    return { c, rx: faceW * 0.14, ry: faceW * 0.09, dir: { x: dx / l, y: dy / l } };
+    // 돌린 쪽 볼은 화면에서 좁아 보인다: 가로 반지름을 그 쪽 절반 폭에 맞춘다
+    const k = Math.max(0.35, Math.min(1.3, frac * 2));
+    return ellipseMesh(c, faceW * 0.15 * k, faceW * 0.1, { x: dx / l, y: dy / l }, vis);
   };
+  // 오버립: 입술 가운데에서 위아래로 넓힌다(입꼬리는 거의 그대로)
+  const over = Math.max(-1, Math.min(1, opts.overlip ?? 0));
+  const outer = LIPS_OUTER.map((i) => p[i]);
+  const lc = outer.reduce((a, q) => ({ x: a.x + q.x / outer.length, y: a.y + q.y / outer.length }), { x: 0, y: 0 });
+  const lipsOuter = over === 0 ? outer : outer.map((q) => ({ x: lc.x + (q.x - lc.x) * (1 + 0.025 * over), y: lc.y + (q.y - lc.y) * (1 + 0.14 * over) }));
+  const lipsInner = LIPS_INNER.map((i) => p[i]);
   return {
     faceW,
-    lipsOuter: LIPS_OUTER.map((i) => p[i]),
-    lipsInner: LIPS_INNER.map((i) => p[i]),
-    shadowR: shadowPoly(p, EYE_R_UPPER, BROW_R_LOWER, sh),
-    shadowL: shadowPoly(p, EYE_L_UPPER, BROW_L_LOWER, sh),
-    linerR: linerLine(p, EYE_R_UPPER, EYE_R_LOWER, wing),
-    linerL: linerLine(p, EYE_L_UPPER, EYE_L_LOWER, wing),
+    yaw,
+    pitch,
+    visR,
+    visL,
+    lipsOuter,
+    lipsInner,
+    lipBody: LIP_BODY.map((k) => lerp(outer[k], lipsInner[k], 0.5)),
+    skinPts: SKIN_SAMPLES.map((i) => p[i]),
+    shadow: [...shadowMesh(p, EYE_R_UPPER, BROW_R_LOWER, sh, faceW, visR), ...shadowMesh(p, EYE_L_UPPER, BROW_L_LOWER, sh, faceW, visL)],
+    liner: [...linerMesh(p, EYE_R_UPPER, EYE_R_LOWER, wing, faceW, visR), ...linerMesh(p, EYE_L_UPPER, EYE_L_LOWER, wing, faceW, visL)],
     eyeR: [...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)].map((i) => p[i]),
     eyeL: [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)].map((i) => p[i]),
-    browR: [...BROW_R_LOWER.map((i) => p[i]), ...BROW_R_UPPER.map((i) => p[i])],
-    browL: [...BROW_L_LOWER.map((i) => p[i]), ...BROW_L_UPPER.map((i) => p[i])],
-    blushR: blush(CHEEK_R, CHEEKBONE_R),
-    blushL: blush(CHEEK_L, CHEEKBONE_L),
+    brow: [...browMesh(p, BROW_R_LOWER, BROW_R_UPPER, faceW, visR), ...browMesh(p, BROW_L_LOWER, BROW_L_UPPER, faceW, visL)],
+    blush: [...blush(CHEEK_R, CHEEKBONE_R, fracR, visR), ...blush(CHEEK_L, CHEEKBONE_L, 1 - fracR, visL)],
   };
 }
 

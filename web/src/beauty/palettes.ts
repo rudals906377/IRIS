@@ -35,6 +35,8 @@ export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[
     { name: '핑크', color: c('#d98fa0') },
     { name: '스모키 그레이', color: c('#4a4550') },
     { name: '카키', color: c('#6e6a45') },
+    { name: '샴페인 골드', color: c('#b98a5e') },
+    { name: '버건디', color: c('#6e2c38') },
   ],
   blush: [
     { name: '피치', color: c('#f2a08a') },
@@ -80,11 +82,11 @@ export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[
   ],
 };
 
-export type LookName = 'daily' | 'coral' | 'red' | 'smoky' | 'rose' | 'clear';
+export type LookName = 'daily' | 'coral' | 'red' | 'smoky' | 'rose' | 'glam' | 'clear';
 
 type PartValue = { color: RGB; amount: number };
 
-export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<PartName, PartValue>>; gloss?: number }> = {
+export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<PartName, PartValue>>; gloss?: number; pearl?: number }> = {
   daily: {
     label: '데일리',
     parts: {
@@ -133,6 +135,18 @@ export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<Part
       liner: { color: c('#3b2a22'), amount: 0.5 },
     },
     gloss: 0.3,
+  },
+  glam: {
+    label: '글램',
+    parts: {
+      lip: { color: c('#9e3a4a'), amount: 0.8 },
+      shadow: { color: c('#b98a5e'), amount: 0.6 },
+      blush: { color: c('#d4707f'), amount: 0.3 },
+      liner: { color: c('#1a1414'), amount: 0.9 },
+      brow: { color: c('#3a2a20'), amount: 0.35 },
+    },
+    gloss: 0.55,
+    pearl: 0.8,
   },
   clear: { label: '맨얼굴', parts: {} },
 };

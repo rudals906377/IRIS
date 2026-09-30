@@ -2,7 +2,7 @@
 // 뷰티 효과의 순수 계산(얼굴 영역·삼각형 분할) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
+import { bandMesh, faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 import { LOOKS, PALETTES } from '../src/beauty/palettes.ts';
 import { measureLimbWidth, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
 
@@ -49,11 +49,42 @@ test('얼굴 영역: 478점에서 부위 다각형과 얼굴 폭', () => {
   const p: P[] = Array.from({ length: 478 }, (_, i) => ({ x: 200 + 80 * Math.cos(i), y: 200 + 100 * Math.sin(i * 1.3) }));
   p[234] = { x: 100, y: 200 };
   p[454] = { x: 300, y: 200 };
+  p[1] = { x: 200, y: 210 }; // 코끝: 정면
   const r = faceRegions(p);
   assert.equal(r.faceW, 200);
   assert.equal(r.lipsOuter.length, LIPS_OUTER.length);
-  assert.ok(r.shadowR.length > 10 && r.linerL.length > 5);
-  assert.ok(r.blushR.rx > r.blushR.ry);
+  for (const m of [r.shadow, r.liner, r.brow, r.blush]) {
+    assert.ok(m.length > 0 && m.length % 3 === 0);
+    assert.ok(m.every((q) => q.v >= 0 && q.v <= 1));
+  }
+  assert.ok(Math.abs(r.yaw) < 1e-9 && r.visR === 1 && r.visL === 1);
+  assert.equal(r.skinPts.length, 4);
+  assert.equal(r.lipBody.length, 6);
+});
+
+test('얼굴 영역: 옆으로 돌리면 먼 쪽 화장이 옅어지고, 오버립은 입술을 넓힌다', () => {
+  const p: P[] = Array.from({ length: 478 }, (_, i) => ({ x: 200 + 80 * Math.cos(i), y: 200 + 100 * Math.sin(i * 1.3) }));
+  p[234] = { x: 100, y: 200 };
+  p[454] = { x: 300, y: 200 };
+  p[1] = { x: 125, y: 210 }; // 코끝이 사람 오른쪽(이미지 왼쪽)으로: 오른쪽 절반이 좁아짐
+  const r = faceRegions(p);
+  assert.ok(r.yaw > 0.5);
+  assert.ok(r.visR < 0.5 && r.visL === 1);
+  const peak = (m: { v: number }[], half: 0 | 1): number => Math.max(...m.slice(half * (m.length / 2), (half + 1) * (m.length / 2)).map((q) => q.v));
+  assert.ok(peak(r.blush, 0) < peak(r.blush, 1));
+  const lip = LIPS_OUTER.map((_, k) => ({ x: 200 + 30 * Math.cos((k / LIPS_OUTER.length) * Math.PI * 2), y: 300 + 10 * Math.sin((k / LIPS_OUTER.length) * Math.PI * 2) }));
+  LIPS_OUTER.forEach((i, k) => (p[i] = lip[k]));
+  const a0 = polyArea(faceRegions(p).lipsOuter);
+  const a1 = polyArea(faceRegions(p, { overlip: 1 }).lipsOuter);
+  const am = polyArea(faceRegions(p, { overlip: -1 }).lipsOuter);
+  assert.ok(a1 > a0 * 1.1 && am < a0 * 0.9, `${am} ${a0} ${a1}`);
+});
+
+test('띠 망: 줄 2개 × 점 n개 → 삼각형 2(n-1)개, 부위 좌표는 첫 줄을 따라 누적', () => {
+  const m = bandMesh([[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }], [{ x: 0, y: 5 }, { x: 10, y: 5 }, { x: 20, y: 5 }]], (r) => 1 - r, 10);
+  assert.equal(m.length, 12);
+  assert.equal(Math.max(...m.map((q) => q.s)), 2);
+  assert.equal(Math.max(...m.map((q) => q.t)), 0.5);
 });
 
 test('색상표·룩: 값이 0~1 범위', () => {

@@ -136,7 +136,7 @@ export class BeautyEngine {
     if (track?.seg) this.renderer.uploadSeg(track.seg.flags, track.seg.width, track.seg.height);
 
     const t1 = performance.now();
-    const regions = face ? faceRegions(face.p) : null;
+    const regions = face ? faceRegions(face.p, { overlip: this.look.lip?.over }) : null;
     this.lastRegions = regions;
     const effects: ((t: FrameTextures) => void)[] = [];
     const hands = this.updateHands(track, info.now, w, h);
