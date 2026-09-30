@@ -11,7 +11,8 @@ export interface MakeupLook {
   lip?: { color: RGB; amount: number; gloss: number; over?: number; style?: LipStyle };
   /** pearl: 펄(반짝이·윤기) 0~1 */
   shadow?: { color: RGB; amount: number; pearl?: number };
-  blush?: { color: RGB; amount: number };
+  /** pos: 블러셔 위치 0 눈 밑 사과존(어려 보이는 아이돌식) ~ 0.5 볼 가운데 ~ 1 광대 위(세련된 느낌), size: 퍼짐 배율(1 기본, 1.5 넓게) */
+  blush?: { color: RGB; amount: number; pos?: number; size?: number };
   liner?: { color: RGB; amount: number };
   brow?: { color: RGB; amount: number };
   /** 윤곽: color 쉐딩 색(하이라이터는 밝은 샴페인으로 자동), amount 세기 */

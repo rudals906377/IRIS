@@ -308,7 +308,7 @@ function contourMeshes(p: Vec2[], faceW: number, visR: number, visL: number): { 
 }
 
 /** 478점(픽셀 좌표)에서 메이크업 영역을 만든다. overlip: -1(입술 안쪽으로) ~ 1(윤곽보다 크게) */
-export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?: number; overlip?: number; lipStyle?: LipStyle } = {}): FaceRegions {
+export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?: number; overlip?: number; lipStyle?: LipStyle; blushPos?: number; blushSize?: number } = {}): FaceRegions {
   const faceW = dist(p[FACE_SIDE_R], p[FACE_SIDE_L]);
   const sh = opts.shadowHeight ?? 0.62;
   const wing = opts.linerWing ?? 0.25;
@@ -324,17 +324,20 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
   // 먼 쪽 절반이 좁아질수록 옅게(코 뒤로 숨는 부분)
   const visR = smooth(0.1, 0.3, fracR);
   const visL = smooth(0.1, 0.3, 1 - fracR);
-  const blush = (cheek: number, bone: number, frac: number, vis: number): MVert[] => {
+  const blushPos = Math.max(0, Math.min(1, opts.blushPos ?? 0.5));
+  const blushSize = Math.max(0.6, Math.min(1.8, opts.blushSize ?? 1));
+  const blush = (cheek: number, bone: number, apple: number, frac: number, vis: number): MVert[] => {
     const c0 = p[cheek];
     const b = p[bone];
-    // 볼 중심과 광대 바깥의 사이, 광대 쪽으로 조금 올린 위치
-    const c = lerp(c0, b, 0.35);
+    // 위치 0: 눈 밑 사과존(apple)에 가깝게, 0.5: 볼 중심과 광대 사이, 1: 광대 위
+    const base = lerp(c0, b, 0.35);
+    const c = blushPos < 0.5 ? lerp(lerp(base, p[apple], 0.7), base, blushPos * 2) : lerp(base, lerp(b, p[apple], 0.3), (blushPos - 0.5) * 2);
     const dx = b.x - c0.x;
     const dy = b.y - c0.y;
     const l = Math.hypot(dx, dy) || 1;
     // 돌린 쪽 볼은 화면에서 좁아 보인다: 가로 반지름을 그 쪽 절반 폭에 맞춘다
     const k = Math.max(0.35, Math.min(1.3, frac * 2));
-    return ellipseMesh(c, faceW * 0.16 * k, faceW * 0.105, { x: dx / l, y: dy / l }, vis);
+    return ellipseMesh(c, faceW * 0.16 * k * blushSize, faceW * 0.105 * blushSize, { x: dx / l, y: dy / l }, vis);
   };
   // 오버립: 입술 가운데에서 위아래로 넓힌다(입꼬리는 거의 그대로)
   const over = Math.max(-1, Math.min(1, opts.overlip ?? 0));
@@ -387,7 +390,7 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
     eyeR,
     eyeL,
     brow: [...browMesh(p, BROW_R_LOWER, BROW_R_UPPER, faceW, visR), ...browMesh(p, BROW_L_LOWER, BROW_L_UPPER, faceW, visL)],
-    blush: [...blush(CHEEK_R, CHEEKBONE_R, fracR, visR), ...blush(CHEEK_L, CHEEKBONE_L, 1 - fracR, visL)],
+    blush: [...blush(CHEEK_R, CHEEKBONE_R, 118, fracR, visR), ...blush(CHEEK_L, CHEEKBONE_L, 347, 1 - fracR, visL)],
     ...contourMeshes(p, faceW, visR, visL),
     features: [
       grow(eyeR, 1.35),

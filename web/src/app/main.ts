@@ -7,6 +7,7 @@
 //   ?over=-1~1 ?pearl=0~1   입술 라인(오버립), 아이섀도 펄
 //   ?lstyle=full|gradient|blur  립 모양
 //   ?hair=<번호|이름>       헤어 색
+//   ?ref=<사진 주소>&refmode=auto|makeup|hair|nail|tattoo   참고 사진을 분석해 적용(시험용)
 //   ?nail=<번호|이름>&nstyle=solid|french|gradient|glitter|dots|chrome|jelly|cateye|aurora&nlen=0~1   네일
 //   ?tattoo=<도안 id>&place=<위치>&tsize=0~1   타투(예: tattoo=moon&place=forearmL)
 //   ?hud=1                  측정 표시 켜기
@@ -18,6 +19,10 @@ import type { MakeupLook, RGB } from '../beauty/makeup.ts';
 import type { LipStyle } from '../beauty/face-regions.ts';
 import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
 import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
+import { NATURAL_APPLE, NATURAL_BONE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
+import { measureFace, type FaceMeasure } from '../beauty/face-measure.ts';
+import { matchDarkness, matchLip, matchTint } from '../beauty/style-match.ts';
+import { lin, lipTarget, luma } from '../beauty/style-math.ts';
 import type { NailStyle } from '../beauty/nail.ts';
 import { BeautyEngine } from '../engine/engine.ts';
 import { fmt, summarize } from '../engine/stats.ts';
@@ -54,6 +59,10 @@ const placeEl = $<HTMLSelectElement>('place');
 const sizeRowEl = $<HTMLElement>('size-row');
 const sizeEl = $<HTMLInputElement>('size');
 const tattooFileEl = $<HTMLInputElement>('tattoo-file');
+const styleFileEl = $<HTMLInputElement>('style-file');
+const refEl = $<HTMLElement>('ref');
+const refImgEl = $<HTMLImageElement>('ref-img');
+const refTextEl = $<HTMLElement>('ref-text');
 const nstyleRowEl = $<HTMLElement>('nstyle-row');
 const nstyleEl = $<HTMLSelectElement>('nstyle');
 const nlenRowEl = $<HTMLElement>('nlen-row');
@@ -105,6 +114,9 @@ const NAIL_COLOR2: Record<NailStyle, RGB> = { solid: [1, 1, 1], french: [0.97, 0
 let nailLength = 0;
 /** 헤어 그라데이션 끝 색(옴브레) */
 let hairTip: RGB | null = null;
+/** 블러셔 위치(0 눈 밑 ~ 1 광대)와 퍼짐 배율 */
+let blushPos = 0.5;
+let blushSize = 1;
 let gloss = 0.3;
 /** 입술 라인(-1~1)과 아이섀도 펄(0~1) */
 let overlip = 0;
@@ -140,6 +152,7 @@ function applyLookToEngine(): void {
     const c = chosen[part];
     if (!c.color || part === 'hair' || part === 'nail') continue;
     if (part === 'lip') look.lip = { color: c.color, amount: c.amount, gloss, over: overlip, style: lipStyle };
+    else if (part === 'blush') look.blush = { color: c.color, amount: c.amount, pos: blushPos, size: blushSize };
     else if (part === 'shadow') look.shadow = { color: c.color, amount: c.amount, pearl };
     else look[part] = { color: c.color, amount: c.amount };
   }
@@ -171,6 +184,8 @@ function selectLook(name: LookName): void {
   pearlEl.value = String(pearl);
   lipStyle = l.lipStyle ?? 'full';
   lstyleEl.value = lipStyle;
+  blushPos = 0.5;
+  blushSize = 1;
   applyLookToEngine();
   renderRail();
 }
@@ -316,6 +331,170 @@ nstyleEl.addEventListener('change', () => {
   nailStyle = nstyleEl.value as NailStyle;
   applyLookToEngine();
 });
+
+// ---- 참고 사진 따라하기 ----
+let photoAnalyzer: PhotoAnalyzer | null = null;
+/** 마지막 분석 결과(개발 도구·자동 시험용) */
+let lastStyle: StyleResult | null = null;
+
+/** 지금 탭에 따라 사진에서 무엇을 가져올지 정한다 */
+function photoMode(): PhotoMode {
+  if (tab === 'hair') return 'hair';
+  if (tab === 'nail') return 'nail';
+  if (tab === 'tattoo') return 'tattoo';
+  return 'auto';
+}
+
+async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMode): Promise<StyleResult> {
+  photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+  setStatus('사진 분석 중…');
+  const r = await photoAnalyzer.analyze(source, mode, setStatus);
+  lastStyle = r;
+  const m = r.makeup;
+  if (m) {
+    // 사진의 메이크업으로 바꾼다(사진에 없는 부위는 지움). 피부 보정은 사진이 보정된 경우가 많아 약하게 켠다
+    currentLook = null;
+    for (const part of ['lip', 'blush', 'shadow', 'liner', 'brow', 'contour'] as const) {
+      const v = m[part];
+      chosen[part].color = v ? v.color : null;
+      if (v) chosen[part].amount = v.amount;
+    }
+    blushPos = m.blush?.pos ?? 0.5;
+    blushSize = m.blush?.size ?? 1;
+    chosen.base.color = c('#d1a38a');
+    chosen.base.amount = 0.35;
+    if (m.lip) {
+      gloss = m.lip.gloss;
+      glossEl.value = String(gloss);
+      lipStyle = m.lip.style;
+      lstyleEl.value = lipStyle;
+    }
+    pearl = 0;
+    pearlEl.value = '0';
+  }
+  if (r.hair) {
+    chosen.hair.color = r.hair.color;
+    chosen.hair.amount = r.hair.amount;
+    hairTip = r.hair.tip;
+  }
+  if (r.nail) {
+    chosen.nail.color = r.nail.color;
+    nailStyle = r.nail.style;
+    nstyleEl.value = nailStyle;
+  }
+  applyLookToEngine();
+  if (r.tattoo) {
+    tattoo.design = r.tattoo;
+    applyTattooToEngine();
+  }
+  renderRail();
+  refImgEl.src = r.thumb.toDataURL('image/jpeg', 0.8);
+  refTextEl.textContent = r.summary;
+  refEl.hidden = false;
+  setStatus(r.summary);
+  if (r.makeup && r.measure) {
+    // 영상이 아직 시작 전이면(사진 분석이 먼저 끝난 경우) 잠시 기다린다
+    for (let i = 0; i < 100 && !running; i++) await new Promise((res) => setTimeout(res, 100));
+    if (running) {
+      try {
+        await matchToPhoto(r.measure);
+      } catch (err) {
+        console.error('되먹임 실패', err);
+        lastMatch.push({ error: String(err) });
+      }
+    }
+  }
+  return r;
+}
+
+/** 되먹임 기록(자동 시험·디버그용) */
+let lastMatch: Record<string, unknown>[] = [];
+
+/**
+ * 사진 따라하기 되먹임: 화장 전 내 얼굴과 화장 후 내 얼굴을 같은 방법으로 재서,
+ * 사진과 같은 정도가 되도록 색·진하기를 두 번 고친다.
+ */
+async function matchToPhoto(photo: FaceMeasure): Promise<void> {
+  const saved = engine.look;
+  engine.look = {};
+  const nat = await engine.captureNext();
+  engine.look = saved;
+  if (!nat.face) return;
+  const my = measureFace(nat.image, nat.face.p);
+  lastMatch = [];
+  const spot = (m: FaceMeasure): RGB | null => (blushPos < 0.35 ? m.blushApple : blushPos > 0.65 ? m.blushBone : m.blushMid);
+  const natBlush = blushPos < 0.35 ? NATURAL_APPLE : blushPos > 0.65 ? NATURAL_BONE : NATURAL_MID;
+  const darker = (m: FaceMeasure): RGB | null => [m.shadowIn, m.shadowOut].filter((x): x is RGB => !!x).sort((a, b) => luma(a) - luma(b))[0] ?? null;
+  for (let it = 0; it < 2; it++) {
+    const cap = await engine.captureNext();
+    if (!cap.face) break;
+    const now = measureFace(cap.image, cap.face.p);
+    const log: Record<string, unknown> = { it };
+    if (chosen.blush.color && spot(photo) && spot(now) && spot(my)) {
+      const m = matchTint({ color: chosen.blush.color, amount: chosen.blush.amount }, spot(photo)!, spot(now)!, natBlush, spot(my)!);
+      chosen.blush.color = m.color;
+      chosen.blush.amount = m.amount;
+      log.blush = { want: spot(photo), got: spot(now), amount: m.amount };
+    }
+    if (chosen.shadow.color && darker(photo) && darker(now) && darker(my)) {
+      const m = matchTint({ color: chosen.shadow.color, amount: chosen.shadow.amount }, darker(photo)!, darker(now)!, NATURAL_SHADOW, darker(my)!);
+      chosen.shadow.color = m.color;
+      chosen.shadow.amount = m.amount;
+      log.shadow = { want: darker(photo), got: darker(now), amount: m.amount };
+    }
+    if (chosen.lip.color && photo.lip && now.lip) {
+      const want = lin(lipTarget(photo.lip, photo.skin));
+      const got = lin(lipTarget(now.lip, now.skin));
+      const m = matchLip({ color: chosen.lip.color, amount: chosen.lip.amount }, want, got);
+      chosen.lip.color = m.color;
+      log.lip = { want, got };
+    }
+    if (chosen.brow.color && photo.brow && now.brow && my.brow) {
+      const m = matchDarkness({ color: chosen.brow.color, amount: chosen.brow.amount }, luma(photo.brow), luma(now.brow), NATURAL_BROW_L, luma(my.brow));
+      chosen.brow.amount = m.amount;
+      log.brow = { want: luma(photo.brow), got: luma(now.brow), amount: m.amount };
+    }
+    if (chosen.liner.color && photo.linerL !== null && now.linerL !== null && my.linerL !== null) {
+      const m = matchDarkness({ color: chosen.liner.color, amount: chosen.liner.amount }, photo.linerL, now.linerL, NATURAL_LINER_L, my.linerL);
+      chosen.liner.amount = m.amount;
+      log.liner = { want: photo.linerL, got: now.linerL, amount: m.amount };
+    }
+    lastMatch.push(log);
+    applyLookToEngine();
+  }
+  renderRail();
+}
+const c = (h: string): RGB => fromHex(h);
+
+styleFileEl.addEventListener('change', async () => {
+  const f = styleFileEl.files?.[0];
+  styleFileEl.value = '';
+  if (!f) return;
+  try {
+    await applyPhoto(await createImageBitmap(f), photoMode());
+  } catch (err) {
+    console.error(err);
+    setStatus(`사진을 분석하지 못했습니다: ${(err as Error).message}`);
+  }
+});
+$('btn-photo').addEventListener('click', () => styleFileEl.click());
+$('ref-clear').addEventListener('click', () => {
+  refEl.hidden = true;
+  lastStyle = null;
+});
+/** 자동 시험용: 지금 화면을 재서 사진 측정값과 나란히 돌려준다 */
+async function checkPhoto(): Promise<Record<string, unknown> | null> {
+  if (!lastStyle?.measure) return null;
+  const cap = await engine.captureNext();
+  if (!cap.face) return null;
+  const now = measureFace(cap.image, cap.face.p);
+  const pick = (m: FaceMeasure): Record<string, unknown> => ({
+    apple: m.blushApple, mid: m.blushMid, bone: m.blushBone, shadowIn: m.shadowIn, shadowOut: m.shadowOut,
+    lip: m.lip ? lin(lipTarget(m.lip, m.skin)) : null, linerL: m.linerL, browL: m.brow ? luma(m.brow) : null,
+  });
+  return { photo: pick(lastStyle.measure), result: pick(now), match: lastMatch, settings: { blush: chosen.blush, shadow: chosen.shadow, lip: chosen.lip, brow: chosen.brow, liner: chosen.liner, blushPos } };
+}
+(window as unknown as { irisPhoto: unknown }).irisPhoto = { apply: applyPhoto, get last() { return lastStyle; }, get match() { return lastMatch; }, measure: measureFace, check: checkPhoto };
 
 tattooFileEl.addEventListener('change', async () => {
   const f = tattooFileEl.files?.[0];
@@ -572,6 +751,15 @@ function applyParams(): void {
     const ts = params.get('tsize');
     if (ts) tattoo.size = Number(ts);
     applyTattooToEngine();
+  }
+  const ref = params.get('ref');
+  if (ref) {
+    const mode = (params.get('refmode') ?? 'auto') as PhotoMode;
+    void fetch(ref)
+      .then((res) => res.blob())
+      .then((b) => createImageBitmap(b))
+      .then((bmp) => applyPhoto(bmp, mode))
+      .catch((err) => setStatus(`참고 사진을 열지 못했습니다: ${(err as Error).message}`));
   }
 }
 

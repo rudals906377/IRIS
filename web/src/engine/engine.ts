@@ -89,6 +89,7 @@ export class BeautyEngine {
   private readonly overlay: CanvasRenderingContext2D;
   private readonly lumaCtx: CanvasRenderingContext2D;
   private loopRaf = 0;
+  private captureWaiters: ((r: { image: ImageData; face: FaceFrame | null }) => void)[] = [];
 
   constructor(opts: { video: HTMLVideoElement; canvas: HTMLCanvasElement; overlay: HTMLCanvasElement; wasmBase: string }) {
     this.source = new VideoSource(opts.video);
@@ -147,7 +148,7 @@ export class BeautyEngine {
     if (track?.seg) this.renderer.uploadSeg(track.seg.flags, track.seg.width, track.seg.height);
 
     const t1 = performance.now();
-    const regions = face ? faceRegions(face.p, { overlip: this.look.lip?.over, lipStyle: this.look.lip?.style }) : null;
+    const regions = face ? faceRegions(face.p, { overlip: this.look.lip?.over, lipStyle: this.look.lip?.style, blushPos: this.look.blush?.pos, blushSize: this.look.blush?.size }) : null;
     this.lastRegions = regions;
     const effects: ((t: FrameTextures) => void)[] = [];
     const hands = this.updateHands(track, info.now, w, h);
@@ -175,6 +176,13 @@ export class BeautyEngine {
     }
     const t2 = performance.now();
     this.renderer.draw({ useSeg: this.settings.useSeg, refine: this.settings.refine, debugSeg: this.settings.debugSeg, effects });
+    if (this.captureWaiters.length > 0) {
+      // 합성 결과를 읽어 달라는 요청(사진 따라하기의 되먹임 측정용)
+      const image = this.renderer.readFrame();
+      const ws = this.captureWaiters;
+      this.captureWaiters = [];
+      for (const cb of ws) cb({ image, face });
+    }
     this.drawOverlay(face, w, h);
     const t3 = performance.now();
 
@@ -191,6 +199,11 @@ export class BeautyEngine {
       skipped,
       person: face !== null,
     });
+  }
+
+  /** 다음에 그리는 합성 화면과 그때의 얼굴 점을 받는다. */
+  captureNext(): Promise<{ image: ImageData; face: FaceFrame | null }> {
+    return new Promise((res) => this.captureWaiters.push(res));
   }
 
   /** 몸 관절점(0~16번)을 픽셀 좌표로 바꾸고 떨림을 줄인다. 잠깐 놓치면 마지막 값을 유지. */

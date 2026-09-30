@@ -20,6 +20,14 @@ for (let i = 0; i < combos.length; i++) {
     console.log('준비 시간 초과', i);
   }
   if (c.settings) await page.evaluate((v) => Object.assign(window.iris.settings, v), c.settings);
+  if (c.ref) {
+    // 참고 사진 분석이 끝날 때까지
+    try {
+      await page.waitForFunction(() => window.irisPhoto && window.irisPhoto.last, null, { timeout: 120000 });
+    } catch {
+      console.log('사진 분석 시간 초과', i);
+    }
+  }
   await page.waitForTimeout(Number(waitMs));
   const view = page.locator('#view');
   let clip;
@@ -47,7 +55,8 @@ for (let i = 0; i < combos.length; i++) {
   const st = await page.evaluate(() => {
     const f = window.iris.lastFace;
     const r = window.iris.lastRegions;
-    return { status: document.getElementById('status')?.textContent, hands: window.iris.lastHands.length, face: !!f, conf: f ? +f.confidence.toFixed(2) : null, faceW: r ? Math.round(r.faceW) : null };
+    const st = window.irisPhoto?.last;
+    return { status: document.getElementById('status')?.textContent, hands: window.iris.lastHands.length, face: !!f, photo: st ? { summary: st.summary, debug: st.makeup?.debug } : undefined, conf: f ? +f.confidence.toFixed(2) : null, faceW: r ? Math.round(r.faceW) : null };
   });
   console.log(i, c.src, c.look, '|', JSON.stringify(st));
 }

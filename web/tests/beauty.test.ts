@@ -158,3 +158,83 @@ test('타투 격자: 가로로 긴 도안은 팔을 따라 돌리고, 목에서�
   const wNeck = Math.hypot(neck.data[(row + 12) * 5] - neck.data[row * 5], neck.data[(row + 12) * 5 + 1] - neck.data[row * 5 + 1]);
   assert.ok(wNeck <= 30.01, `목 도안 폭 ${wNeck}`);
 });
+
+// ---- 사진 → 설정 계산 ----
+import { dominantColors, gam, hairTarget, illumination, isSkin, lin, lipTarget, tintTarget, REF } from '../src/beauty/style-math.ts';
+
+test('립 목표색: 기준 피부·중간 조명이면 사진 입술색이 그대로 목표색', () => {
+  const lip = lin([0.8, 0.35, 0.35]);
+  const t = lipTarget(lip, REF);
+  const back = lin(t);
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(back[i] - lip[i]) < 0.01);
+});
+
+test('립 목표색: 어두운 조명의 사진은 목표색이 더 밝게 나온다(조명을 되돌림)', () => {
+  const lip = lin([0.5, 0.2, 0.2]);
+  const darkSkin = REF.map((v) => v * 0.4) as [number, number, number];
+  const il = illumination(darkSkin);
+  assert.ok(il[0] < 1 && il[1] < 1);
+  const t = lipTarget(lip, darkSkin);
+  assert.ok(lin(t)[0] > lip[0]);
+});
+
+test('비치는 색: 자연 비율과 같으면 화장 없음, 볼이 붉으면 붉은 블러셔', () => {
+  const natural: [number, number, number] = [0.98, 0.87, 0.83];
+  assert.equal(tintTarget(natural, natural, 0.9, 0.28), null);
+  const t = tintTarget([0.97, 0.72, 0.66], natural, 0.9, 0.28)!;
+  assert.ok(t);
+  const l = lin(t.color);
+  // 빨강은 거의 유지, 초록·파랑은 줄어든 색
+  assert.ok(l[0] / REF[0] > 0.9 && l[1] / REF[1] < 0.7 && l[2] / REF[2] < 0.7);
+});
+
+test('헤어: 위아래 색이 다르면 옴브레', () => {
+  const dark = lin([0.2, 0.15, 0.12]);
+  const light = lin([0.8, 0.65, 0.45]);
+  assert.equal(hairTarget(dark, dark, dark).tip, null);
+  const o = hairTarget(dark, dark, light);
+  assert.ok(o.tip && gam(light)[0] - o.tip[0] < 0.01);
+});
+
+test('주요 색과 피부 판정', () => {
+  const px: [number, number, number][] = [];
+  for (let i = 0; i < 60; i++) px.push(lin([0.1, 0.2, 0.6]));
+  for (let i = 0; i < 20; i++) px.push(lin([0.9, 0.9, 0.9]));
+  const d = dominantColors(px, 2);
+  assert.ok(d[0].share > 0.7 && gam(d[0].color)[2] > 0.5);
+  assert.ok(isSkin(lin([0.85, 0.65, 0.55])));
+  assert.ok(!isSkin(lin([0.2, 0.3, 0.8])));
+});
+
+// ---- 되먹임 계산 ----
+import { matchDarkness, matchLip, matchTint } from '../src/beauty/style-match.ts';
+
+test('되먹임: 내 결과가 사진보다 옅으면 진하기를 올리고, 같으면 유지', () => {
+  const natural: [number, number, number] = [0.98, 0.94, 0.92];
+  const cur = { color: gam([0.6, 0.19, 0.11]) as [number, number, number], amount: 0.5 };
+  const want: [number, number, number] = [0.96, 0.78, 0.74];
+  const weak: [number, number, number] = [0.97, 0.86, 0.83];
+  const up = matchTint(cur, want, weak, natural, natural);
+  // 결과가 옅으면 색 편차가 커진다(초록이 더 줄어듦)
+  assert.ok(lin(up.color)[1] < lin(cur.color)[1]);
+  const same = matchTint(cur, want, want, natural, natural);
+  assert.ok(Math.abs(lin(same.color)[1] - lin(cur.color)[1]) < 0.02);
+  // 사진에 블러셔가 없으면 거의 끈다
+  const none = matchTint(cur, natural, weak, natural, natural);
+  assert.ok(none.amount <= 0.2);
+});
+
+test('되먹임: 립은 결과/목표 비율로 색을 고친다', () => {
+  const cur = { color: gam([0.5, 0.2, 0.2]) as [number, number, number], amount: 0.85 };
+  const m = matchLip(cur, [0.5, 0.2, 0.2], [0.4, 0.25, 0.2]);
+  const l = lin(m.color);
+  assert.ok(l[0] > 0.5 && l[1] < 0.2 && Math.abs(l[2] - 0.2) < 0.01);
+});
+
+test('되먹임: 어두운 부위는 밝기 비율로 진하기를 맞추고, 내 쪽이 이미 더 어두우면 끈다', () => {
+  const m = matchDarkness({ color: [0, 0, 0], amount: 0.4 }, 0.25, 0.4, 0.5, 0.5);
+  assert.ok(m.amount > 0.4);
+  // 사진 눈썹(0.36/0.44)보다 내 자연 눈썹(0.21)이 더 어둡다 → 최소
+  const off = matchDarkness({ color: [0, 0, 0], amount: 0.4 }, 0.36, 0.21, 0.44, 0.21);
+  assert.equal(off.amount, 0.1);
+});

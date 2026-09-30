@@ -215,6 +215,21 @@ export class Renderer {
     }
   }
 
+  /** 방금 그린 화면을 읽는다(같은 프레임 안에서만 유효). 반환: 위가 0행인 RGBA */
+  readFrame(): ImageData {
+    const gl = this.gl;
+    const W = this.width;
+    const H = this.height;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const buf = new Uint8ClampedArray(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    // WebGL은 아래가 0행이므로 뒤집는다
+    const out = new Uint8ClampedArray(W * H * 4);
+    const row = W * 4;
+    for (let y = 0; y < H; y++) out.set(buf.subarray(y * row, (y + 1) * row), (H - 1 - y) * row);
+    return new ImageData(out, W, H);
+  }
+
   /** 거울 루프백 측정용 단색 화면. */
   drawSolid(white: boolean): void {
     const gl = this.gl;

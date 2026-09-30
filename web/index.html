@@ -42,7 +42,8 @@
       </section>
 
       <nav class="rail" id="rail" aria-label="뷰티 선택">
-        <div class="tabs" id="tabs"></div>
+        <div class="tabs" id="tabs"><button class="tab photo" id="btn-photo" title="마음에 드는 사진을 올리면 그 사진의 색·스타일을 내게 적용합니다">📷 사진 따라하기</button></div>
+        <div class="ref" id="ref" hidden><img id="ref-img" alt="참고 사진" /><span id="ref-text"></span><button id="ref-clear" title="참고 사진 지우기">✕</button></div>
         <div class="swatches" id="swatches"></div>
         <div class="amount-row">
           <label id="amount-row">진하기 <input type="range" id="amount" min="0.05" max="1" step="0.01" value="0.6" /></label>
@@ -60,6 +61,7 @@
           <label id="size-row" hidden>크기 <input type="range" id="size" min="0" max="1" step="0.01" value="0.5" /></label>
         </div>
         <input type="file" id="tattoo-file" accept="image/*" hidden />
+        <input type="file" id="style-file" accept="image/*" hidden />
       </nav>
 
       <aside class="panel" id="panel" hidden>

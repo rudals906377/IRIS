@@ -298,6 +298,34 @@ button.on {
   background: repeating-linear-gradient(45deg, #2a2f3a 0 5px, #3a404d 5px 10px);
 }
 
+.tab.photo {
+  margin-left: auto;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+}
+
+.ref {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 0 6px;
+  color: var(--muted, #aab);
+}
+
+.ref img {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.ref button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+
 .swatch .dot.design {
   background: #f3ede6 center / 80% no-repeat;
   border-radius: 8px;
