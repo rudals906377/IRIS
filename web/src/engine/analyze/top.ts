@@ -45,7 +45,10 @@ function runAt(runs: Run[], x: number): Run | undefined {
   return runs.find((r) => r.x0 <= x && x <= r.x1);
 }
 
-export function analyzeTop(mask0: Uint8Array, w: number, h: number): TopAnalysis | null {
+/**
+ * @param rgba 사진 픽셀(있으면 소매를 몸판 옆에 접어 붙인 사진에서 안쪽 접힘선을 찾는 데 쓴다)
+ */
+export function analyzeTop(mask0: Uint8Array, w: number, h: number, rgba?: Uint8ClampedArray): TopAnalysis | null {
   const warnings: string[] = [];
   // 앞이 열린 지퍼 재킷·카디건: 가운데의 세로 틈을 메운 윤곽으로 형태를 분석한다(라벨은 원래 윤곽에만).
   const mask = closeCenterGap(mask0, w, h);
@@ -95,9 +98,8 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number): TopAnalysis
   }
   if (!hemRun) return null;
   const hemY = torsoBottom - Math.round(H * 0.01);
-  const hemL: Vec2 = { x: hemRun.x1, y: hemY };
-  const hemR: Vec2 = { x: hemRun.x0, y: hemY };
-  const hemHalf = (hemRun.x1 - hemRun.x0) / 2;
+  const hemL0: Vec2 = { x: hemRun.x1, y: hemY };
+  const hemR0: Vec2 = { x: hemRun.x0, y: hemY };
 
   // 몸판 가장자리 추적(아래 → 위): 각 행에서 중심을 포함한 구간
   const torsoEdge: { y: number; x0: number; x1: number; right: boolean; leftSide: boolean }[] = [];
@@ -192,11 +194,30 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number): TopAnalysis
   if (sl && sr) pairs.push([sl, sr]);
   if (hl && sr && !hr) pairs.push([hl, sr]);
   if (sl && hr && !hl) pairs.push([sl, hr]);
-  if (!pairs.length) return null;
   let bestResult: TopAnalysis | null = null;
   const consider = (r: TopAnalysis): void => {
     if (!bestResult || r.confidence > bestResult.confidence + 0.02) bestResult = r;
   };
+  // 소매를 몸판 옆에 접어 붙인 사진(재킷·셔츠·니트 상품 컷에 흔함): 윤곽에 틈이 없으므로
+  // 옷 안쪽의 세로 접힘선(소매 안쪽 가장자리의 그늘)을 몸판 옆선으로 보고, 겨드랑이 높이는 비율로 추정한다.
+  const fold = rgba ? foldLines(mask, rgba, w, cx, top, H, left, right) : null;
+  if (fold) {
+    const chest = fold.xL - fold.xR;
+    const topAt = (x: number): number => {
+      const xi = Math.round(x);
+      for (let y = top; y <= bottom; y++) if (mask[y * w + xi]) return y;
+      return top;
+    };
+    const shoulderY = (topAt(fold.xL - chest * 0.04) + topAt(fold.xR + chest * 0.04)) / 2;
+    const y = shoulderY + chest * 0.45;
+    const r = finish({ x: fold.xL, y }, { x: fold.xR, y }, [...warnings, '소매가 몸판 옆에 접혀 있어 접힘선으로 몸판을 나눴습니다'], {
+      L: { x: fold.xL, y: hemY },
+      R: { x: fold.xR, y: hemY },
+    });
+    r.confidence *= 0.92;
+    consider(r);
+  }
+  if (!pairs.length) return bestResult;
   for (const [aL, aR] of pairs) {
     const r = finish(aL, aR, [...warnings]);
     consider(r);
@@ -223,7 +244,10 @@ export function analyzeTop(mask0: Uint8Array, w: number, h: number): TopAnalysis
   }
   return bestResult;
 
-  function finish(armpitL: Vec2, armpitR: Vec2, warnings: string[]): TopAnalysis {
+  function finish(armpitL: Vec2, armpitR: Vec2, warnings: string[], hemO?: { L: Vec2; R: Vec2 }): TopAnalysis {
+  const hemL = hemO?.L ?? hemL0;
+  const hemR = hemO?.R ?? hemR0;
+  const hemHalf = (hemL.x - hemR.x) / 2;
 
   // 윤곽 윗선
   const ytop = new Float32Array(w).fill(NaN);
@@ -678,4 +702,55 @@ function largestLabelComponent(labels: Uint8Array, w: number, h: number, id: num
   const out = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) out[i] = seen[i] === best && best > 0 ? 1 : 0;
   return out;
+}
+
+/**
+ * 옷 안쪽의 세로 접힘선: 몸판 가운데 양쪽에서, 옷 안쪽(가장자리 제외) 픽셀의 가로 밝기 변화가
+ * 여러 줄에 걸쳐 같은 x에 모이는 곳. 소매가 몸판 위·옆에 겹친 가장자리가 여기에 해당한다.
+ */
+function foldLines(mask: Uint8Array, rgba: Uint8ClampedArray, w: number, cx: number, top: number, H: number, left: number, right: number): { xL: number; xR: number } | null {
+  const W = right - left + 1;
+  const gray = (i: number): number => rgba[i * 4] * 0.299 + rgba[i * 4 + 1] * 0.587 + rgba[i * 4 + 2] * 0.114;
+  const score = new Float32Array(w);
+  const count = new Float32Array(w);
+  const inner = 4;
+  for (let y = Math.round(top + H * 0.4); y < Math.round(top + H * 0.88); y++) {
+    for (let x = left + inner; x <= right - inner; x++) {
+      const i = y * w + x;
+      if (!mask[i] || !mask[i - inner] || !mask[i + inner] || !mask[i - w * inner] || !mask[i + w * inner]) continue;
+      // 3줄 평균 가로 기울기
+      let g = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const j = i + dy * w;
+        g += gray(j + 2) + gray(j + 1) - gray(j - 1) - gray(j - 2);
+      }
+      score[x] += Math.abs(g) / 6;
+      count[x]++;
+    }
+  }
+  const prof = new Float32Array(w);
+  for (let x = 0; x < w; x++) prof[x] = count[x] > H * 0.2 ? score[x] / count[x] : 0;
+  // 3px 이동 평균
+  const sm = new Float32Array(w);
+  for (let x = 1; x < w - 1; x++) sm[x] = (prof[x - 1] + prof[x] + prof[x + 1]) / 3;
+  const vals = Array.from(sm.slice(left, right + 1)).filter((v) => v > 0).sort((a, b) => a - b);
+  const med = vals[vals.length >> 1] ?? 0;
+  const peak = (a: number, b: number): number | null => {
+    let best = -1;
+    let bx = -1;
+    for (let x = Math.round(Math.min(a, b)); x <= Math.round(Math.max(a, b)); x++) {
+      if (x < 1 || x >= w - 1) continue;
+      if (sm[x] > best) {
+        best = sm[x];
+        bx = x;
+      }
+    }
+    return bx >= 0 && best > Math.max(2.5, med * 2.2) ? bx : null;
+  };
+  const xL = peak(cx + W * 0.16, cx + W * 0.42);
+  const xR = peak(cx - W * 0.42, cx - W * 0.16);
+  if (xL === null || xR === null) return null;
+  // 좌우 대칭이어야 한다
+  if (Math.abs(xL - cx - (cx - xR)) > W * 0.08) return null;
+  return { xL, xR };
 }

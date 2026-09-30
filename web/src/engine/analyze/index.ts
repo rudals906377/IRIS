@@ -234,7 +234,7 @@ export async function analyzeProductImage(
   opts.onStatus?.('옷 영역 분리 중…');
   const rule = removeBackground(img);
   let best: { mask: Uint8Array; a: TopAnalysis; method: AnalyzeReport['method'] } | null = null;
-  const ruleA = analyzeTop(rule.mask, work.w, work.h);
+  const ruleA = analyzeTop(rule.mask, work.w, work.h, data);
   if (ruleA) best = { mask: rule.mask, a: ruleA, method: 'rule' };
 
   let texSrc: CanvasImageSource = src;
@@ -265,7 +265,7 @@ export async function analyzeProductImage(
     try {
       const seg = await getMagic(opts.wasmBase);
       const mm = magicMask(seg, workCanvas, rule, img);
-      const magicA = analyzeTop(mm, work.w, work.h);
+      const magicA = analyzeTop(mm, work.w, work.h, data);
       if (magicA && (!best || magicA.confidence > best.a.confidence + 0.05)) {
         best = { mask: mm, a: magicA, method: 'magic' };
         texSrc = src;
@@ -369,7 +369,7 @@ export function quickAssess(src: HTMLImageElement | ImageBitmap | HTMLCanvasElem
   const rule = removeBackground({ data, width: work.w, height: work.h });
   // 배경이 단색이 아니면(모델 착용·연출 사진) 규칙 방식 결과를 믿지 않는다.
   const bgPenalty = rule.spread > 40 ? 0.3 : rule.spread > 20 ? 0.7 : 1;
-  const a = analyzeTop(rule.mask, work.w, work.h);
+  const a = analyzeTop(rule.mask, work.w, work.h, data);
   return { confidence: (a?.confidence ?? 0) * bgPenalty, sleeve: a?.sleeve ?? null };
 }
 

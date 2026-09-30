@@ -13,7 +13,7 @@ for (const m of meta) {
   const data = new Uint8ClampedArray(readFileSync(join(work, `img${m.i}.rgba`)));
   const t0 = performance.now();
   const bg = removeBackground({ data, width: m.w, height: m.h });
-  const a = analyzeTop(bg.mask, m.w, m.h);
+  const a = analyzeTop(bg.mask, m.w, m.h, data);
   const ms = performance.now() - t0;
   writeFileSync(join(work, `mask${m.i}.bin`), bg.mask);
   if (a) writeFileSync(join(work, `lab${m.i}.bin`), a.labels);

@@ -105,7 +105,7 @@ export class TopRig {
         v,
         topLen: dist(p00, p10),
         bottomLen: dist(p01, p11),
-        rootWidth: dist(p00, p01),
+        rootWidth: sleeveRootWidth(asset, d.partId, p00, p10, p01, p11),
         endWidth: dist(p10, p11),
       });
     }
@@ -326,4 +326,36 @@ function armLateralLimit(body: BodyFrame, sm: Vec2, axisDir: Vec2, u: Vec2, side
     }
     return Infinity;
   };
+}
+
+/**
+ * 소매 뿌리 폭(상품 픽셀): 보통은 어깨점~겨드랑이 거리지만, 소매를 몸판 옆에 늘어뜨려 찍은 사진은
+ * 그 선이 소매 길이 방향과 거의 나란해 실제 폭보다 훨씬 길다. 그래서 소매 축에 수직인 방향으로
+ * 뿌리 근처(축의 10~30%) 소매 픽셀의 실제 폭을 재어, 두 값 중 작은 쪽을 쓴다.
+ */
+function sleeveRootWidth(asset: GarmentAsset, partId: number, p00: Vec2, p10: Vec2, p01: Vec2, p11: Vec2): number {
+  const edge = dist(p00, p01);
+  const root = mid(p00, p01);
+  const axis = sub(mid(p10, p11), root);
+  const len = Math.hypot(axis.x, axis.y);
+  if (len < 1) return edge;
+  const a = scale(axis, 1 / len);
+  const n = perp(a);
+  let lo = Infinity;
+  let hi = -Infinity;
+  const { labels, width: w, height: h } = asset;
+  const step = Math.max(1, Math.round(Math.min(w, h) / 256));
+  for (let y = 0; y < h; y += step) {
+    for (let x = 0; x < w; x += step) {
+      if (labels[y * w + x] !== partId) continue;
+      const d = { x: x - root.x, y: y - root.y };
+      const t = dot(d, a) / len;
+      if (t < 0.1 || t > 0.3) continue;
+      const u = dot(d, n);
+      if (u < lo) lo = u;
+      if (u > hi) hi = u;
+    }
+  }
+  const measured = hi - lo;
+  return Number.isFinite(measured) && measured > 2 ? Math.min(edge, measured) : edge;
 }
