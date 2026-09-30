@@ -19,10 +19,12 @@ import type { MakeupLook, RGB } from '../beauty/makeup.ts';
 import type { LipStyle } from '../beauty/face-regions.ts';
 import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
 import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
-import { NATURAL_APPLE, NATURAL_BONE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
+import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
 import { measureFace, type FaceMeasure } from '../beauty/face-measure.ts';
 import { matchDarkness, matchLip, matchTint } from '../beauty/style-match.ts';
-import { lin, lipTarget, luma } from '../beauty/style-math.ts';
+import { analyzeStyle } from '../beauty/style-ai.ts';
+import { hintsFromStyleAI, type StyleHints } from '../beauty/style-attributes.ts';
+import { gam, lin, lipTarget, luma } from '../beauty/style-math.ts';
 import type { NailStyle } from '../beauty/nail.ts';
 import { BeautyEngine } from '../engine/engine.ts';
 import { fmt, summarize } from '../engine/stats.ts';
@@ -349,6 +351,20 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
   setStatus('사진 분석 중…');
   const r = await photoAnalyzer.analyze(source, mode, setStatus);
+  // 스타일 AI: 무늬·모양·기법(색은 위에서 잰 값을 쓴다). 실패해도 색 적용은 계속한다
+  if ($<HTMLInputElement>('opt-style-ai').checked && source instanceof ImageBitmap) {
+    try {
+      const cat = mode === 'auto' ? 'auto' : mode;
+      const ai = await analyzeStyle(source, cat, (p) => {
+        if (p.status === 'progress' && p.file && p.progress !== undefined) setStatus(`스타일 AI 모델 내려받는 중 ${Math.round(p.progress)}%`);
+        else if (p.status === 'ready') setStatus('스타일 AI 분석 중…');
+      });
+      r.ai = { hints: hintsFromStyleAI(ai), headline: ai.headline, description: ai.description_ko };
+      applyHints(r, r.ai.hints);
+    } catch (err) {
+      console.warn('스타일 AI를 쓰지 못했습니다(색만 적용)', err);
+    }
+  }
   lastStyle = r;
   const m = r.makeup;
   if (m) {
@@ -389,7 +405,7 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   }
   renderRail();
   refImgEl.src = r.thumb.toDataURL('image/jpeg', 0.8);
-  refTextEl.textContent = r.summary;
+  refTextEl.textContent = r.ai?.headline ? `${r.summary} · AI: ${r.ai.headline}` : r.summary;
   refEl.hidden = false;
   setStatus(r.summary);
   if (r.makeup && r.measure) {
@@ -407,12 +423,60 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   return r;
 }
 
+/**
+ * 스타일 AI 힌트를 분석 결과에 얹는다: 종류(모양·무늬·기법)는 AI가, 색은 측정값이 정한다.
+ * 측정에서 못 찾은 부위는 그 종류의 기본색으로 채우고, AI가 '없음'이라 하면 뺀다.
+ */
+function applyHints(r: StyleResult, h: StyleHints): void {
+  const m = r.makeup;
+  if (m && h.makeup) {
+    const k = h.makeup;
+    if (m.lip) {
+      if (k.lipStyle) m.lip.style = k.lipStyle;
+      if (k.gloss === 'glossy') m.lip.gloss = Math.max(m.lip.gloss, 0.55);
+      else if (k.gloss === 'matte') m.lip.gloss = Math.min(m.lip.gloss, 0.12);
+    }
+    if (k.shadow) {
+      const defaults: Record<string, RGB> = { shade: c('#8a5a44'), smoky: c('#4a4550'), pearl: c('#c9a27a'), color: c('#7a6ab8'), pink: c('#d98fa0') };
+      if (!m.shadow) m.shadow = { color: defaults[k.shadow], amount: k.shadow === 'smoky' ? 0.8 : 0.5 };
+      else if (k.shadow === 'smoky') m.shadow = { color: gam(lin(m.shadow.color).map((v) => v * 0.6) as RGB), amount: Math.max(m.shadow.amount, 0.75) };
+    }
+    if (k.liner === 'cat') m.liner = { color: [0.1, 0.08, 0.08], amount: 0.9 };
+    else if (k.liner === 'soft' && !m.liner) m.liner = { color: [0.23, 0.16, 0.13], amount: 0.45 };
+    if (k.blush === 'none') m.blush = undefined;
+    else if (k.blush && !m.blush) m.blush = { color: k.blush === 'coral' ? c('#cb795e') : c('#cb7979'), amount: 0.9, pos: 0.15, size: 1.25 };
+    if (k.contour === 'shading') m.contour = { color: c('#8c7a70'), amount: Math.max(m.contour?.amount ?? 0, 0.5) };
+    else if (k.contour === 'highlight') m.contour = { color: c('#9a7862'), amount: Math.max(m.contour?.amount ?? 0, 0.35) };
+    if (k.base === 'dewy') {
+      chosen.base.amount = 0.45;
+      if (m.lip) m.lip.gloss = Math.max(m.lip.gloss, 0.45);
+    } else if (k.base === 'matte') chosen.base.amount = 0.5;
+  }
+  if (r.hair && h.hair?.tech) {
+    if ((h.hair.tech === 'ombre' || h.hair.tech === 'balayage') && !r.hair.tip) {
+      // 끝이 밝은 그라데이션: 잰 색을 뿌리로, 끝은 그보다 밝게
+      r.hair.tip = gam(lin(r.hair.color).map((v) => Math.min(1, v * 1.8 + 0.03)) as RGB);
+    } else if (h.hair.tech === 'solid') r.hair.tip = null;
+  }
+  if (r.nail && h.nail) {
+    if (h.nail.style) r.nail.style = h.nail.style;
+    if (h.nail.length !== undefined) {
+      nailLength = h.nail.length;
+      nlenEl.value = String(nailLength);
+    }
+  }
+  if (r.tattoo && h.tattoo) {
+    if (h.tattoo.place) tattoo.place = h.tattoo.place;
+    if (h.tattoo.size !== undefined) tattoo.size = h.tattoo.size;
+  }
+}
+
 /** 되먹임 기록(자동 시험·디버그용) */
 let lastMatch: Record<string, unknown>[] = [];
 
 /**
  * 사진 따라하기 되먹임: 화장 전 내 얼굴과 화장 후 내 얼굴을 같은 방법으로 재서,
- * 사진과 같은 정도가 되도록 색·진하기를 두 번 고친다.
+ * 사진과 같은 정도가 되도록 색·진하기를 세 번 고친다.
  */
 async function matchToPhoto(photo: FaceMeasure): Promise<void> {
   const saved = engine.look;
@@ -422,24 +486,25 @@ async function matchToPhoto(photo: FaceMeasure): Promise<void> {
   if (!nat.face) return;
   const my = measureFace(nat.image, nat.face.p);
   lastMatch = [];
-  const spot = (m: FaceMeasure): RGB | null => (blushPos < 0.35 ? m.blushApple : blushPos > 0.65 ? m.blushBone : m.blushMid);
-  const natBlush = blushPos < 0.35 ? NATURAL_APPLE : blushPos > 0.65 ? NATURAL_BONE : NATURAL_MID;
+  // 비교 위치: 광대 자리는 머리카락이 섞여 불안정하므로 눈 밑(사과존) 또는 볼 가운데만 쓴다
+  const spot = (m: FaceMeasure): RGB | null => (blushPos < 0.35 ? m.blushApple : m.blushMid);
+  const natBlush = blushPos < 0.35 ? NATURAL_APPLE : NATURAL_MID;
   const darker = (m: FaceMeasure): RGB | null => [m.shadowIn, m.shadowOut].filter((x): x is RGB => !!x).sort((a, b) => luma(a) - luma(b))[0] ?? null;
-  for (let it = 0; it < 2; it++) {
+  for (let it = 0; it < 3; it++) {
     const cap = await engine.captureNext();
     if (!cap.face) break;
     const now = measureFace(cap.image, cap.face.p);
     const log: Record<string, unknown> = { it };
     if (chosen.blush.color && spot(photo) && spot(now) && spot(my)) {
       const m = matchTint({ color: chosen.blush.color, amount: chosen.blush.amount }, spot(photo)!, spot(now)!, natBlush, spot(my)!);
-      chosen.blush.color = m.color;
-      chosen.blush.amount = m.amount;
+      chosen.blush.color = m.amount > 0 ? m.color : null;
+      chosen.blush.amount = m.amount > 0 ? m.amount : 0.35;
       log.blush = { want: spot(photo), got: spot(now), amount: m.amount };
     }
     if (chosen.shadow.color && darker(photo) && darker(now) && darker(my)) {
       const m = matchTint({ color: chosen.shadow.color, amount: chosen.shadow.amount }, darker(photo)!, darker(now)!, NATURAL_SHADOW, darker(my)!);
-      chosen.shadow.color = m.color;
-      chosen.shadow.amount = m.amount;
+      chosen.shadow.color = m.amount > 0 ? m.color : null;
+      chosen.shadow.amount = m.amount > 0 ? m.amount : 0.45;
       log.shadow = { want: darker(photo), got: darker(now), amount: m.amount };
     }
     if (chosen.lip.color && photo.lip && now.lip) {

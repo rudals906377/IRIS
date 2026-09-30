@@ -219,9 +219,9 @@ test('되먹임: 내 결과가 사진보다 옅으면 진하기를 올리고, �
   assert.ok(lin(up.color)[1] < lin(cur.color)[1]);
   const same = matchTint(cur, want, want, natural, natural);
   assert.ok(Math.abs(lin(same.color)[1] - lin(cur.color)[1]) < 0.02);
-  // 사진에 블러셔가 없으면 거의 끈다
+  // 사진에 블러셔가 없으면 끈다
   const none = matchTint(cur, natural, weak, natural, natural);
-  assert.ok(none.amount <= 0.2);
+  assert.equal(none.amount, 0);
 });
 
 test('되먹임: 립은 결과/목표 비율로 색을 고친다', () => {
@@ -237,4 +237,36 @@ test('되먹임: 어두운 부위는 밝기 비율로 진하기를 맞추고, �
   // 사진 눈썹(0.36/0.44)보다 내 자연 눈썹(0.21)이 더 어둡다 → 최소
   const off = matchDarkness({ color: [0, 0, 0], amount: 0.4 }, 0.36, 0.21, 0.44, 0.21);
   assert.equal(off.amount, 0.1);
+});
+
+// ---- 스타일 AI 속성 → 힌트 ----
+import { hintsFromStyleAI } from '../src/beauty/style-attributes.ts';
+
+test('스타일 AI 힌트: 확신 높은 속성만 쓰고, 낮은 것은 weak에 남긴다', () => {
+  const h = hintsFromStyleAI({
+    category: 'makeup',
+    attributes: [
+      { group: 'lipTexture', label: '블러립', score: 0.8 },
+      { group: 'eye', label: '핑크·코랄 섀도', score: 0.7 },
+      { group: 'cheek', label: '홍조 블러셔', score: 0.3 },
+      { group: 'base', label: '물광', score: 0.9 },
+    ],
+    secondary: { category: 'hair', attributes: [{ group: 'colorTech', label: '옴브레', score: 0.6 }] },
+  });
+  assert.equal(h.makeup?.lipStyle, 'blur');
+  assert.equal(h.makeup?.shadow, 'pink');
+  assert.equal(h.makeup?.blush, undefined);
+  assert.deepEqual(h.weak, ['cheek:홍조 블러셔']);
+  assert.equal(h.makeup?.base, 'dewy');
+  assert.equal(h.hair?.tech, 'ombre');
+});
+
+test('스타일 AI 힌트: 네일 디자인·길이, 타투 부위·크기', () => {
+  const n = hintsFromStyleAI({ category: 'nail', attributes: [{ group: 'design', label: '자석', score: 0.9 }, { group: 'length', label: '롱네일', score: 0.6 }] });
+  assert.equal(n.nail?.style, 'cateye');
+  assert.equal(n.nail?.length, 0.8);
+  const t = hintsFromStyleAI({ category: 'tattoo', attributes: [{ group: 'placement', label: '쇄골', score: 0.7 }, { group: 'size', label: '미니', score: 0.8 }, { group: 'color', label: '블랙', score: 0.9 }] });
+  assert.equal(t.tattoo?.place, 'chest');
+  assert.equal(t.tattoo?.size, 0.15);
+  assert.equal(t.tattoo?.color, 'black');
 });

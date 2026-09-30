@@ -1,6 +1,10 @@
 <!doctype html>
 <html lang="ko">
   <head>
+    <!-- 스타일 AI 분류기(별도 저장소)가 쓰는 Transformers.js — 사진 따라하기를 켤 때만 내려받는다 -->
+    <script type="importmap">
+      { "imports": { "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/dist/transformers.min.js" } }
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="description" content="웹캠 속 내 얼굴에 메이크업·헤어 컬러·타투·네일을 실시간으로 입혀 보는 가상 뷰티 체험" />
@@ -72,6 +76,7 @@
 
         <h3>보기</h3>
         <label class="row"><input type="checkbox" id="opt-mirror" checked /> 거울 모드(좌우 반전)</label>
+        <label class="row"><input type="checkbox" id="opt-style-ai" checked /> 사진 따라하기에 스타일 AI 사용(처음 한 번 약 94MB 모델을 내려받아 무늬·모양·기법까지 읽음)</label>
         <label class="row"><input type="checkbox" id="opt-seg" checked /> 머리카락·피부 인식(분할) 사용 — 손이 얼굴을 가리면 화장을 숨김</label>
         <label class="row"><input type="checkbox" id="opt-refine" checked /> 머리카락 경계 정밀화</label>
 

@@ -27,22 +27,30 @@ export function matchTint(cur: TintSetting, want: RGB, got: RGB, natural: RGB, m
   const [wantC, gotC, natC, myNatC] = [want, got, natural, myNatural].map(nz);
   const w = wantC.map((v, i) => clamp(v / natC[i], 0.3, 1.6)) as RGB;
   const g = gotC.map((v, i) => clamp(v / myNatC[i], 0.3, 1.6)) as RGB;
-  const wantDev = 1 - w[1];
-  const gotDev = 1 - g[1];
-  // 사진에 그 부위 화장이 거의 없으면 옅게만
-  if (Math.abs(wantDev) < 0.02) return { ...cur, amount: Math.min(cur.amount, 0.2) };
+  // 기준 채널: 사진에서 자연과 가장 많이 다른 채널(붉은 블러셔는 초록, 푸른 섀도는 빨강)
+  let d = 1;
+  for (let i = 0; i < 3; i++) if (Math.abs(1 - w[i]) > Math.abs(1 - w[d])) d = i;
+  const wantDev = 1 - w[d];
+  const gotDev = 1 - g[d];
+  // 사진에 그 부위 화장이 거의 없으면 끈다(진하기 0 → 호출 쪽에서 색을 지운다)
+  if (Math.abs(wantDev) < 0.04) return { ...cur, amount: 0 };
   // 진하기는 넓고 부드럽게 보이도록 높게 두고(가루가 넓게 퍼진 느낌), 색의 편차로 정도를 맞춘다
   const amount = Math.max(cur.amount, 0.85);
   const cl = lin(cur.color);
   // 아직 거의 안 칠해졌으면(측정 잡음 수준) 편차를 크게 키운다
-  const boost = Math.abs(gotDev) < 0.015 ? 1.8 : clamp(wantDev / gotDev, 0.4, 2.5);
+  // 한 번에 너무 크게 바꾸지 않는다(측정 잡음으로 튀는 것을 막고, 반복하며 수렴)
+  // 내 결과가 반대 방향이거나 거의 없으면 키우고, 같은 방향이면 비율로
+  const boost = Math.abs(gotDev) < 0.015 || Math.sign(gotDev) !== Math.sign(wantDev) ? 1.5 : clamp(wantDev / gotDev, 0.6, 1.6);
+  // 색 편차 상한: 블러셔·섀도가 형광처럼 튀지 않게(초록·파랑은 기준의 40% 이상, 빨강은 120% 이하)
+  const lo: RGB = [0.7, 0.4, 0.4];
+  const hi: RGB = [1.2, 1.3, 1.3];
   const color = cl.map((v, i) => {
     const chanW = 1 - w[i];
     const chanG = 1 - g[i];
     // 채널별 비율(초록 기준 보정에 더해, 채널마다 남은 차이를 맞춘다)
-    const rel = Math.abs(chanG) > 0.01 && Math.abs(gotDev) > 0.015 ? (chanW / wantDev) / (chanG / gotDev) : 1;
-    const dev = (v / REF[i] - 1) * boost * clamp(rel, 0.5, 2);
-    return clamp(REF[i] * (1 + dev), 0.02, 1);
+    const rel = Math.abs(chanG) > 0.01 && Math.abs(gotDev) > 0.015 && Math.sign(gotDev) === Math.sign(wantDev) ? (chanW / wantDev) / (chanG / gotDev) : 1;
+    const dev = (v / REF[i] - 1) * boost * clamp(rel, 0.6, 1.6);
+    return clamp(REF[i] * clamp(1 + dev, lo[i], hi[i]), 0.02, 1);
   }) as RGB;
   return { color: gam(color), amount };
 }

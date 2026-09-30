@@ -11,6 +11,7 @@ import { chroma, measureFace, type FaceMeasure } from './face-measure.ts';
 import type { RGB } from './makeup.ts';
 import type { NailStyle } from './nail.ts';
 import type { TattooDesign } from './tattoo-designs.ts';
+import type { StyleHints } from './style-attributes.ts';
 import { dominantColors, gam, glossFrom, hairTarget, hex, isSkin, lin, lipTarget, luma, tintTarget } from './style-math.ts';
 
 const MODEL_BASE = 'https://storage.googleapis.com/mediapipe-models';
@@ -38,6 +39,8 @@ export interface MakeupStyle {
 
 export interface StyleResult {
   makeup?: MakeupStyle;
+  /** 스타일 AI(분류기) 결과 힌트와 한 줄 설명(켜져 있을 때) */
+  ai?: { hints: StyleHints; headline?: string; description?: string };
   /** 사진 얼굴 측정값(되먹임 비교용) */
   measure?: FaceMeasure;
   hair?: { color: RGB; tip: RGB | null; amount: number };
@@ -51,9 +54,10 @@ export interface StyleResult {
 
 // ---- 화장 안 한 얼굴의 자연 비율(맨얼굴 시험 사진 6장으로 잰 값, 밝기 1로 맞춘 색조). 사진 비율이 이보다 얼마나 다른지로 화장 정도를 정한다 ----
 /** 눈 밑 사과존·볼 가운데·광대 / 그 자리의 예상 피부색 */
-export const NATURAL_APPLE: RGB = [0.92, 1.02, 1.08];
-export const NATURAL_MID: RGB = [0.98, 1.0, 1.08];
-export const NATURAL_BONE: RGB = [0.92, 1.0, 1.12];
+// (화장 없는 사진 여러 장에서 사과존·볼은 예상 피부색과 거의 같은 색조였다. 스튜디오 조명의 푸른 반사광은 제외)
+export const NATURAL_APPLE: RGB = [0.97, 1.0, 1.02];
+export const NATURAL_MID: RGB = [0.98, 1.0, 1.03];
+export const NATURAL_BONE: RGB = [0.96, 1.0, 1.04];
 /** 윗눈꺼풀(더 어두운 쪽) 색조와 밝기 */
 export const NATURAL_SHADOW: RGB = [1.32, 0.95, 0.76];
 export const NATURAL_SHADOW_L = 0.38;
@@ -298,17 +302,25 @@ export function makeupFromMeasure(m: FaceMeasure): MakeupStyle {
   const spots: { r: RGB | null; nat: RGB; pos: number }[] = [
     { r: m.blushApple, nat: NATURAL_APPLE, pos: 0.15 },
     { r: m.blushMid, nat: NATURAL_MID, pos: 0.5 },
-    { r: m.blushBone, nat: NATURAL_BONE, pos: 0.85 },
+    // 광대 위치는 머리카락·귀 그늘 때문에 자동 판정에서 뺀다(스타일 AI가 셰이딩이라 하면 윤곽으로 처리)
   ];
+  void NATURAL_BONE;
+  void m.blushBone;
   debug.blush = `${fmt(m.blushApple)} | ${fmt(m.blushMid)} | ${fmt(m.blushBone)}`;
   let best: { t: { color: RGB; amount: number }; pos: number; dev: number } | null = null;
-  for (const sp of spots) {
-    if (!sp.r) continue;
+  const redOf = (sp: (typeof spots)[number]): number => {
+    if (!sp.r) return 0;
     const c = chroma(sp.r);
     // 붉은 기: 자연 색조보다 빨강이 초록보다 더 커야 한다(밝기만 다른 그늘·하이라이트는 제외)
-    const redness = c[0] / sp.nat[0] - c[1] / sp.nat[1];
-    const t = tintTarget(c, sp.nat, BLUSH_AMOUNT, BLUSH_KEFF, 0.05);
-    if (!t || redness < 0.05) continue;
+    return c[0] / sp.nat[0] - c[1] / sp.nat[1];
+  };
+  // 광대(bone)는 머리카락·귀 그늘이 섞이기 쉬워, 사과존·볼에도 붉은 기가 있고 광대가 그보다 뚜렷할 때만 광대 위치로 본다
+  const cheekRed = Math.max(redOf(spots[0]), redOf(spots[1]));
+  for (const sp of spots) {
+    if (!sp.r) continue;
+    const redness = redOf(sp);
+    const t = tintTarget(chroma(sp.r), sp.nat, BLUSH_AMOUNT, BLUSH_KEFF, 0.05);
+    if (!t || redness < 0.08 || cheekRed < 0.08) continue;
     if (!best || redness > best.dev) best = { t, pos: sp.pos, dev: redness };
   }
   if (best) {
