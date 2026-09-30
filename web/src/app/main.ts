@@ -159,7 +159,7 @@ function markSelected(id: string): void {
 }
 
 /** 사진(주소 또는 파일)을 자동 분석해 입힌다. */
-async function tryPhoto(src: string | Blob, name: string, id: string): Promise<void> {
+async function tryPhoto(src: string | Blob, name: string, id: string): Promise<boolean> {
   markSelected(id);
   setStatus('상품 사진 불러오는 중…');
   try {
@@ -169,6 +169,7 @@ async function tryPhoto(src: string | Blob, name: string, id: string): Promise<v
     const conf = Math.round(report.confidence * 100);
     const kind = report.sleeve === 'long' ? '긴팔' : report.sleeve === 'short' ? '반팔' : '민소매';
     setStatus(`${name} · 자동 분석 ${kind} · 신뢰도 ${conf}% · ${fmt(report.ms, 0)} ms${report.warnings.length ? ' · ' + report.warnings[0] : ''}`);
+    return true;
   } catch (err) {
     const msg = String(err instanceof Error ? err.message : err);
     const cors = /tainted|cross-origin|CORS|decode/i.test(msg);
@@ -177,6 +178,7 @@ async function tryPhoto(src: string | Blob, name: string, id: string): Promise<v
         ? '이 사이트의 사진은 웹에서 직접 불러올 수 없습니다. 사진을 저장해 올리거나 IRIS 확장 프로그램을 사용하세요.'
         : msg,
     );
+    return false;
   }
 }
 
@@ -226,7 +228,11 @@ async function initCatalog(): Promise<void> {
   if (page?.urls.length) {
     pageAlts = page.alts ?? {};
     const pick = await pickCandidate(page.urls);
-    await tryPhoto(page.urls[pick.index], page.title ?? `페이지 사진 ${pick.index + 1}`, `page-${pick.index}`);
+    // 고른 사진이 안 되면(모델 사진의 뒷모습·확대 등) 나머지 후보를 차례로 시도한다.
+    const order = [pick.index, ...page.urls.map((_, i) => i).filter((i) => i !== pick.index)].slice(0, 6);
+    for (const i of order) {
+      if (await tryPhoto(page.urls[i], page.title ?? `페이지 사진 ${i + 1}`, `page-${i}`)) break;
+    }
   } else if (img) {
     await tryPhoto(img, '주소로 불러온 사진', 'url');
   } else {

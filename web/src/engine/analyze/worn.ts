@@ -116,8 +116,10 @@ export function analyzeWorn(clothes: ArrayLike<number>, rgb: Uint8ClampedArray, 
     }
   }
   if (hemY < 0 || bestStep < 18) {
-    hemY = Math.round(hipY + T * 0.12);
-    warnings.push('밑단을 뚜렷이 찾지 못해 엉덩이 높이로 추정했습니다');
+    // 상반신 사진처럼 옷이 사진 아래 끝까지 이어지면 자르지 않는다.
+    const bottomCovered = rowColor(h - 1)[3] > 0.5 && h - 1 < hipY + T * 0.5;
+    hemY = bottomCovered ? h - 1 : Math.round(hipY + T * 0.12);
+    if (!bottomCovered) warnings.push('밑단을 뚜렷이 찾지 못해 엉덩이 높이로 추정했습니다');
   }
   // 소매 길이: 팔 선을 따라가다 옷이 끝나고 맨살이 나오는 곳(팔 선 매개변수 0~2: 어깨→팔꿈치→손목)
   const pointOnArm = (a: Vec2[], t: number): Vec2 => {
@@ -125,26 +127,75 @@ export function analyzeWorn(clothes: ArrayLike<number>, rgb: Uint8ClampedArray, 
     const u = t <= 1 ? t : t - 1;
     return { x: p.x + (q.x - p.x) * u, y: p.y + (q.y - p.y) * u };
   };
+  // 몸통 대표 색(가운데 띠의 중앙값)
+  const torsoColor: number[] = (() => {
+    const cs: number[][] = [[], [], []];
+    for (let y = Math.round(shoulderY + T * 0.25); y < Math.round(shoulderY + T * 0.6); y += 2) {
+      for (let x = Math.round(cx - SW * 0.2); x <= Math.round(cx + SW * 0.2); x += 2) {
+        if (x < 0 || x >= w || y < 0 || y >= h || !mask[y * w + x]) continue;
+        const i = y * w + x;
+        for (let c = 0; c < 3; c++) cs[c].push(rgb[i * 4 + c]);
+      }
+    }
+    return cs.map((a) => (a.length ? a.sort((p, q) => p - q)[a.length >> 1] : 128));
+  })();
+  // 겹쳐 입은 속옷(반팔 안의 긴팔 등)도 '옷'으로 분할되므로, 소매 윗부분 색에서 크게 달라지는 곳도 소매 끝으로 본다.
   const sleeveEnd = (a: Vec2[]): number => {
     let miss = 0;
+    let changed = 0;
+    let ref: [number, number, number] | null = null;
+    const acc = [0, 0, 0, 0];
     for (let t = 0.15; t <= 2; t += 0.02) {
       const p = pointOnArm(a, t);
       const x = Math.round(p.x);
       const y = Math.round(p.y);
       let n = 0;
       let on = 0;
+      const c = [0, 0, 0];
       for (let dy = -2; dy <= 2; dy++) {
         for (let dx = -2; dx <= 2; dx++) {
           const xx = x + dx;
           const yy = y + dy;
           if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
           n++;
-          on += mask[yy * w + xx];
+          const i = yy * w + xx;
+          if (!mask[i]) continue;
+          on++;
+          c[0] += rgb[i * 4];
+          c[1] += rgb[i * 4 + 1];
+          c[2] += rgb[i * 4 + 2];
         }
       }
       if (!n || on / n < 0.4) {
         if (++miss >= 3) return t - 0.04;
-      } else miss = 0;
+        continue;
+      }
+      miss = 0;
+      const col = [c[0] / on, c[1] / on, c[2] / on];
+      if (t < 0.4) {
+        acc[0] += col[0];
+        acc[1] += col[1];
+        acc[2] += col[2];
+        acc[3]++;
+        continue;
+      }
+      ref ??= [acc[0] / acc[3], acc[1] / acc[3], acc[2] / acc[3]];
+      // 그림자는 밝기만 바꾸고, 겹쳐 입은 다른 옷은 색조가 바뀐다: 밝기를 뺀 색조 차이 또는 아주 큰 색 차이
+      const chroma = (v: number[]): number[] => {
+        const m = (v[0] + v[1] + v[2]) / 3;
+        return [v[0] - m, v[1] - m, v[2] - m];
+      };
+      const ca = chroma(col);
+      const cb = chroma(ref);
+      const hueDiff = Math.hypot(ca[0] - cb[0], ca[1] - cb[1], ca[2] - cb[2]);
+      const ct = chroma(torsoColor);
+      const torsoHue = Math.hypot(ca[0] - ct[0], ca[1] - ct[1], ca[2] - ct[2]);
+      const torsoDiff = Math.hypot(col[0] - torsoColor[0], col[1] - torsoColor[1], col[2] - torsoColor[2]);
+      // 같은 옷의 그림자·주름이면 몸통 색과도 비슷하다. 몸통 색과도 달라야 다른 옷으로 본다.
+      const otherGarment = torsoHue > 16 || torsoDiff > 70;
+      if (otherGarment && (hueDiff > 16 || Math.hypot(col[0] - ref[0], col[1] - ref[1], col[2] - ref[2]) > 70)) {
+        if (++changed >= 4) return t - 0.06;
+      } else changed = 0;
     }
     return 2;
   };
@@ -191,6 +242,8 @@ export function analyzeWorn(clothes: ArrayLike<number>, rgb: Uint8ClampedArray, 
   const headCut = shoulderY - SW * 0.35;
   for (let y = 0; y < Math.max(0, headCut); y++) mask.fill(0, y * w, (y + 1) * w);
   mask = largestComponent(mask, w, h);
+
+
 
   // 몸판 옆선: 어깨 관절 → 엉덩이 관절
   const sideX = (s: Landmark, hp: Landmark, y: number): number => s.x + ((hp.x - s.x) * (y - s.y)) / (hp.y - s.y || 1);
@@ -252,9 +305,19 @@ export function analyzeWorn(clothes: ArrayLike<number>, rgb: Uint8ClampedArray, 
     const outer = (p.x - q.x) * side > 0;
     return na.d < (outer ? bandOut : bandIn);
   };
+  // 소매 끝을 지나 팔 위에 남은 옷(안에 겹쳐 입은 긴팔 소매)은 이 상품이 아니므로 지운다.
+  const beyondSleeve = (p: Vec2, a: Vec2[], end: number, side: 1 | -1, s: Landmark, hp: Landmark): boolean => {
+    if (end >= 1.95) return false;
+    const na = nearArm(p, a);
+    return na.s > end + 0.06 && na.d < bandOut && (p.x - sideX(s, hp, p.y)) * side > 0;
+  };
   for (let i = 0; i < w * h; i++) {
     if (!mask[i]) continue;
     const p = { x: i % w, y: (i / w) | 0 };
+    if (beyondSleeve(p, armL, endL, 1, sL, hL) || beyondSleeve(p, armR, endR, -1, sR, hR)) {
+      mask[i] = 0;
+      continue;
+    }
     let lab = 1;
     if (endL > 0.25 && inSleeve(p, armL, endL, 1, sL, hL, shoulderL, armpitL)) lab = 2;
     else if (endR > 0.25 && inSleeve(p, armR, endR, -1, sR, hR, shoulderR, armpitR)) lab = 3;
@@ -274,6 +337,10 @@ export function analyzeWorn(clothes: ArrayLike<number>, rgb: Uint8ClampedArray, 
     }
   }
   if (hx0 < 0) return null;
+  // 사진 아래 끝에서 잘린 옷(상반신 사진): 실제 밑단을 모른다.
+  if (hemRow >= h - 4) {
+    warnings.push('밑단이 사진 밖으로 잘렸습니다');
+  }
   const hemL = { x: hx1, y: hemRow };
   const hemR = { x: hx0, y: hemRow };
 

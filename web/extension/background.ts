@@ -88,6 +88,7 @@ function collectProductImages(): { urls: string[]; title?: string } {
     if (/_(detail|41_|42_|43_)/.test(p)) k *= 0.2;
     if (/(logo|icon|sprite|banner|swatch|avatar|badge|payment)/.test(p)) k *= 0.05;
     if (/\.svg$|\.gif$/.test(p)) k *= 0.01;
+    if (/\/a\/videos\//.test(p)) k = 0; // 나이키 동영상 첫 장면(저해상도)
     return k;
   };
   const add = (raw: string | null | undefined, score: number): void => {
@@ -103,6 +104,7 @@ function collectProductImages(): { urls: string[]; title?: string } {
     if (!/^https?:$/.test(url.protocol)) return;
     const k = sameImageKey(url);
     const s = score * nameHint(url);
+    if (s <= 0) return;
     const prev = found.get(k);
     if (!prev) found.set(k, { u: url.href, score: s, order: order++ });
     else if (s > prev.score) found.set(k, { ...prev, u: url.href, score: s });

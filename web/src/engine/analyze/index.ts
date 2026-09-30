@@ -62,7 +62,7 @@ function getPhotoModels(wasmBase: string): Promise<{ pose: PoseLandmarker; seg: 
       PoseLandmarker.createFromOptions(fs, {
         baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'CPU' },
         runningMode: 'IMAGE',
-        numPoses: 1,
+        numPoses: 2,
       }),
       ImageSegmenter.createFromOptions(fs, {
         baseOptions: { modelAssetPath: SEG_MODEL, delegate: 'CPU' },
@@ -77,6 +77,9 @@ function getPhotoModels(wasmBase: string): Promise<{ pose: PoseLandmarker; seg: 
   return photoModels;
 }
 
+/** 마지막 착용 사진 분석에서 사람(어깨가 보이는 자세)을 찾았는지 */
+let personSeen = false;
+
 interface WornResult {
   /** 옷 부분을 잘라 낸 원본 해상도 사진 */
   crop: HTMLCanvasElement;
@@ -90,7 +93,10 @@ async function analyzeWornPhoto(src: HTMLImageElement | ImageBitmap | HTMLCanvas
   const { pose, seg } = await getPhotoModels(wasmBase);
   const res = pose.detect(workCanvas);
   const lms = res.landmarks?.[0];
+  personSeen = !!lms && (lms[11].visibility ?? 0) > 0.5 && (lms[12].visibility ?? 0) > 0.5;
   if (!lms) return null;
+  // 두 사람 이상(커플 연출 사진 등)은 어느 옷인지 알 수 없어 쓰지 않는다.
+  if ((res.landmarks?.length ?? 0) > 1) return null;
   const W0 = workCanvas.width;
   const H0 = workCanvas.height;
   const P = (i: number): Landmark => ({ x: lms[i].x * W0, y: lms[i].y * H0, visibility: lms[i].visibility });
@@ -237,6 +243,7 @@ export async function analyzeProductImage(
   {
     // 사람이 찍혀 있으면 모델 착용 사진으로 분석한다(단색 배경의 모델 사진은 규칙 방식이 사람 전체를 옷으로 볼 수 있다).
     opts.onStatus?.('모델 착용 사진인지 확인 중…');
+    personSeen = false;
     try {
       const worn = await analyzeWornPhoto(src, workCanvas, opts.wasmBase);
       if (worn && worn.a.confidence >= 0.4) {
@@ -248,6 +255,10 @@ export async function analyzeProductImage(
     } catch (err) {
       console.warn('착용 사진 분석 실패', err);
     }
+  }
+  // 사람이 찍혔는데 착용 사진 분석이 안 되면(뒷모습·옆모습·여러 명·확대) 옷만 분리하는 모델도 사람째 잘라 오므로 쓰지 않는다.
+  if (personSeen && best?.method !== 'worn' && (!best || best.a.confidence < 0.7)) {
+    throw new Error('정면 상반신이 보이는 사진이 아닙니다(뒷모습·옆모습·확대·여러 명). 다른 사진을 골라 주세요.');
   }
   if (!best || best.a.confidence < 0.7) {
     opts.onStatus?.('정밀 분리 모델로 다시 분석 중…');
