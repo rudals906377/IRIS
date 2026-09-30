@@ -7,6 +7,7 @@
 - **크롬 확장 프로그램**: 쇼핑몰 상세페이지에서 바로 입어 보기 → [설치·사용 방법](docs/extension-guide.md) · [설치 파일](release/iris-extension.zip)
 - 조사·설계 문서: [docs/realtime-virtual-try-on-plan.md](docs/realtime-virtual-try-on-plan.md)
 - 작업 인수인계: [docs/handoff.md](docs/handoff.md)
+- 개발일지: [docs/devlog](docs/devlog/README.md)
 
 ## 특징
 

@@ -84,7 +84,8 @@ function collectProductImages(): { urls: string[]; title?: string } {
     if (/_laydown/.test(p)) k *= 3;
     if (/_0?1_(laydown|standard)/.test(p)) k *= 2; // 앞면
     if (/_0?2_(laydown|standard)/.test(p)) k *= 0.5; // 뒷면
-    if (/_(model|hover_model)/.test(p)) k *= 0.6;
+    if (/_standard/.test(p)) k *= 2; // 아디다스: 옷·신발만 찍은 사진(_00_plp_standard 등)
+    if (/_(model|hover_model)|_hm\d/.test(p)) k *= 0.6; // 아디다스: 모델 착용(_000_plp_model, _HM1)
     if (/_(detail|41_|42_|43_)/.test(p)) k *= 0.2;
     if (/(logo|icon|sprite|banner|swatch|avatar|badge|payment)/.test(p)) k *= 0.05;
     if (/\.svg$|\.gif$/.test(p)) k *= 0.01;
