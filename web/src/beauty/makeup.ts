@@ -184,6 +184,8 @@ export class MakeupRenderer {
     gl.useProgram(this.fill.prog);
     gl.uniform2f(this.fill.u.uSize, W, H);
     gl.bindVertexArray(this.vao);
+    // ARRAY_BUFFER 연결은 VAO에 저장되지 않는다: 다른 효과(타투·네일)가 바꿔 놓았을 수 있으므로 매번 다시 연결
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     const polys = (list: { pts: Vec2[]; tris: number[] }[], color: [number, number, number, number], eq: number): void => {
