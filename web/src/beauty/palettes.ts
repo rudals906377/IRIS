@@ -47,6 +47,14 @@ export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[
     { name: '말린 장미', color: c('#a5535c') },
     { name: '플럼', color: c('#7e2e4a') },
     { name: '오렌지', color: c('#e2552a') },
+    // 참고 사진(아이돌 화보 21장)의 입술 색을 재서 앱의 기준 피부·조명으로 환산한 값
+    { name: '아이돌 코랄 핑크', color: c('#d4766a') },
+    { name: 'MLBB 로즈', color: c('#c87a71') },
+    { name: '누드 로즈', color: c('#a97167') },
+    { name: '칠리 레드', color: c('#c4564c') },
+    { name: '브릭', color: c('#a05147') },
+    { name: '베리', color: c('#ab3f44') },
+    { name: '딥 레드', color: c('#882c2d') },
   ],
   shadow: [
     { name: '브라운', color: c('#8a5a44') },
@@ -63,6 +71,12 @@ export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[
     { name: '베이비 핑크', color: c('#f08ca0') },
     { name: '코랄', color: c('#f07a60') },
     { name: '로즈', color: c('#d4707f') },
+    // 참고 사진의 볼/이마 피부 색 비율을 재서 기본 진하기(0.6)에서 사진처럼 보이게 환산한 값
+    { name: '아이돌 코랄', color: c('#cb795e') },
+    { name: '쿨 핑크', color: c('#cb7979') },
+    { name: '피치 플러시', color: c('#d0835f') },
+    { name: '라즈베리', color: c('#c66264') },
+    { name: '웜 로즈', color: c('#bc6649') },
   ],
   liner: [
     { name: '블랙', color: c('#1a1414') },
@@ -88,6 +102,18 @@ export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[
     { name: '블루 블랙', color: c('#1c2230') },
     { name: '옴브레 브라운', color: c('#3a2a22'), tip: c('#c9a26a') },
     { name: '옴브레 핑크', color: c('#2a2226'), tip: c('#d88aa0') },
+    // 참고 사진(미용실 게시물 32장)의 머리카락 평균색을 분할로 잰 값
+    { name: '베이지 블론드', color: c('#ab9077') },
+    { name: '퓨어 베이지', color: c('#8e746a') },
+    { name: '애쉬 핑크 베이지', color: c('#a69291') },
+    { name: '딸기우유 블론드', color: c('#b49895') },
+    { name: '라벤더 그레이', color: c('#968280') },
+    { name: '실버 그레이', color: c('#858076') },
+    { name: '차콜 그레이', color: c('#424143') },
+    { name: '카키 블론드', color: c('#877e5b') },
+    { name: '옐로 블론드', color: c('#c1a479') },
+    { name: '오렌지 레드', color: c('#e1391f') },
+    { name: '투톤 오렌지', color: c('#c26f1e'), tip: c('#c9a828') },
   ],
   nail: [
     { name: '레드', color: c('#b3122a') },
@@ -99,14 +125,22 @@ export const PALETTES: Record<PartName, { name: string; color: RGB; tip?: RGB }[
     { name: '네이비', color: c('#1d2a52') },
     { name: '블랙', color: c('#161416') },
     { name: '밀키 화이트', color: c('#f1ece6') },
+    // 참고 사진(네일 27장)에서 많이 보인 색
+    { name: '젤리 블루', color: c('#40637b') },
+    { name: '아이스 블루', color: c('#9fb3cf') },
+    { name: '라일락 그레이', color: c('#afa9ba') },
+    { name: '실버', color: c('#c3c3bf') },
+    { name: '코발트', color: c('#2d4a8e') },
+    { name: '핑크 라일락', color: c('#c6b4be') },
+    { name: '스모키 모브', color: c('#7f7684') },
   ],
 };
 
-export type LookName = 'daily' | 'coral' | 'red' | 'smoky' | 'rose' | 'glam' | 'clear';
+export type LookName = 'daily' | 'idol' | 'coral' | 'red' | 'smoky' | 'rose' | 'glam' | 'clear';
 
 type PartValue = { color: RGB; amount: number };
 
-export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<PartName, PartValue>>; gloss?: number; pearl?: number }> = {
+export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<PartName, PartValue>>; gloss?: number; pearl?: number; lipStyle?: 'full' | 'gradient' | 'blur' }> = {
   daily: {
     label: '데일리',
     parts: {
@@ -117,6 +151,21 @@ export const LOOKS: Record<LookName, { label: string; parts: Partial<Record<Part
       brow: { color: c('#5a4030'), amount: 0.25 },
     },
     gloss: 0.3,
+  },
+  // 참고 사진에서 가장 많이 보인 조합: 블러 립 + 눈 밑까지 넓은 코랄 핑크 블러셔 + 옅은 로즈 섀도
+  idol: {
+    label: '아이돌',
+    parts: {
+      base: { color: c('#f0cfc6'), amount: 0.45 },
+      lip: { color: c('#d4766a'), amount: 0.75 },
+      shadow: { color: c('#c98a7a'), amount: 0.35 },
+      // 참고 사진과 같은 붉어짐(볼/이마 초록·파랑 비율 약 0.87배)이 되도록 측정해 맞춘 진하기
+      blush: { color: c('#cb795e'), amount: 0.9 },
+      liner: { color: c('#3b2a22'), amount: 0.4 },
+      brow: { color: c('#5a4030'), amount: 0.25 },
+    },
+    gloss: 0.5,
+    lipStyle: 'blur',
   },
   coral: {
     label: '코랄',

@@ -3,11 +3,11 @@
 // 개발·시험용 주소 인자:
 //   ?src=sample            예시 영상으로 바로 시작
 //   ?src=<경로>             같은 사이트의 동영상으로 바로 시작(시험용)
-//   ?look=<룩 이름>         처음 적용할 룩(daily, coral, red, smoky, rose, glam, clear)
+//   ?look=<룩 이름>         처음 적용할 룩(daily, idol, coral, red, smoky, rose, glam, clear)
 //   ?over=-1~1 ?pearl=0~1   입술 라인(오버립), 아이섀도 펄
 //   ?lstyle=full|gradient|blur  립 모양
 //   ?hair=<번호|이름>       헤어 색
-//   ?nail=<번호|이름>&nstyle=solid|french|gradient|glitter|dots   네일
+//   ?nail=<번호|이름>&nstyle=solid|french|gradient|glitter|dots|chrome|jelly|cateye|aurora&nlen=0~1   네일
 //   ?tattoo=<도안 id>&place=<위치>&tsize=0~1   타투(예: tattoo=moon&place=forearmL)
 //   ?hud=1                  측정 표시 켜기
 //   ?debug=lm,seg           개발자 표시(얼굴 점, 분할)
@@ -56,6 +56,8 @@ const sizeEl = $<HTMLInputElement>('size');
 const tattooFileEl = $<HTMLInputElement>('tattoo-file');
 const nstyleRowEl = $<HTMLElement>('nstyle-row');
 const nstyleEl = $<HTMLSelectElement>('nstyle');
+const nlenRowEl = $<HTMLElement>('nlen-row');
+const nlenEl = $<HTMLInputElement>('nlen');
 
 const engine = new BeautyEngine({
   video: $<HTMLVideoElement>('video'),
@@ -98,7 +100,9 @@ const chosen: Record<PartName, { color: RGB | null; amount: number }> = {
 };
 let nailStyle: NailStyle = 'solid';
 /** 무늬별 둘째 색: 프렌치 끝·도트는 흰색, 그라데이션은 흰색 쪽으로, 글리터는 금색 */
-const NAIL_COLOR2: Record<NailStyle, RGB> = { solid: [1, 1, 1], french: [0.97, 0.96, 0.94], gradient: [0.96, 0.9, 0.88], glitter: [0.95, 0.8, 0.45], dots: [0.97, 0.96, 0.94] };
+const NAIL_COLOR2: Record<NailStyle, RGB> = { solid: [1, 1, 1], french: [0.97, 0.96, 0.94], gradient: [0.96, 0.9, 0.88], glitter: [0.95, 0.8, 0.45], dots: [0.97, 0.96, 0.94], chrome: [1, 1, 1], jelly: [1, 1, 1], cateye: [0.92, 0.93, 0.97], aurora: [1, 1, 1] };
+/** 네일 연장 길이(0 자연 ~ 1 긴 아몬드) */
+let nailLength = 0;
 /** 헤어 그라데이션 끝 색(옴브레) */
 let hairTip: RGB | null = null;
 let gloss = 0.3;
@@ -143,7 +147,7 @@ function applyLookToEngine(): void {
   const h = chosen.hair;
   engine.hair = h.color ? { color: h.color, amount: h.amount, tip: hairTip ?? undefined } : null;
   const n = chosen.nail;
-  engine.nail = n.color ? { color: n.color, color2: NAIL_COLOR2[nailStyle], style: nailStyle, amount: n.amount } : null;
+  engine.nail = n.color ? { color: n.color, color2: NAIL_COLOR2[nailStyle], style: nailStyle, amount: n.amount, length: nailLength } : null;
   // 네일은 손 점이 필요하다: 처음 켤 때 손 추적을 켠다
   if (n.color && !trackerConfig.hands) {
     trackerConfig.hands = true;
@@ -165,6 +169,8 @@ function selectLook(name: LookName): void {
   glossEl.value = String(gloss);
   pearl = l.pearl ?? 0;
   pearlEl.value = String(pearl);
+  lipStyle = l.lipStyle ?? 'full';
+  lstyleEl.value = lipStyle;
   applyLookToEngine();
   renderRail();
 }
@@ -213,9 +219,11 @@ function renderRail(): void {
     placeRowEl.hidden = true;
     sizeRowEl.hidden = true;
     nstyleRowEl.hidden = true;
+    nlenRowEl.hidden = true;
     return;
   }
   nstyleRowEl.hidden = tab !== 'nail';
+  nlenRowEl.hidden = tab !== 'nail';
   if (tab === 'tattoo') {
     renderTattooRail();
     return;
@@ -300,6 +308,10 @@ function renderTattooRail(): void {
   sizeEl.value = String(tattoo.size);
 }
 
+nlenEl.addEventListener('input', () => {
+  nailLength = Number(nlenEl.value);
+  applyLookToEngine();
+});
 nstyleEl.addEventListener('change', () => {
   nailStyle = nstyleEl.value as NailStyle;
   applyLookToEngine();
@@ -546,6 +558,8 @@ function applyParams(): void {
       const ns = params.get('nstyle') as NailStyle | null;
       if (ns && ns in NAIL_COLOR2) nailStyle = ns;
       nstyleEl.value = nailStyle;
+      const nl = params.get('nlen');
+      if (nl) nlenEl.value = String((nailLength = Number(nl)));
       applyLookToEngine();
     }
   }
