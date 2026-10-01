@@ -87,6 +87,7 @@ const trackerConfig: TrackerConfig = {
   ...DEFAULT_TRACKER_CONFIG,
   delegate: (params.get('delegate') as Delegate) ?? 'GPU',
   segEvery: coarse ? 2 : 1,
+  headSeg: params.get('headseg') !== '0',
 };
 
 let running = false;
@@ -224,8 +225,8 @@ function renderRail(): void {
       return b;
     }),
   );
-  // 고정 버튼(사진 따라하기·생성)은 탭을 다시 그릴 때 사라지지 않게 뒤에 다시 붙인다
-  tabsEl.append(btnPhotoEl, btnGenEl);
+  // 사진 따라하기가 첫 번째 동작이 되도록 고정 버튼(사진 따라하기·생성)을 탭 앞에 둔다(탭을 다시 그려도 사라지지 않게)
+  tabsEl.prepend(btnPhotoEl, btnGenEl);
   if (tab === 'look') {
     swatchesEl.replaceChildren(
       ...(Object.keys(LOOKS) as LookName[]).map((name) => {

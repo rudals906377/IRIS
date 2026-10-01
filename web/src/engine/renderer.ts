@@ -9,9 +9,9 @@ interface Program {
   u: Uniforms;
 }
 
-/** 가이디드 필터 저해상도 배율(1/4)과 그에 맞는 카메라 밉맵 단계 */
-const GF_DOWN = 4;
-const GF_LOD = 2;
+/** 가이디드 필터 저해상도 배율(1/2)과 그에 맞는 카메라 밉맵 단계. 1/4에서는 앞머리 올이 뭉개져 1/2로 올림 */
+const GF_DOWN = 2;
+const GF_LOD = 1;
 
 interface GuidedFilter {
   statsProg: Program;

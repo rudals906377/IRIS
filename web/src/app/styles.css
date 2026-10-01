@@ -299,8 +299,14 @@ button.on {
 }
 
 .tab.photo {
-  margin-left: auto;
   border: 1px dashed rgba(255, 255, 255, 0.35);
+}
+
+.tab.photo.primary {
+  background: var(--accent, #f0a040);
+  color: #111;
+  border: none;
+  font-weight: 700;
 }
 
 .ref {

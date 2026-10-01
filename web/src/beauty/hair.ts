@@ -69,14 +69,26 @@ ${HAIR_PROB}
 void main() {
   vec3 c = textureLod(uCam, vUv, 0.0).rgb;
   float p = hairProb(vUv, c);
+  vec4 st = textureLod(uStats, vec2(0.5), 6.0);
+  float mean = st.r / max(st.g, 1e-4);
+  // 올 단위 경계: 확률이 어중간한 띠(머리카락과 피부·배경이 섞인 곳)에서는 픽셀 밝기로 올을 가려낸다.
+  // 머리카락이 주변보다 어두우면 주변 평균보다 어두운 픽셀이 올, 밝은 머리면 반대.
+  // 확률이 아주 낮은 곳(배경)은 건드리지 않는다: 배경 무늬가 올로 오인되지 않게
+  float band = smoothstep(0.15, 0.4, p) * smoothstep(0.95, 0.7, p);
+  if (band > 0.001) {
+    float Lp = dot(c, W);
+    float Lb = dot(textureLod(uCam, vUv, 2.5).rgb, W);
+    float dirn = mean < Lb ? -1.0 : 1.0;
+    float t = (Lp - Lb) * dirn / max(abs(mean - Lb), 0.04);
+    float strand = smoothstep(-0.15, 0.35, t);
+    p = clamp(p + (strand - 0.5) * band * 0.9, 0.0, 1.0);
+  }
   // 얼굴 피부·손 위에는 칠하지 않는다(분할이 이마 잔머리 쪽으로 번지는 것 방지)
   vec4 s = texture(uSeg, vUv);
   p *= 1.0 - smoothstep(0.5, 0.9, max(s.b, s.g));
   float m = smoothstep(0.25, 0.9, p) * uAmount;
   if (m < 0.003) discard;
 
-  vec4 st = textureLod(uStats, vec2(0.5), 6.0);
-  float mean = st.r / max(st.g, 1e-4);
   float var = max(st.a / max(st.g, 1e-4) - mean * mean, 1e-5);
   float L = dot(c, W);
   // 상대 밝기: 평균이면 1. 표준편차로 나눠 대비를 일정하게 맞춘 뒤 목표 대비(0.35)로 다시 편다.

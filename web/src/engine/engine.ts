@@ -304,13 +304,34 @@ export class BeautyEngine {
       ctx.canvas.height = h;
     }
     ctx.clearRect(0, 0, w, h);
-    if (!this.settings.debugLandmarks || !face) return;
-    ctx.fillStyle = 'rgba(0,255,180,0.8)';
+    if (!this.settings.debugLandmarks) return;
     const r = Math.max(1, w / 900);
-    for (const p of face.p) {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fill();
+    if (face) {
+      ctx.fillStyle = 'rgba(0,255,180,0.8)';
+      for (const p of face.p) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // 손 점 21개: 점과 번호(손톱 위치 맞추기용)
+    for (const hd of this.lastHands) {
+      ctx.strokeStyle = 'rgba(255,220,0,0.9)';
+      ctx.lineWidth = r;
+      const chains = [[0, 1, 2, 3, 4], [0, 5, 6, 7, 8], [0, 9, 10, 11, 12], [0, 13, 14, 15, 16], [0, 17, 18, 19, 20]];
+      for (const ch of chains) {
+        ctx.beginPath();
+        ch.forEach((i, k) => (k === 0 ? ctx.moveTo(hd.p[i].x, hd.p[i].y) : ctx.lineTo(hd.p[i].x, hd.p[i].y)));
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(255,60,60,0.95)';
+      ctx.font = `${Math.round(r * 10)}px sans-serif`;
+      hd.p.forEach((p, i) => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillText(String(i), p.x + r * 3, p.y - r * 3);
+      });
     }
   }
 

@@ -28,16 +28,22 @@ in float aVis;
 in float aSeed;
 in float aAspect;  // 손톱 폭 / 길이
 in vec2 aRef;      // 손가락 피부 기준점(카메라 uv)
+in vec2 aCen;      // 손톱 가운데(카메라 uv): 손톱판 자체의 색 기준
+in float aRefine;  // 1: 영상으로 가장자리를 넓혀도 됨, 0: 추정 모양만(엄지처럼 옆으로 누운 손가락)
 uniform vec2 uSize;
 out vec2 vLocal;
 out float vVis;
 out float vSeed;
 out float vAspect;
 out vec2 vRef;
+out vec2 vCen;
+out float vRefine;
 void main() {
   vLocal = aLocal;
   vAspect = aAspect;
   vRef = aRef;
+  vCen = aCen;
+  vRefine = aRefine;
   vVis = aVis;
   vSeed = aSeed;
   gl_Position = vec4(aPos.x / uSize.x * 2.0 - 1.0, 1.0 - aPos.y / uSize.y * 2.0, 0.0, 1.0);
@@ -60,6 +66,8 @@ in float vVis;
 in float vSeed;
 in float vAspect;
 in vec2 vRef;
+in vec2 vCen;
+in float vRefine;
 out vec4 o;
 const vec3 W = vec3(0.299, 0.587, 0.114);
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -85,14 +93,22 @@ void main() {
   float aa = fwidth(sd) * 1.2 + 1e-4;
   // 손가락 끝을 넘어간 연장 부분(아래는 손가락이 없으므로 피부·밝기 판단을 쓰지 않는다)
   float ext = uExt > 0.01 ? smoothstep(0.85, 1.05, y) : 0.0;
-  // 영상으로 경계 다듬기: 손톱은 같은 손가락 피부보다 밝다(기준점은 마지막 마디 관절 뒤 피부).
-  // 추정 손톱의 안쪽은 늘 칠하고, 가장자리 근처(안팎 0.35·반폭)는 밝기로 손톱인지 판단해 넓히거나 줄인다.
-  float Lref = dot(textureLod(uCam, vRef, 2.0).rgb, W);
-  float Ls = dot(textureLod(uCam, camUv, 1.0).rgb, W);
-  float bright = smoothstep(0.0, 0.07, Ls - Lref);
+  // 영상으로 경계 다듬기: 손톱판은 같은 손가락 피부와 색이 다르다(더 밝거나 분홍빛·흰빛). 기준점은 마지막 마디 관절 뒤 피부.
+  // 추정 손톱의 안쪽은 늘 칠하고, 가장자리 근처(안팎 0.35·반폭)는 피부와의 색 차이로 손톱인지 판단해 넓히거나 줄인다.
+  vec3 cref = textureLod(uCam, vRef, 2.0).rgb;
+  vec3 cs = textureLod(uCam, camUv, 1.0).rgb;
+  float Lref = dot(cref, W);
+  float Ls = dot(cs, W);
+  // 밝기 차이(손톱이 더 밝음)와 색 차이(분홍·흰 기) 중 큰 쪽.
+  // 단, 손톱 가운데 색과 비슷해야 손톱으로 본다(밝은 배경·벽으로 번지지 않게)
+  vec3 cnail = textureLod(uCam, vCen, 2.0).rgb;
+  float like = 1.0 - smoothstep(0.05, 0.12, distance(cs, cnail));
+  float bright = max(smoothstep(0.0, 0.07, Ls - Lref), smoothstep(0.04, 0.1, distance(cs, cref))) * like * vRefine;
   float core = smoothstep(0.0, -0.3 * hx, sd);
-  float reach = smoothstep(0.35 * hx + aa, 0.35 * hx - aa, sd);
-  float shape = reach * max(core, bright * smoothstep(0.35 * hx, 0.0, sd));
+  float reach = smoothstep(0.2 * hx + aa, 0.2 * hx - aa, sd);
+  // 넓히지 않는 손톱(엄지)은 추정 모양 그대로 부드러운 가장자리
+  float plain = smoothstep(aa, -aa, sd);
+  float shape = mix(plain, reach * max(core, bright * smoothstep(0.2 * hx, 0.0, sd)), vRefine);
   shape = mix(shape, smoothstep(aa, -aa, sd), ext);
   // 실제로 피부(손)가 보이는 곳에만: 물건 뒤로 숨은 손가락 끝은 칠하지 않는다
   float skin = texture(uSeg, camUv).g;
@@ -174,7 +190,7 @@ export class NailRenderer {
       const loc = gl.getAttribLocation(this.prog.prog, name);
       if (loc < 0) return;
       gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 36, offset);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 48, offset);
     };
     attr('aPos', 2, 0);
     attr('aLocal', 2, 8);
@@ -182,6 +198,8 @@ export class NailRenderer {
     attr('aSeed', 1, 20);
     attr('aAspect', 1, 24);
     attr('aRef', 2, 28);
+    attr('aCen', 2, 36);
+    attr('aRefine', 1, 44);
     gl.bindVertexArray(null);
   }
 
@@ -189,7 +207,7 @@ export class NailRenderer {
     if (nails.length === 0) return;
     const gl = this.gl;
     // 손톱마다 두 삼각형(6정점). 가장자리 흐림 여유로 10% 크게
-    const data = new Float32Array(nails.length * 6 * 9);
+    const data = new Float32Array(nails.length * 6 * 12);
     const ext = Math.max(0, Math.min(1, look.length)) * 1.2;
     let k = 0;
     nails.forEach((n, idx) => {
@@ -200,7 +218,7 @@ export class NailRenderer {
       const corner = (sx: number, sy: number): number[] => {
         // sy: 0 뿌리 ~ 1 끝, 여유 포함 −0.2 ~ 1.2(+연장)
         const along = (sy - 0.5) * n.len;
-        return [n.c.x + n.dir.x * along + px * sx * hw, n.c.y + n.dir.y * along + py * sx * hw, sx * 1.4, sy, n.vis, idx + 1, n.width / n.len, n.ref.x / t.width, n.ref.y / t.height];
+        return [n.c.x + n.dir.x * along + px * sx * hw, n.c.y + n.dir.y * along + py * sx * hw, sx * 1.4, sy, n.vis, idx + 1, n.width / n.len, n.ref.x / t.width, n.ref.y / t.height, n.c.x / t.width, n.c.y / t.height, n.finger === 0 ? 0 : 1];
       };
       const a = corner(-1, -0.2);
       const b = corner(1, -0.2);
@@ -208,7 +226,7 @@ export class NailRenderer {
       const d = corner(1, 1.2 + ext);
       for (const v of [a, b, c, b, d, c]) {
         data.set(v, k);
-        k += 9;
+        k += 12;
       }
     });
     const u = this.prog.u;

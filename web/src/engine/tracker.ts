@@ -31,6 +31,8 @@ export interface SegOutput {
   flags: Uint8ClampedArray;
   width: number;
   height: number;
+  /** 머리 주변을 따로 분할해 합쳤으면 그 영역(0~1 비율) */
+  headRect?: { x: number; y: number; w: number; h: number };
 }
 
 export interface TrackTimings {
@@ -57,6 +59,8 @@ export interface TrackerConfig {
   segmentation: boolean;
   /** 분할을 몇 프레임마다 돌릴지(1 = 매 프레임). */
   segEvery: number;
+  /** 머리 주변을 따로 잘라 다시 분할해 머리카락 경계를 세밀하게(얼굴이 보일 때만) */
+  headSeg: boolean;
   hands: boolean;
   /** 얼굴 점 추적(메이크업) */
   face: boolean;
@@ -68,6 +72,7 @@ export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
   delegate: 'GPU',
   segmentation: true,
   segEvery: 1,
+  headSeg: true,
   hands: false,
   face: true,
 };
@@ -76,11 +81,21 @@ export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
 const CLS = { background: 0, hair: 1, bodySkin: 2, faceSkin: 3, clothes: 4, others: 5 } as const;
 const SEG_W = 256;
 const SEG_H = 144;
+/** 머리 주변 잘라 분할하는 크기(모델 입력과 같은 정사각형)와 합친 결과의 폭 */
+const HEAD_W = 256;
+const HI_W = 512;
 
 export class Tracker {
   private fileset: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
   private pose: PoseLandmarker | null = null;
   private seg: ImageSegmenter | null = null;
+  /** 머리 주변만 잘라 다시 분할하는 두 번째 분할기(머리카락 올 해상도를 높인다) */
+  private segHead: ImageSegmenter | null = null;
+  private headCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+  private headCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
+  private lastFaceLm: NormalizedLandmark[] | null = null;
+  private lastGlobal: { flags: Uint8ClampedArray; w: number; h: number } | null = null;
+  private headTs = 0;
   private hands: HandLandmarker | null = null;
   private face: FaceLandmarker | null = null;
   private configured = false;
@@ -138,20 +153,25 @@ export class Tracker {
       if (next.segmentation && (!this.seg || delegateChanged)) {
         onStatus?.('분할 모델 불러오는 중…');
         this.seg?.close();
-        this.seg = await this.create((delegate) =>
+        this.segHead?.close();
+        const makeSeg = (delegate: Delegate): Promise<ImageSegmenter> =>
           ImageSegmenter.createFromOptions(this.fileset!, {
             baseOptions: { modelAssetPath: SEG_MODEL, delegate },
             runningMode: 'VIDEO',
             // 확률(0~1) 마스크를 받아야 경계가 계단 없이 부드럽다.
             outputCategoryMask: false,
             outputConfidenceMasks: true,
-          }),
-          next.delegate,
-        );
+          });
+        this.seg = await this.create(makeSeg, next.delegate);
+        // 같은 모델을 하나 더: 머리 주변 잘라낸 그림 전용(시각이 따로 흐르므로 분리)
+        this.segHead = await this.create(makeSeg, next.delegate);
       } else if (!next.segmentation && this.seg) {
         this.seg.close();
         this.seg = null;
+        this.segHead?.close();
+        this.segHead = null;
         this.lastSeg = null;
+        this.lastGlobal = null;
       }
       if (next.hands && (!this.hands || delegateChanged)) {
         onStatus?.('손 모델 불러오는 중…');
@@ -225,11 +245,19 @@ export class Tracker {
     }
 
     let seg: SegOutput | null = this.lastSeg;
-    if (this.seg && this.frameNo % Math.max(1, this.config.segEvery) === 0) {
+    if (this.seg) {
       const t0 = performance.now();
-      seg = this.runSeg(video, t);
+      const head = this.config.headSeg ? this.headRect(video.videoWidth, video.videoHeight) : null;
+      // 전체 분할은 segEvery 프레임마다(머리 분할을 할 때는 3배로 띄엄띄엄: 손·몸 피부는 천천히 변한다),
+      // 머리 주변 분할은 얼굴이 보이면 매 프레임
+      const every = Math.max(1, this.config.segEvery) * (head ? 3 : 1);
+      if (!this.lastGlobal || this.frameNo % every === 0) this.runSeg(video, t);
+      if (this.lastGlobal) {
+        const hair = head ? this.runHeadSeg(video, head) : null;
+        seg = this.merge(this.lastGlobal, hair, head, video.videoWidth, video.videoHeight);
+        this.lastSeg = seg;
+      }
       timings.seg = performance.now() - t0;
-      this.lastSeg = seg;
     }
 
     let hands: HandLandmarkerResult | null = null;
@@ -245,10 +273,166 @@ export class Tracker {
       timings.face = performance.now() - t0;
       face = r.faceLandmarks.length > 0 ? r.faceLandmarks[0] : null;
     }
+    this.lastFaceLm = face;
     return { pose, seg, hands, face, timings };
   }
 
-  private runSeg(video: HTMLVideoElement, t: number): SegOutput | null {
+  /** 앞 프레임 얼굴 점으로 머리 전체를 감싸는 정사각형(픽셀)을 정한다. 얼굴이 없으면 null */
+  private headRect(W: number, H: number): { x: number; y: number; size: number } | null {
+    const lm = this.lastFaceLm;
+    if (!lm || !W || !H) return null;
+    let x0 = 1;
+    let y0 = 1;
+    let x1 = 0;
+    let y1 = 0;
+    for (const q of lm) {
+      if (q.x < x0) x0 = q.x;
+      if (q.y < y0) y0 = q.y;
+      if (q.x > x1) x1 = q.x;
+      if (q.y > y1) y1 = q.y;
+    }
+    const fw = (x1 - x0) * W;
+    const fh = (y1 - y0) * H;
+    // 머리카락은 얼굴보다 위·옆으로 넓다: 얼굴 폭의 2.4배 정사각형, 중심은 얼굴 중심보다 위
+    const size = Math.max(fw * 2.4, fh * 2.0);
+    if (size < 64) return null;
+    const cx = ((x0 + x1) / 2) * W;
+    const cy = ((y0 + y1) / 2) * H - fh * 0.35;
+    let x = cx - size / 2;
+    let y = cy - size / 2;
+    const sz = Math.min(size, W, H);
+    x = Math.max(0, Math.min(W - sz, x));
+    y = Math.max(0, Math.min(H - sz, y));
+    return { x, y, size: sz };
+  }
+
+  /** 머리 주변을 잘라 분할하고 머리카락 확률(0~255, HEAD_W²)을 돌려준다 */
+  private runHeadSeg(video: HTMLVideoElement, head: { x: number; y: number; size: number }): Uint8ClampedArray | null {
+    if (!this.segHead) return null;
+    if (!this.headCanvas) {
+      this.headCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(HEAD_W, HEAD_W) : document.createElement('canvas');
+      this.headCanvas.width = HEAD_W;
+      this.headCanvas.height = HEAD_W;
+      this.headCtx = this.headCanvas.getContext('2d', { willReadFrequently: false }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+    }
+    this.headCtx!.drawImage(video, head.x, head.y, head.size, head.size, 0, 0, HEAD_W, HEAD_W);
+    this.headTs = Math.max(this.headTs + 1, Math.round(performance.now()));
+    let out: Uint8ClampedArray | null = null;
+    this.segHead.segmentForVideo(this.headCanvas as unknown as HTMLCanvasElement, this.headTs, (result) => {
+      const masks = result.confidenceMasks;
+      if (!masks || masks.length < 5) return;
+      const hair = masks[CLS.hair].getAsFloat32Array();
+      const w = masks[0].width;
+      const h = masks[0].height;
+      const arr = new Uint8ClampedArray(HEAD_W * HEAD_W);
+      if (w === HEAD_W && h === HEAD_W) {
+        for (let i = 0; i < arr.length; i++) arr[i] = hair[i] * 255;
+      } else {
+        for (let y = 0; y < HEAD_W; y++) {
+          const sy = Math.min(h - 1, Math.floor((y * h) / HEAD_W));
+          for (let x = 0; x < HEAD_W; x++) arr[y * HEAD_W + x] = hair[sy * w + Math.min(w - 1, Math.floor((x * w) / HEAD_W))] * 255;
+        }
+      }
+      out = arr;
+    });
+    return out;
+  }
+
+  /**
+   * 전체 분할(저해상도)을 HI_W 폭으로 키우고, 머리 영역의 머리카락(R)은 잘라 분할한 고해상도 값으로 바꾼다.
+   * 영역 가장자리는 서서히 섞어 이음새가 보이지 않게 한다.
+   */
+  private merge(g: { flags: Uint8ClampedArray; w: number; h: number }, hair: Uint8ClampedArray | null, head: { x: number; y: number; size: number } | null, frameW: number, frameH: number): SegOutput {
+    if (!hair || !head) return { flags: g.flags, width: g.w, height: g.h };
+    // 잘라 분할한 결과는 머리만 크게 보여 배경(벽 무늬 등)을 머리카락으로 착각할 때가 있다.
+    // 전체 분할의 '사람(A)·머리카락(R)'을 한 칸 넓힌 값으로 걸러, 사람 밖에서는 쓰지 않는다
+    const gate = new Uint8ClampedArray(g.w * g.h);
+    for (let y = 0; y < g.h; y++) {
+      for (let x = 0; x < g.w; x++) {
+        let m = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          const yy = Math.max(0, Math.min(g.h - 1, y + dy));
+          for (let dx = -1; dx <= 1; dx++) {
+            const i = (yy * g.w + Math.max(0, Math.min(g.w - 1, x + dx))) * 4;
+            const v = Math.max(g.flags[i], g.flags[i + 3]);
+            if (v > m) m = v;
+          }
+        }
+        gate[y * g.w + x] = m;
+      }
+    }
+    const W = HI_W;
+    const H = Math.round((HI_W * g.h) / g.w);
+    const out = new Uint8ClampedArray(W * H * 4);
+    const sx = g.w / W;
+    const sy = g.h / H;
+    // 전체 분할을 이중선형으로 키운다
+    for (let y = 0; y < H; y++) {
+      const fy = Math.min(g.h - 1.001, y * sy);
+      const y0 = fy | 0;
+      const ty = fy - y0;
+      for (let x = 0; x < W; x++) {
+        const fx = Math.min(g.w - 1.001, x * sx);
+        const x0 = fx | 0;
+        const tx = fx - x0;
+        const i00 = (y0 * g.w + x0) * 4;
+        const i10 = i00 + 4;
+        const i01 = i00 + g.w * 4;
+        const i11 = i01 + 4;
+        const o = (y * W + x) * 4;
+        for (let c = 0; c < 4; c++) {
+          out[o + c] = (g.flags[i00 + c] * (1 - tx) + g.flags[i10 + c] * tx) * (1 - ty) + (g.flags[i01 + c] * (1 - tx) + g.flags[i11 + c] * tx) * ty;
+        }
+      }
+    }
+    // 머리 영역: 잘라 분할한 머리카락 확률을 덮어쓴다(가장자리 8%는 섞음)
+    const rx0 = (head.x / frameW) * W;
+    const ry0 = (head.y / frameH) * H;
+    const rw = (head.size / frameW) * W;
+    const rh = (head.size / frameH) * H;
+    const feather = Math.max(2, rw * 0.08);
+    const xs = Math.max(0, Math.floor(rx0));
+    const ys = Math.max(0, Math.floor(ry0));
+    const xe = Math.min(W - 1, Math.ceil(rx0 + rw));
+    const ye = Math.min(H - 1, Math.ceil(ry0 + rh));
+    for (let y = ys; y <= ye; y++) {
+      const v = ((y - ry0) / rh) * HEAD_W;
+      const vy = Math.max(0, Math.min(HEAD_W - 1.001, v));
+      const y0 = vy | 0;
+      const ty = vy - y0;
+      const wy = Math.min(1, (y - ry0) / feather, (ry0 + rh - y) / feather);
+      if (wy <= 0) continue;
+      for (let x = xs; x <= xe; x++) {
+        const u = ((x - rx0) / rw) * HEAD_W;
+        const ux = Math.max(0, Math.min(HEAD_W - 1.001, u));
+        const x0 = ux | 0;
+        const tx = ux - x0;
+        const wx = Math.min(1, (x - rx0) / feather, (rx0 + rw - x) / feather);
+        const wgt = Math.min(wx, wy);
+        if (wgt <= 0) continue;
+        const h00 = hair[y0 * HEAD_W + x0];
+        const h10 = hair[y0 * HEAD_W + x0 + 1];
+        const h01 = hair[(y0 + 1) * HEAD_W + x0];
+        const h11 = hair[(y0 + 1) * HEAD_W + x0 + 1];
+        const hp = (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty;
+        const o = (y * W + x) * 4;
+        // 전체 분할 기준 사람 밖(넓힌 값 < 약 0.15)이면 잘라 분할한 값을 쓰지 않는다
+        const gx = Math.min(g.w - 1.001, x * sx);
+        const gy = Math.min(g.h - 1.001, y * sy);
+        const gx0 = gx | 0;
+        const gy0 = gy | 0;
+        const gtx = gx - gx0;
+        const gty = gy - gy0;
+        const gi = gy0 * g.w + gx0;
+        const gv = (gate[gi] * (1 - gtx) + gate[gi + 1] * gtx) * (1 - gty) + (gate[gi + g.w] * (1 - gtx) + gate[gi + g.w + 1] * gtx) * gty;
+        const keep = Math.max(0, Math.min(1, (gv - 25) / 60));
+        out[o] = out[o] * (1 - wgt) + hp * keep * wgt;
+      }
+    }
+    return { flags: out, width: W, height: H, headRect: { x: head.x / frameW, y: head.y / frameH, w: head.size / frameW, h: head.size / frameH } };
+  }
+
+  private runSeg(video: HTMLVideoElement, t: number): void {
     if (!this.segCanvas) {
       this.segCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(SEG_W, SEG_H) : document.createElement('canvas');
       this.segCanvas.width = SEG_W;
@@ -282,12 +466,15 @@ export class Tracker {
       }
       out = { flags, width: w, height: h };
     });
-    return out;
+    const o = out as SegOutput | null;
+    if (o) this.lastGlobal = { flags: o.flags, w: o.width, h: o.height };
   }
 
   close(): void {
     this.pose?.close();
     this.seg?.close();
+    this.segHead?.close();
+    this.segHead = null;
     this.hands?.close();
     this.face?.close();
     this.face = null;

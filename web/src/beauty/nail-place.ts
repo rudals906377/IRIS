@@ -34,6 +34,8 @@ export interface NailQuad {
   vis: number;
   /** 손가락 피부 기준점(마지막 마디 관절 조금 뒤): 손톱과 피부를 밝기로 가르는 기준 */
   ref: Vec2;
+  /** 손가락 번호(0 엄지 ~ 4 소지) */
+  finger: number;
 }
 
 /**
@@ -74,16 +76,26 @@ export function nailQuads(h: HandPoints, facingSign = 1): NailQuad[] {
       fingerVis = Math.min(1, Math.max(0, (cos + 0.1) / 0.4));
     }
     if (fingerVis * handVis < 0.02) return;
-    // 손톱 길이: 마지막 마디의 약 60%(엄지는 조금 더), 끝은 손가락 끝점 조금 안쪽
-    const len = seg * (thumb ? 0.66 : 0.6);
-    const c = lerp(d, t, thumb ? 0.6 : 0.62);
-    // 손가락 굵기는 마디 길이에 비례해 추정(엄지·검지는 굵고 소지는 가늘다)
-    const width = seg * [0.78, 0.66, 0.66, 0.64, 0.6][i];
+    // 손톱 길이: 마지막 마디의 약 절반. 끝점(TIP)은 손가락 끝에 거의 닿아 있으므로
+    // 손톱은 마디의 절반 지점 ~ 끝점까지(가운데 = 마디 끝에서 75% 지점). 실제 웹캠 캡처에 손 점을 겹쳐 맞춘 값
+    const len = seg * (thumb ? 0.55 : 0.5);
+    let c = lerp(d, t, thumb ? 0.72 : 0.75);
+    // 손톱 폭: 실제 손톱은 손가락보다 좁다. 엄지 > 검지·중지 > 약지 > 소지
+    let width = seg * [0.56, 0.5, 0.5, 0.48, 0.44][i];
     // 손가락 끝이 카메라 쪽으로 향하면(깊이 차이가 크면) 손톱이 짧아 보인다
     const dz = h.z[tip] - h.z[dip];
     const foreshort = Math.max(0.35, 1 - Math.abs(dz) * 6);
+    if (thumb) {
+      // 손등이 보일 때 엄지는 옆으로 누워 있어 손톱이 비스듬히(좁게) 보이고,
+      // 마디 축 위가 아니라 손바닥 반대쪽(다른 손가락에서 먼 쪽)으로 치우쳐 있다
+      width *= 0.75;
+      const nrm = { x: -dir.y, y: dir.x };
+      const away = sub(t, h.p[9]);
+      const side = nrm.x * away.x + nrm.y * away.y >= 0 ? 1 : -1;
+      c = { x: c.x + nrm.x * side * width * 0.3, y: c.y + nrm.y * side * width * 0.3 };
+    }
     const ref = { x: d.x - dir.x * seg * 0.2, y: d.y - dir.y * seg * 0.2 };
-    out.push({ c, dir, len: len * foreshort, width, vis: handVis * fingerVis, ref });
+    out.push({ c, dir, len: len * foreshort, width, vis: handVis * fingerVis, ref, finger: i });
   });
   return out;
 }

@@ -46,7 +46,7 @@ uniform vec2 uLow;      // 저해상도 크기(px)
 uniform float uLod;     // 저해상도에 맞는 카메라 밉맵 단계
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
-const int R = 4;
+const int R = 6;
 const vec3 W = vec3(0.299, 0.587, 0.114);
 void main() {
   vec2 fc = gl_FragCoord.xy / uLow;
@@ -76,7 +76,7 @@ uniform sampler2D uS1;
 uniform vec2 uLow;
 uniform float uEps;
 out vec4 o;
-const int R = 4;
+const int R = 6;
 void main() {
   vec2 fc = gl_FragCoord.xy / uLow;
   vec2 texel = 1.0 / uLow;
