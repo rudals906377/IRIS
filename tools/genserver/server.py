@@ -63,8 +63,8 @@ class GenerateBody(BaseModel):
     grow: float = 0.25
     extend: float = 0.0
     steps: int = 30
-    strength: float = 0.95
-    guidance: float = 7.0
+    strength: float | None = None  # 없으면 분야별 기본값(헤어 0.95, 네일 0.65, 타투 0.45)
+    guidance: float | None = None
     ip_scale: float = 0.6
     seed: int | None = None
     mask_only: bool = False

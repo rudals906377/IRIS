@@ -36,6 +36,10 @@ PROMPTS = {
         "blurry, smudged, text, watermark, extra limbs, deformed, cartoon",
     ),
 }
+# 분야별 기본 세기: 웹이 보내는 그림에는 실시간 합성(타투 도안·네일 색)이 이미 올라가 있으므로
+# 타투·네일은 그것을 살리면서 피부에 녹이는 정도만(낮은 strength), 헤어는 모양을 새로 그린다(높은 strength)
+DEFAULT_STRENGTH = {"hair": 0.95, "nail": 0.65, "tattoo": 0.45}
+DEFAULT_GUIDANCE = {"hair": 7.0, "nail": 7.5, "tattoo": 8.0}
 DEFAULT_DESC = {"hair": "the hairstyle from the reference photo", "nail": "the nail art from the reference photo", "tattoo": "the tattoo from the reference photo"}
 
 
@@ -48,8 +52,8 @@ class GenRequest:
     desc: str | None = None
     negative: str | None = None
     steps: int = 30
-    strength: float = 0.95
-    guidance: float = 7.0
+    strength: float | None = None
+    guidance: float | None = None
     ip_scale: float = 0.6
     seed: int | None = None
 
@@ -103,11 +107,16 @@ class Generator:
         import torch
 
         prompt, negative = self.prompt_for(req)
+        # 마스크 주변만 잘라서 그린다: 손톱·타투처럼 작은 영역도 세밀하게 나오고, 나머지는 손대지 않는다
+        x0, y0, x1, y1 = _crop_box(mask, W, H, margin=0.45, min_size=int(min(W, H) * 0.5))
+        crop = img.crop((x0, y0, x1, y1))
+        crop_mask = Image.fromarray(mask).crop((x0, y0, x1, y1))
+        cw, ch = crop.size
         # 생성 크기: 긴 변 MAX_SIDE 이하, 8의 배수
-        s = min(1.0, MAX_SIDE / max(W, H))
-        gw, gh = (max(64, int(W * s)) // 8) * 8, (max(64, int(H * s)) // 8) * 8
-        small = img.resize((gw, gh), Image.LANCZOS)
-        mask_img = Image.fromarray(mask).resize((gw, gh), Image.BILINEAR)
+        s = min(1.0, MAX_SIDE / max(cw, ch))
+        gw, gh = (max(64, int(cw * s)) // 8) * 8, (max(64, int(ch * s)) // 8) * 8
+        small = crop.resize((gw, gh), Image.LANCZOS)
+        mask_img = crop_mask.resize((gw, gh), Image.BILINEAR)
         gen = torch.Generator(device="cpu").manual_seed(req.seed if req.seed is not None else int(time.time()) % 100000)
         kwargs = dict(
             prompt=prompt,
@@ -117,8 +126,8 @@ class Generator:
             width=gw,
             height=gh,
             num_inference_steps=req.steps,
-            strength=req.strength,
-            guidance_scale=req.guidance,
+            strength=req.strength if req.strength is not None else DEFAULT_STRENGTH.get(req.category, 0.9),
+            guidance_scale=req.guidance if req.guidance is not None else DEFAULT_GUIDANCE.get(req.category, 7.0),
             generator=gen,
         )
         if req.reference is not None:
@@ -128,12 +137,41 @@ class Generator:
             self.pipe.set_ip_adapter_scale(0.0)
             # IP-Adapter가 켜져 있으면 입력이 필요하므로 빈 그림을 준다
             kwargs["ip_adapter_image"] = Image.new("RGB", (224, 224), (128, 128, 128))
-        log(f"생성 시작 {gw}x{gh}, {req.steps}단계: {prompt}")
-        result = self.pipe(**kwargs).images[0].resize((W, H), Image.LANCZOS)
+        log(f"생성 시작 {gw}x{gh} (잘라낸 {cw}x{ch} / 전체 {W}x{H}), {req.steps}단계: {prompt}")
+        gen_crop = self.pipe(**kwargs).images[0].resize((cw, ch), Image.LANCZOS)
+        result = img.copy()
+        result.paste(gen_crop, (x0, y0))
         # 마스크 밖은 원본 그대로(가장자리는 부드럽게)
         a = feather(mask, max(3, int(min(W, H) * 0.01)))[..., None]
         merged = (np.asarray(result).astype(np.float32) * a + np.asarray(img).astype(np.float32) * (1 - a)).clip(0, 255).astype(np.uint8)
-        return {"image": Image.fromarray(merged), "elapsed_ms": int((time.time() - t0) * 1000), "prompt": prompt, "model": MODEL_ID}
+        return {"image": Image.fromarray(merged), "elapsed_ms": int((time.time() - t0) * 1000), "prompt": prompt, "model": MODEL_ID, "crop": [x0, y0, x1, y1]}
+
+
+def _crop_box(mask: np.ndarray, W: int, H: int, margin: float, min_size: int) -> tuple[int, int, int, int]:
+    """마스크를 감싸는 상자를 margin만큼 넓히고, 너무 작으면 min_size까지 키운다(이미지 안으로 제한)."""
+    ys, xs = np.where(mask > 0)
+    if len(xs) == 0:
+        return 0, 0, W, H
+    bx0, bx1, by0, by1 = xs.min(), xs.max(), ys.min(), ys.max()
+    bw, bh = bx1 - bx0 + 1, by1 - by0 + 1
+    size = max(int(max(bw, bh) * (1 + 2 * margin)), min_size)
+    cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
+    x0, y0 = int(cx - size / 2), int(cy - size / 2)
+    x1, y1 = x0 + size, y0 + size
+    # 이미지 밖으로 나가면 안으로 민다
+    if x0 < 0:
+        x1 -= x0
+        x0 = 0
+    if y0 < 0:
+        y1 -= y0
+        y0 = 0
+    if x1 > W:
+        x0 -= x1 - W
+        x1 = W
+    if y1 > H:
+        y0 -= y1 - H
+        y1 = H
+    return max(0, x0), max(0, y0), min(W, x1), min(H, y1)
 
 
 def _dry_run(img: Image.Image, mask: np.ndarray, reference: Image.Image | None) -> Image.Image:
