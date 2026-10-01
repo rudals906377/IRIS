@@ -240,7 +240,7 @@ test('되먹임: 어두운 부위는 밝기 비율로 진하기를 맞추고, �
 });
 
 // ---- 스타일 AI 속성 → 힌트 ----
-import { hintsFromStyleAI } from '../src/beauty/style-attributes.ts';
+import { hintsFromStyleAI, promptFromStyleAI } from '../src/beauty/style-attributes.ts';
 
 test('스타일 AI 힌트: 확신 높은 속성만 쓰고, 낮은 것은 weak에 남긴다', () => {
   const h = hintsFromStyleAI({
@@ -269,4 +269,20 @@ test('스타일 AI 힌트: 네일 디자인·길이, 타투 부위·크기', () 
   assert.equal(t.tattoo?.place, 'chest');
   assert.equal(t.tattoo?.size, 0.15);
   assert.equal(t.tattoo?.color, 'black');
+});
+
+test('생성 모드 글 설명: 분야에 맞는 속성의 영어 설명만 이어 붙인다', () => {
+  const r = {
+    category: 'hair',
+    attributes: [
+      { group: 'length', label: '긴머리', label_en: 'long hair that falls well below the shoulders', score: 0.8 },
+      { group: 'color', label: '골드블론드', label_en: 'warm golden honey blonde hair', score: 0.7 },
+      { group: 'mood', label: '청순', label_en: 'innocent', score: 0.9 },
+      { group: 'bangs', label: '풀뱅', label_en: 'full thick blunt bangs', score: 0.2 },
+    ],
+  };
+  const p = promptFromStyleAI(r, 'hair');
+  assert.ok(p.includes('long hair') && p.includes('golden') && !p.includes('innocent') && !p.includes('bangs'));
+  assert.equal(promptFromStyleAI(r, 'nail'), '');
+  assert.equal(promptFromStyleAI(undefined, 'hair'), '');
 });

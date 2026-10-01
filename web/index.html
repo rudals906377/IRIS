@@ -46,7 +46,27 @@
       </section>
 
       <nav class="rail" id="rail" aria-label="뷰티 선택">
-        <div class="tabs" id="tabs"><button class="tab photo" id="btn-photo" title="마음에 드는 사진을 올리면 그 사진의 색·스타일을 내게 적용합니다">📷 사진 따라하기</button></div>
+        <div class="tabs" id="tabs"><button class="tab photo" id="btn-photo" title="마음에 드는 사진을 올리면 그 사진의 색·스타일을 내게 적용합니다">📷 사진 따라하기</button><button class="tab photo" id="btn-gen" title="실시간으로 안 되는 헤어 모양·네일아트·타투를 생성형 AI로 그립니다(내 컴퓨터의 생성 서버 필요)">✨ 생성</button></div>
+        <div class="gen" id="gen" hidden>
+          <div class="gen-head">
+            <strong>✨ 생성 모드(사진 한 장)</strong>
+            <span id="gen-status" class="muted">서버 확인 중…</span>
+            <button id="gen-close" title="닫기">✕</button>
+          </div>
+          <div class="gen-body">
+            <label>대상 <select id="gen-cat">
+              <option value="hair">헤어 모양·길이</option><option value="nail">네일아트</option><option value="tattoo">타투</option></select></label>
+            <label id="gen-grow-row">머리 범위 <input type="range" id="gen-grow" min="0.1" max="0.6" step="0.05" value="0.25" title="길게 기르려면 크게" /></label>
+            <label id="gen-extend-row" hidden>손톱 길이 <input type="range" id="gen-extend" min="0" max="1" step="0.05" value="0" /></label>
+            <label class="gen-desc">설명(영어) <input type="text" id="gen-desc" placeholder="예: long layered hair, golden blonde balayage" /></label>
+            <label><input type="checkbox" id="gen-use-ref" checked /> 참고 사진 따라 그리기</label>
+            <button id="gen-run" class="primary">📸 지금 모습으로 생성</button>
+          </div>
+          <div class="gen-result" id="gen-result" hidden>
+            <div class="gen-compare"><img id="gen-before" alt="생성 전" /><img id="gen-after" alt="생성 후" /><input type="range" id="gen-slider" min="0" max="100" value="50" /></div>
+            <div class="gen-actions"><span id="gen-info" class="muted"></span><a id="gen-save" download="iris-생성.jpg">저장</a></div>
+          </div>
+        </div>
         <div class="ref" id="ref" hidden><img id="ref-img" alt="참고 사진" /><span id="ref-text"></span><button id="ref-clear" title="참고 사진 지우기">✕</button></div>
         <div class="swatches" id="swatches"></div>
         <div class="amount-row">
@@ -76,6 +96,7 @@
 
         <h3>보기</h3>
         <label class="row"><input type="checkbox" id="opt-mirror" checked /> 거울 모드(좌우 반전)</label>
+        <label class="row">생성 서버 주소 <input type="text" id="opt-gen-url" value="http://127.0.0.1:8765" style="width: 220px" /> <span class="muted">(tools/genserver, 사진 한 장 모드)</span></label>
         <label class="row"><input type="checkbox" id="opt-style-ai" checked /> 사진 따라하기에 스타일 AI 사용(처음 한 번 약 94MB 모델을 내려받아 무늬·모양·기법까지 읽음)</label>
         <label class="row"><input type="checkbox" id="opt-seg" checked /> 머리카락·피부 인식(분할) 사용 — 손이 얼굴을 가리면 화장을 숨김</label>
         <label class="row"><input type="checkbox" id="opt-refine" checked /> 머리카락 경계 정밀화</label>

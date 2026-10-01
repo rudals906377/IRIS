@@ -23,7 +23,8 @@ import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SH
 import { measureFace, type FaceMeasure } from '../beauty/face-measure.ts';
 import { matchDarkness, matchLip, matchTint } from '../beauty/style-match.ts';
 import { analyzeStyle } from '../beauty/style-ai.ts';
-import { hintsFromStyleAI, type StyleHints } from '../beauty/style-attributes.ts';
+import { hintsFromStyleAI, promptFromStyleAI, type StyleHints } from '../beauty/style-attributes.ts';
+import { checkGenServer, generate as genGenerate, genServerUrl, setGenServerUrl, toDataUrl, type GenCategory } from '../beauty/gen-mode.ts';
 import { gam, lin, lipTarget, luma } from '../beauty/style-math.ts';
 import type { NailStyle } from '../beauty/nail.ts';
 import { BeautyEngine } from '../engine/engine.ts';
@@ -44,6 +45,8 @@ const startEl = $<HTMLDivElement>('start');
 const viewEl = $<HTMLDivElement>('view');
 const panelEl = $<HTMLElement>('panel');
 const tabsEl = $<HTMLElement>('tabs');
+const btnPhotoEl = $<HTMLButtonElement>('btn-photo');
+const btnGenEl = $<HTMLButtonElement>('btn-gen');
 const swatchesEl = $<HTMLElement>('swatches');
 const amountEl = $<HTMLInputElement>('amount');
 const amountRowEl = $<HTMLElement>('amount-row');
@@ -221,6 +224,8 @@ function renderRail(): void {
       return b;
     }),
   );
+  // 고정 버튼(사진 따라하기·생성)은 탭을 다시 그릴 때 사라지지 않게 뒤에 다시 붙인다
+  tabsEl.append(btnPhotoEl, btnGenEl);
   if (tab === 'look') {
     swatchesEl.replaceChildren(
       ...(Object.keys(LOOKS) as LookName[]).map((name) => {
@@ -359,7 +364,7 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
         if (p.status === 'progress' && p.file && p.progress !== undefined) setStatus(`스타일 AI 모델 내려받는 중 ${Math.round(p.progress)}%`);
         else if (p.status === 'ready') setStatus('스타일 AI 분석 중…');
       });
-      r.ai = { hints: hintsFromStyleAI(ai), headline: ai.headline, description: ai.description_ko };
+      r.ai = { hints: hintsFromStyleAI(ai), headline: ai.headline, description: ai.description_ko, raw: ai };
       applyHints(r, r.ai.hints);
     } catch (err) {
       console.warn('스타일 AI를 쓰지 못했습니다(색만 적용)', err);
@@ -471,6 +476,117 @@ function applyHints(r: StyleResult, h: StyleHints): void {
   }
 }
 
+// ---- 생성 모드(사진 한 장): 내 컴퓨터의 생성 서버로 헤어 모양·네일아트·타투를 그린다 ----
+const genEl = $<HTMLElement>('gen');
+const genStatusEl = $<HTMLElement>('gen-status');
+const genCatEl = $<HTMLSelectElement>('gen-cat');
+const genGrowEl = $<HTMLInputElement>('gen-grow');
+const genExtendEl = $<HTMLInputElement>('gen-extend');
+const genDescEl = $<HTMLInputElement>('gen-desc');
+const genUseRefEl = $<HTMLInputElement>('gen-use-ref');
+const genRunEl = $<HTMLButtonElement>('gen-run');
+const genResultEl = $<HTMLElement>('gen-result');
+const genBeforeEl = $<HTMLImageElement>('gen-before');
+const genAfterEl = $<HTMLImageElement>('gen-after');
+const genSliderEl = $<HTMLInputElement>('gen-slider');
+const genInfoEl = $<HTMLElement>('gen-info');
+const genSaveEl = $<HTMLAnchorElement>('gen-save');
+const genUrlEl = $<HTMLInputElement>('opt-gen-url');
+genUrlEl.value = genServerUrl();
+genUrlEl.addEventListener('change', () => {
+  setGenServerUrl(genUrlEl.value.trim() || genServerUrl());
+  genUrlEl.value = genServerUrl();
+  void refreshGenStatus();
+});
+
+async function refreshGenStatus(): Promise<boolean> {
+  genStatusEl.textContent = '서버 확인 중…';
+  const h = await checkGenServer();
+  if (!h) {
+    genStatusEl.textContent = `생성 서버가 꺼져 있어요 (${genServerUrl()}) — tools/genserver/README.md 참고`;
+    genRunEl.disabled = true;
+    return false;
+  }
+  genStatusEl.textContent = h.dry_run ? '연결됨 (시험 모드: 영역만 표시)' : `연결됨 · ${h.device === 'cuda' ? 'GPU' : h.device.toUpperCase()}${h.model_loaded ? '' : ' · 첫 생성 때 모델을 불러와요'}`;
+  genRunEl.disabled = false;
+  return true;
+}
+
+/** 생성 대상에 맞춰 설명(영어)과 옵션 줄을 채운다 */
+function syncGenCategory(): void {
+  const cat = genCatEl.value as GenCategory;
+  $('gen-grow-row').hidden = cat !== 'hair';
+  $('gen-extend-row').hidden = cat !== 'nail';
+  // 스타일 AI가 읽은 속성을 영어 설명으로(사용자가 고칠 수 있다)
+  const auto = promptFromStyleAI(lastStyle?.ai?.raw, cat);
+  if (auto && !genDescEl.dataset.edited) genDescEl.value = auto;
+  if (cat === 'nail' && lastStyle?.nail) genExtendEl.value = String(nailLength);
+}
+genCatEl.addEventListener('change', syncGenCategory);
+genDescEl.addEventListener('input', () => {
+  genDescEl.dataset.edited = genDescEl.value ? '1' : '';
+});
+btnGenEl.addEventListener('click', () => {
+  genEl.hidden = !genEl.hidden;
+  if (!genEl.hidden) {
+    // 지금 탭에 맞는 대상을 기본으로
+    if (tab === 'nail') genCatEl.value = 'nail';
+    else if (tab === 'tattoo') genCatEl.value = 'tattoo';
+    else if (tab === 'hair') genCatEl.value = 'hair';
+    syncGenCategory();
+    void refreshGenStatus();
+  }
+});
+$('gen-close').addEventListener('click', () => {
+  genEl.hidden = true;
+});
+genSliderEl.addEventListener('input', () => {
+  genAfterEl.style.clipPath = `inset(0 0 0 ${genSliderEl.value}%)`;
+});
+
+/** 마지막 생성 결과(자동 시험용) */
+let lastGen: { elapsed_ms: number; prompt: string; model: string } | null = null;
+
+async function runGen(): Promise<void> {
+  if (!running) {
+    setStatus('먼저 카메라나 영상을 시작하세요');
+    return;
+  }
+  const cat = genCatEl.value as GenCategory;
+  genRunEl.disabled = true;
+  genStatusEl.textContent = '지금 모습을 찍는 중…';
+  try {
+    // 합성된 화면(실시간 메이크업 포함)을 한 장 찍는다
+    const cap = await engine.captureNext();
+    const image = toDataUrl(cap.image, 1024);
+    const reference = genUseRefEl.checked && lastStyle ? lastStyle.thumb.toDataURL('image/jpeg', 0.9) : undefined;
+    genBeforeEl.src = image;
+    genStatusEl.textContent = '생성 중… (GPU 5~15초, CPU는 몇 분)';
+    const r = await genGenerate({
+      category: cat,
+      image,
+      reference,
+      desc: genDescEl.value.trim() || undefined,
+      place: tattoo.place,
+      grow: Number(genGrowEl.value),
+      extend: Number(genExtendEl.value),
+    });
+    genAfterEl.src = r.image;
+    genAfterEl.style.clipPath = `inset(0 0 0 ${genSliderEl.value}%)`;
+    genSaveEl.href = r.image;
+    genInfoEl.textContent = `${(r.elapsed_ms / 1000).toFixed(1)}초 · ${r.model === 'dry-run' ? '시험 모드' : r.model}`;
+    genResultEl.hidden = false;
+    genStatusEl.textContent = '완료 — 가운데 막대를 움직여 전후를 비교하세요';
+    lastGen = { elapsed_ms: r.elapsed_ms, prompt: r.prompt, model: r.model };
+  } catch (err) {
+    genStatusEl.textContent = `생성 실패: ${(err as Error).message}`;
+  } finally {
+    genRunEl.disabled = false;
+  }
+}
+genRunEl.addEventListener('click', () => void runGen());
+(window as unknown as { irisGen: unknown }).irisGen = { run: runGen, get last() { return lastGen; }, status: refreshGenStatus };
+
 /** 되먹임 기록(자동 시험·디버그용) */
 let lastMatch: Record<string, unknown>[] = [];
 
@@ -542,7 +658,7 @@ styleFileEl.addEventListener('change', async () => {
     setStatus(`사진을 분석하지 못했습니다: ${(err as Error).message}`);
   }
 });
-$('btn-photo').addEventListener('click', () => styleFileEl.click());
+btnPhotoEl.addEventListener('click', () => styleFileEl.click());
 $('ref-clear').addEventListener('click', () => {
   refEl.hidden = true;
   lastStyle = null;

@@ -9,6 +9,8 @@ import type { TattooPlace } from './tattoo-place.ts';
 export interface StyleAttr {
   group: string;
   label: string;
+  /** 모델에 넣는 영어 설명(생성 모드의 글 설명에 쓴다) */
+  label_en?: string;
   score: number;
   level?: 'high' | 'mid' | 'low';
 }
@@ -203,4 +205,28 @@ export function hintsFromStyleAI(r: StyleAIResult): StyleHints {
   consider(r.attributes, r.category);
   if (r.secondary) consider(r.secondary.attributes, r.secondary.category);
   return out;
+}
+
+/** 생성 모드 글 설명에 쓸 속성 그룹(분야별). 무드·톤처럼 그림으로 표현하기 어려운 것은 뺀다 */
+const PROMPT_GROUPS: Record<string, string[]> = {
+  hair: ['length', 'cut', 'styling', 'perm', 'bangs', 'color', 'colorTech'],
+  nail: ['shape', 'length', 'color', 'design', 'finish'],
+  tattoo: ['style', 'color', 'subject', 'size'],
+};
+
+/**
+ * 분류기 속성 → 영어 설명 한 줄(생성 서버의 prompt). 확신 minScore 이상인 속성의 영어 설명을 이어 붙인다.
+ * 분류기 결과의 분야가 다르면 빈 문자열.
+ */
+export function promptFromStyleAI(r: StyleAIResult | undefined, category: 'hair' | 'nail' | 'tattoo', minScore = 0.4): string {
+  if (!r) return '';
+  const pickFrom = (attrs: StyleAttr[]): string[] =>
+    (PROMPT_GROUPS[category] ?? [])
+      .map((g) => attrs.find((a) => a.group === g))
+      .filter((a): a is StyleAttr => !!a && a.score >= minScore && !!a.label_en)
+      .map((a) => a.label_en!);
+  let parts: string[] = [];
+  if (r.category === category) parts = pickFrom(r.attributes);
+  else if (r.secondary && r.secondary.category === category) parts = pickFrom(r.secondary.attributes);
+  return parts.join(', ');
 }

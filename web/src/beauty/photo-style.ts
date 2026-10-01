@@ -11,7 +11,7 @@ import { chroma, measureFace, type FaceMeasure } from './face-measure.ts';
 import type { RGB } from './makeup.ts';
 import type { NailStyle } from './nail.ts';
 import type { TattooDesign } from './tattoo-designs.ts';
-import type { StyleHints } from './style-attributes.ts';
+import type { StyleAIResult, StyleHints } from './style-attributes.ts';
 import { dominantColors, gam, glossFrom, hairTarget, hex, isSkin, lin, lipTarget, luma, tintTarget } from './style-math.ts';
 
 const MODEL_BASE = 'https://storage.googleapis.com/mediapipe-models';
@@ -40,7 +40,7 @@ export interface MakeupStyle {
 export interface StyleResult {
   makeup?: MakeupStyle;
   /** 스타일 AI(분류기) 결과 힌트와 한 줄 설명(켜져 있을 때) */
-  ai?: { hints: StyleHints; headline?: string; description?: string };
+  ai?: { hints: StyleHints; headline?: string; description?: string; raw?: StyleAIResult };
   /** 사진 얼굴 측정값(되먹임 비교용) */
   measure?: FaceMeasure;
   hair?: { color: RGB; tip: RGB | null; amount: number };
