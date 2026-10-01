@@ -4,7 +4,7 @@
 헤어 컬러·타투·네일아트로 넓혀 가는 중입니다.
 미래내일 일경험 「마스크 기반 영상합성 기술 구현」 프로젝트.
 
-- 사이트: https://rudals906377.github.io/IRIS/ (GitHub Pages 활성화 후 열림)
+- 사이트: https://rudals906377.github.io/IRIS/
 - 작업 인수인계: [docs/handoff.md](docs/handoff.md)
 - 개발일지: [docs/devlog](docs/devlog/README.md)
 - 지난 조사·설계(옷 입어 보기 시절): [docs/realtime-virtual-try-on-plan.md](docs/realtime-virtual-try-on-plan.md)

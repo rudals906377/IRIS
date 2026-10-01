@@ -1,5 +1,5 @@
 # 웹 앱을 빌드해 GitHub Pages에 배포한다.
-# 처음 한 번: 저장소 Settings → Pages → Build and deployment → Source를 "GitHub Actions"로 선택.
+# 저장소 Settings → Pages → Source가 "GitHub Actions"여야 한다(설정 완료).
 name: 웹 앱 배포
 
 on:
