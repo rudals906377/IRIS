@@ -18,25 +18,51 @@
 분야별 기본 세기(`strength`): 헤어 0.95(모양을 새로 그림), 네일 0.65, 타투 0.45.
 웹 앱이 보내는 그림에는 실시간 합성(네일 색·타투 도안)이 이미 올라가 있어서, 네일·타투는 그것을 살리며 피부에 녹이는 정도로만 다시 그린다.
 
-## 설치 (윈도우, 엔비디아 그래픽카드)
+## 설치 (윈도우, 엔비디아 그래픽카드) — 한 번만
 
-1. Python 3.10~3.12 설치 (python.org, "Add to PATH" 체크)
-2. 명령 프롬프트에서:
-   ```bat
-   cd IRIS\tools\genserver
-   python -m venv venv
-   venv\Scripts\activate
-   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-   pip install -r requirements.txt
-   ```
-3. 실행: `run.bat` (또는 `python server.py --preload`)
-4. 브라우저에서 http://127.0.0.1:8765/health 가 `"ok": true` 면 준비 끝.
-5. IRIS 웹 앱 → 설정 → **생성 서버 주소**가 `http://127.0.0.1:8765` 인지 확인 → 아래 **✨ 생성** 버튼.
+1. Python 3.10~3.12 설치 (python.org, **"Add to PATH" 체크**). `python --version` 으로 확인.
+2. 이 저장소를 내려받아(초록 Code 버튼 → Download ZIP, 또는 `git clone`) `IRIS\tools\genserver` 폴더를 연다.
+3. **`setup.bat` 더블클릭** — 가상환경 만들기 → GPU용 PyTorch(cu126, 실패하면 cu118) → 나머지 패키지 → `check.py` 환경 검사까지 한 번에 한다. 10~15분.
+4. 마지막에 `모두 준비됨` 이 보이면 끝. `[문제]` 가 보이면 그 줄의 → 안내대로 고치고 `python check.py` 로 다시 확인.
 
-처음 실행 때 모델을 내려받아 5~10분 걸린다. 그 뒤로는 한 장에 GPU 8GB 기준 5~15초.
-GPU 메모리 6GB 이하면 `set IRIS_GEN_MAX_SIDE=512` 로 줄인다. GPU가 없으면 CPU로도 돌지만 한 장에 몇 분이 걸린다.
+리눅스는 `bash setup.sh`, 실행은 `bash run.sh`.
 
-맥(애플 실리콘)에서는 `pip install torch torchvision`(일반)로 설치하면 MPS로 돈다. 속도는 GPU PC보다 느리다.
+손으로 할 때:
+```bat
+cd IRIS\tools\genserver
+python -m venv venv
+venv\Scripts\activate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+pip install -r requirements.txt
+python check.py
+```
+
+## 실행과 첫 생성 (내일 할 순서)
+
+1. `run.bat` 더블클릭 (= `python server.py --preload`). 처음엔 모델 약 4GB를 내려받아 5~10분, 그 뒤 `준비 완료`.
+2. 브라우저에서 http://127.0.0.1:8765/health → `"ok": true, "device": "cuda"` 인지 확인. `"device": "cpu"` 면 GPU용 torch가 안 깔린 것(`python check.py`).
+3. https://rudals906377.github.io/IRIS/ 열기 → 카메라 허용 → **✨ 생성** 버튼 → 상태가 `연결됨 · GPU` 인지 확인.
+   - 크롬이 "이 사이트가 로컬 네트워크 기기에 접근하려고 합니다" 같은 허용 창을 띄우면 **허용**.
+   - `생성 서버가 꺼져 있어요` 가 계속 나오면: 설정(⚙) → 생성 서버 주소가 `http://127.0.0.1:8765` 인지, 서버 창에 오류가 없는지 확인.
+4. 📷 사진 따라하기로 참고 사진을 먼저 올리면 생성 설명(영어)이 자동으로 채워진다. 그다음 ✨ 생성에서 대상(헤어·네일·타투) 고르고 **생성**.
+   - 헤어: 5~15초(GPU 8GB 기준). 결과가 어색하면 `grow` 를 줄이거나(0.15) 설명을 고쳐 다시.
+   - 네일·타투: 손·팔이 화면에 크게 보여야 한다.
+5. 결과 화면(전·후 슬라이더)을 스크린샷으로 남겨 두면 다음 날 품질 개선에 바로 쓸 수 있다.
+
+GPU 메모리 6GB 이하면 `set IRIS_GEN_MAX_SIDE=512` 뒤 `run.bat`. GPU가 없으면 CPU로도 돌지만 한 장에 몇 분.
+맥(애플 실리콘)은 `pip install torch torchvision`(일반)로 설치하면 MPS로 돈다.
+
+### 자주 막히는 곳
+
+| 증상 | 원인·해결 |
+|---|---|
+| `python` 을 찾을 수 없음 | 설치 때 Add to PATH 미체크 → 재설치, 또는 `py -3.11` 로 실행 |
+| torch 설치 중 "No matching distribution" | 파이썬 3.13 이상 → 3.11 설치 후 venv 다시 |
+| `device: cpu` | GPU용 torch 미설치 → `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126` 다시 |
+| `CUDA out of memory` | `set IRIS_GEN_MAX_SIDE=512` (또는 384) 뒤 다시 실행 |
+| 모델 내려받기 실패 | 학교 망이 huggingface.co 를 막음 → 휴대폰 핫스팟으로 한 번 받아 두면 캐시에 남는다 |
+| 웹 앱이 서버를 못 봄 | 크롬의 로컬 네트워크 접근 허용 창 → 허용. 그래도 안 되면 `chrome://flags/#block-insecure-private-network-requests` 를 Disabled |
+| libEGL 오류(리눅스) | `sudo apt-get install libegl1 libgles2 libgl1 libglib2.0-0` |
 
 ## 연결만 시험하기
 

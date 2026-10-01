@@ -24,7 +24,21 @@ from pipelines import Generator, GenRequest
 
 app = FastAPI(title="IRIS 생성 서버")
 # 웹 앱(다른 주소)에서 부를 수 있게. 로컬 전용이므로 모든 출처 허용
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+import inspect
+
+_cors_kwargs = dict(allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# 최신 Starlette: https 사이트 → 127.0.0.1 요청(사설망 접근)을 명시적으로 허용해야 한다
+if "allow_private_network" in inspect.signature(CORSMiddleware.__init__).parameters:
+    _cors_kwargs["allow_private_network"] = True
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
+
+
+@app.middleware("http")
+async def allow_private_network(request, call_next):
+    """https 사이트(GitHub Pages)에서 내 컴퓨터(127.0.0.1)로 부를 때 크롬이 요구하는 헤더."""
+    resp = await call_next(request)
+    resp.headers["Access-Control-Allow-Private-Network"] = "true"
+    return resp
 
 masker = Masker()
 generator = Generator()
