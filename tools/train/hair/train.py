@@ -78,18 +78,18 @@ class DS(nn.Module):
 
 
 class HairNet(nn.Module):
-    """약 1M 매개변수. 1/2, 1/4, 1/8, 1/16 특징을 모아 원래 크기 알파를 낸다."""
+    """약 0.6M 매개변수(깊이별 분리 합성곱). 1/2, 1/4, 1/8, 1/16 특징을 모아 원래 크기 알파를 낸다."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.s1 = nn.Sequential(cbr(3, 24, 2), DS(24, 24))  # 1/2
-        self.s2 = nn.Sequential(DS(24, 48, 2), DS(48, 48))  # 1/4
-        self.s3 = nn.Sequential(DS(48, 96, 2), DS(96, 96), DS(96, 96))  # 1/8
-        self.s4 = nn.Sequential(DS(96, 160, 2), DS(160, 160), DS(160, 160))  # 1/16
-        self.u3 = DS(160 + 96, 96)
-        self.u2 = DS(96 + 48, 48)
-        self.u1 = DS(48 + 24, 24)
-        self.u0 = nn.Sequential(cbr(24 + 3, 16), nn.Conv2d(16, 1, 3, padding=1))
+        self.s1 = nn.Sequential(cbr(3, 32, 2), DS(32, 32))  # 1/2
+        self.s2 = nn.Sequential(DS(32, 64, 2), DS(64, 64))  # 1/4
+        self.s3 = nn.Sequential(DS(64, 128, 2), DS(128, 128), DS(128, 128))  # 1/8
+        self.s4 = nn.Sequential(DS(128, 256, 2), DS(256, 256), DS(256, 256), DS(256, 256))  # 1/16
+        self.u3 = nn.Sequential(DS(256 + 128, 128), DS(128, 128))
+        self.u2 = nn.Sequential(DS(128 + 64, 64), DS(64, 64))
+        self.u1 = DS(64 + 32, 32)
+        self.u0 = nn.Sequential(cbr(32 + 3, 24), nn.Conv2d(24, 1, 3, padding=1))
 
     def forward(self, x):
         f1 = self.s1(x)
@@ -178,7 +178,8 @@ def main() -> None:
     for size in (384, 256):
         dummy = torch.zeros(1, 3, size, size)
         path = out / f"hair-matte-{size}.onnx"
-        torch.onnx.export(model, dummy, str(path), input_names=["image"], output_names=["logit"], dynamic_axes={"image": {0: "n"}, "logit": {0: "n"}}, opset_version=17)
+        # external_data=False: 가중치를 .onnx 한 파일에 넣는다(브라우저가 .data 파일을 따로 못 받음)
+        torch.onnx.export(model, dummy, str(path), input_names=["image"], output_names=["logit"], dynamic_axes={"image": {0: "n"}, "logit": {0: "n"}}, opset_version=17, external_data=False)
         print("ONNX 저장:", path)
 
 

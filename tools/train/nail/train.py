@@ -190,7 +190,7 @@ def main() -> None:
     model.load_state_dict(torch.load(out / "best.pt", map_location=dev))
     model.eval()
     dummy = torch.zeros(1, 3, SIZE, SIZE, device=dev)
-    torch.onnx.export(model, dummy, str(out / "nail-seg.onnx"), input_names=["image"], output_names=["logit"], dynamic_axes={"image": {0: "n"}, "logit": {0: "n"}}, opset_version=17)
+    torch.onnx.export(model, dummy, str(out / "nail-seg.onnx"), input_names=["image"], output_names=["logit"], dynamic_axes={"image": {0: "n"}, "logit": {0: "n"}}, opset_version=17, external_data=False)
     print(f"ONNX 저장: {out / 'nail-seg.onnx'}")
 
 
