@@ -52,6 +52,16 @@ python check.py
 GPU 메모리 6GB 이하면 `set IRIS_GEN_MAX_SIDE=512` 뒤 `run.bat`. GPU가 없으면 CPU로도 돌지만 한 장에 몇 분.
 맥(애플 실리콘)은 `pip install torch torchvision`(일반)로 설치하면 MPS로 돈다.
 
+### 다른 컴퓨터(맥북)에서 이 서버 쓰기
+
+서버는 한 대(GPU PC)에만 켜 두고, 다른 컴퓨터의 웹 앱이 그 서버를 부르게 할 수 있다.
+
+- **가장 쉬운 방법: 임시 인터넷 주소(터널)**. GPU PC에서 `run.bat` 로 서버를 켠 뒤 **`tunnel.bat`** 실행 → 화면에 `https://xxxx.trycloudflare.com` 주소가 나온다.
+  맥북의 웹 앱(https://rudals906377.github.io/IRIS/) → 설정(톱니바퀴) → **생성 서버 주소**에 그 주소를 넣는다. 같은 와이파이가 아니어도(집에서도) 된다.
+  주의: 그 주소를 아는 사람은 누구나 서버를 쓸 수 있고, 사진이 Cloudflare를 거쳐 전달된다(암호화됨). 창을 닫으면 주소가 사라지고 다음에 켜면 새 주소가 나온다.
+- 같은 와이파이 안에서만: `python server.py --preload --host 0.0.0.0` 로 켜고 맥북에서 `http://<GPU PC의 IP>:8765` 를 쓴다.
+  단, 배포된 https 사이트에서 http 주소를 부르는 건 크롬이 막으므로, 이 방법은 맥북에서 웹 앱을 직접 띄울 때(`web` 폴더에서 `npm run dev`)만 된다. 윈도우 방화벽 허용 창도 떠야 한다.
+
 ### 자주 막히는 곳
 
 | 증상 | 원인·해결 |
