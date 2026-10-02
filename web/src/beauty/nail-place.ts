@@ -36,6 +36,8 @@ export interface NailQuad {
   ref: Vec2;
   /** 손가락 번호(0 엄지 ~ 4 소지) */
   finger: number;
+  /** 손 번호(모델 마스크를 고를 때) */
+  hand?: number;
 }
 
 /**

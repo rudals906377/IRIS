@@ -30,6 +30,7 @@ in float aAspect;  // 손톱 폭 / 길이
 in vec2 aRef;      // 손가락 피부 기준점(카메라 uv)
 in vec2 aCen;      // 손톱 가운데(카메라 uv): 손톱판 자체의 색 기준
 in float aRefine;  // 1: 영상으로 가장자리를 넓혀도 됨, 0: 추정 모양만(엄지처럼 옆으로 누운 손가락)
+in float aHand;    // 손 번호(0/1): 자체 손톱 모델 마스크 선택
 uniform vec2 uSize;
 out vec2 vLocal;
 out float vVis;
@@ -38,12 +39,14 @@ out float vAspect;
 out vec2 vRef;
 out vec2 vCen;
 out float vRefine;
+out float vHand;
 void main() {
   vLocal = aLocal;
   vAspect = aAspect;
   vRef = aRef;
   vCen = aCen;
   vRefine = aRefine;
+  vHand = aHand;
   vVis = aVis;
   vSeed = aSeed;
   gl_Position = vec4(aPos.x / uSize.x * 2.0 - 1.0, 1.0 - aPos.y / uSize.y * 2.0, 0.0, 1.0);
@@ -68,6 +71,12 @@ in float vAspect;
 in vec2 vRef;
 in vec2 vCen;
 in float vRefine;
+in float vHand;
+// 자체 손톱 모델 마스크(손마다 한 장): 잘라낸 정사각형(x, y, 한 변, 켜짐)
+uniform sampler2D uMask0;
+uniform sampler2D uMask1;
+uniform vec4 uRect0;
+uniform vec4 uRect1;
 out vec4 o;
 const vec3 W = vec3(0.299, 0.587, 0.114);
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -109,6 +118,15 @@ void main() {
   // 넓히지 않는 손톱(엄지)은 추정 모양 그대로 부드러운 가장자리
   float plain = smoothstep(aa, -aa, sd);
   float shape = mix(plain, reach * max(core, bright * smoothstep(0.2 * hx, 0.0, sd)), vRefine);
+  // 자체 손톱 모델이 있으면: 모델 마스크가 손톱 모양을 정하고, 손 점 추정 사각형(넉넉히 0.7·반폭)은 범위만 제한한다
+  vec4 rect = vHand < 0.5 ? uRect0 : uRect1;
+  if (rect.w > 0.5) {
+    vec2 muv = (gl_FragCoord.xy * vec2(1.0, -1.0) + vec2(0.0, uSize.y) - rect.xy) / rect.z;
+    float mm = 0.0;
+    if (muv.x > 0.0 && muv.x < 1.0 && muv.y > 0.0 && muv.y < 1.0) mm = vHand < 0.5 ? texture(uMask0, muv).r : texture(uMask1, muv).r;
+    float box = smoothstep(0.7 * hx + aa, 0.7 * hx - aa, sd);
+    shape = max(shape * 0.35, smoothstep(0.35, 0.65, mm) * box);
+  }
   shape = mix(shape, smoothstep(aa, -aa, sd), ext);
   // 실제로 피부(손)가 보이는 곳에만: 물건 뒤로 숨은 손가락 끝은 칠하지 않는다
   float skin = texture(uSeg, camUv).g;
@@ -181,7 +199,7 @@ export class NailRenderer {
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
-    this.prog = compileProgram(gl, VS, FS, ['uCam', 'uSeg', 'uGF', 'uUseGF', 'uSize', 'uColor', 'uColor2', 'uStyle', 'uAmount', 'uExt']);
+    this.prog = compileProgram(gl, VS, FS, ['uCam', 'uSeg', 'uGF', 'uUseGF', 'uSize', 'uColor', 'uColor2', 'uStyle', 'uAmount', 'uExt', 'uMask0', 'uMask1', 'uRect0', 'uRect1']);
     this.vao = gl.createVertexArray()!;
     this.vbo = gl.createBuffer()!;
     gl.bindVertexArray(this.vao);
@@ -190,7 +208,7 @@ export class NailRenderer {
       const loc = gl.getAttribLocation(this.prog.prog, name);
       if (loc < 0) return;
       gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 48, offset);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 52, offset);
     };
     attr('aPos', 2, 0);
     attr('aLocal', 2, 8);
@@ -200,14 +218,39 @@ export class NailRenderer {
     attr('aRef', 2, 28);
     attr('aCen', 2, 36);
     attr('aRefine', 1, 44);
+    attr('aHand', 1, 48);
     gl.bindVertexArray(null);
+  }
+
+  /** 자체 손톱 모델 마스크(손마다 한 장). rect: 잘라낸 정사각형(픽셀) */
+  private masks: { tex: WebGLTexture; rect: [number, number, number, number] }[] = [];
+
+  setMasks(list: { data: Uint8ClampedArray; size: number; rect: { x: number; y: number; size: number } }[]): void {
+    const gl = this.gl;
+    for (let i = 0; i < 2; i++) {
+      if (!this.masks[i]) this.masks[i] = { tex: gl.createTexture()!, rect: [0, 0, 1, 0] };
+      const m = list[i];
+      if (!m) {
+        this.masks[i].rect = [0, 0, 1, 0];
+        continue;
+      }
+      gl.bindTexture(gl.TEXTURE_2D, this.masks[i].tex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, m.size, m.size, 0, gl.RED, gl.UNSIGNED_BYTE, m.data);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      this.masks[i].rect = [m.rect.x, m.rect.y, m.rect.size, 1];
+    }
+    gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
   draw(nails: NailQuad[], look: NailLook, t: FrameTextures): void {
     if (nails.length === 0) return;
     const gl = this.gl;
     // 손톱마다 두 삼각형(6정점). 가장자리 흐림 여유로 10% 크게
-    const data = new Float32Array(nails.length * 6 * 12);
+    const data = new Float32Array(nails.length * 6 * 13);
     const ext = Math.max(0, Math.min(1, look.length)) * 1.2;
     let k = 0;
     nails.forEach((n, idx) => {
@@ -218,7 +261,7 @@ export class NailRenderer {
       const corner = (sx: number, sy: number): number[] => {
         // sy: 0 뿌리 ~ 1 끝, 여유 포함 −0.2 ~ 1.2(+연장)
         const along = (sy - 0.5) * n.len;
-        return [n.c.x + n.dir.x * along + px * sx * hw, n.c.y + n.dir.y * along + py * sx * hw, sx * 1.4, sy, n.vis, idx + 1, n.width / n.len, n.ref.x / t.width, n.ref.y / t.height, n.c.x / t.width, n.c.y / t.height, n.finger === 0 ? 0 : 1];
+        return [n.c.x + n.dir.x * along + px * sx * hw, n.c.y + n.dir.y * along + py * sx * hw, sx * 1.4, sy, n.vis, idx + 1, n.width / n.len, n.ref.x / t.width, n.ref.y / t.height, n.c.x / t.width, n.c.y / t.height, n.finger === 0 ? 0 : 1, n.hand ?? 0];
       };
       const a = corner(-1, -0.2);
       const b = corner(1, -0.2);
@@ -226,7 +269,7 @@ export class NailRenderer {
       const d = corner(1, 1.2 + ext);
       for (const v of [a, b, c, b, d, c]) {
         data.set(v, k);
-        k += 12;
+        k += 13;
       }
     });
     const u = this.prog.u;
@@ -249,6 +292,14 @@ export class NailRenderer {
     gl.uniform1f(u.uStyle, STYLE_ID[look.style]);
     gl.uniform1f(u.uAmount, look.amount);
     gl.uniform1f(u.uExt, ext);
+    for (let i = 0; i < 2; i++) {
+      const m = this.masks[i];
+      gl.activeTexture(gl.TEXTURE3 + i);
+      gl.bindTexture(gl.TEXTURE_2D, m ? m.tex : null);
+      gl.uniform1i(i === 0 ? u.uMask0 : u.uMask1, 3 + i);
+      const r = m ? m.rect : [0, 0, 1, 0];
+      gl.uniform4f(i === 0 ? u.uRect0 : u.uRect1, r[0], r[1], r[2], r[3]);
+    }
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);

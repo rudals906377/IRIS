@@ -6,7 +6,8 @@ import { faceRegions, type FaceRegions } from '../beauty/face-regions.ts';
 import { HairColorRenderer, type HairLook } from '../beauty/hair.ts';
 import { MakeupRenderer, type MakeupLook } from '../beauty/makeup.ts';
 import { NailRenderer, type NailLook } from '../beauty/nail.ts';
-import { nailQuads, type HandPoints } from '../beauty/nail-place.ts';
+import { nailQuads, type HandPoints, type NailQuad } from '../beauty/nail-place.ts';
+import { HairNet } from './hairnet.ts';
 import { TattooRenderer } from '../beauty/tattoo.ts';
 import { FACE_FOR_POSE, measureLimbWidth, placeAxis, tattooMesh, type PosePoints, type TattooPlace } from '../beauty/tattoo-place.ts';
 import { PointFilter, RigidShapeFilter, type RigidShapeParams } from './filters.ts';
@@ -81,6 +82,11 @@ export class BeautyEngine {
   private readonly hairFx: HairColorRenderer;
   private readonly tattooFx: TattooRenderer;
   private readonly nailFx: NailRenderer;
+  /** 자체 손톱 모델(선택): 손마다 하나씩 실행기 */
+  nailNets: HairNet[] = [];
+  private nailCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+  private nailCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
+  private nailModelUrl = '';
   /** 손 종류('Left'/'Right')별 21점 필터 */
   private handTracks: { filter: RigidShapeFilter; c: { x: number; y: number } }[] = [];
   private readonly poseFilters = new Map<number, PointFilter>();
@@ -154,7 +160,9 @@ export class BeautyEngine {
     const hands = this.updateHands(track, info.now, w, h);
     const nail = this.nail;
     if (nail && hands.length > 0) {
-      const quads = hands.flatMap((hp) => nailQuads(hp));
+      const quads = hands.flatMap((hp, hi) => nailQuads(hp).map((q) => ({ ...q, hand: hi })));
+      if (this.nailNets.length) this.runNailNets(video, quads);
+      else this.nailFx.setMasks([]);
       effects.push((t) => this.nailFx.draw(quads, nail, t));
     }
     const pose = this.updatePose(track, info.now, w, h, face);
@@ -295,6 +303,65 @@ export class BeautyEngine {
       }
     }
     return this.limbWidth?.w ?? null;
+  }
+
+  /** 자체 손톱 모델 켜기/끄기(주소가 비면 끈다). 두 손 분량의 실행기를 만든다 */
+  async setNailModel(url: string, onStatus?: (s: string) => void): Promise<void> {
+    if (url === this.nailModelUrl) return;
+    this.nailModelUrl = url;
+    for (const n of this.nailNets) n.close();
+    this.nailNets = [];
+    if (!url) return;
+    const nets = [new HairNet(url), new HairNet(url)];
+    try {
+      await nets[0].load(onStatus);
+      await nets[1].load();
+      this.nailNets = nets;
+      onStatus?.(`손톱 모델 준비(${nets[0].provider})`);
+    } catch (e) {
+      console.warn(e);
+      onStatus?.('손톱 모델을 못 불러와 손 점 방식을 씁니다');
+    }
+  }
+
+  /** 손마다 손톱들을 감싸는 정사각형(학습 때와 같은 비율: 손톱 상자의 2.6배)을 잘라 모델에 넣고, 최근 결과를 셰이더에 준다 */
+  private runNailNets(video: HTMLVideoElement, quads: NailQuad[]): void {
+    const W = video.videoWidth;
+    const H = video.videoHeight;
+    const out: { data: Uint8ClampedArray; size: number; rect: { x: number; y: number; size: number } }[] = [];
+    for (let hi = 0; hi < 2; hi++) {
+      const net = this.nailNets[hi];
+      const qs = quads.filter((q) => q.hand === hi);
+      if (!net || qs.length === 0) continue;
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const q of qs) {
+        x0 = Math.min(x0, q.c.x - q.width);
+        y0 = Math.min(y0, q.c.y - q.len);
+        x1 = Math.max(x1, q.c.x + q.width);
+        y1 = Math.max(y1, q.c.y + q.len);
+      }
+      const size = Math.max(Math.max(x1 - x0, y1 - y0) * 2.6, Math.min(W, H) * 0.25);
+      const cx = (x0 + x1) / 2;
+      const cy = (y0 + y1) / 2;
+      const rect = { x: cx - size / 2, y: cy - size / 2, size };
+      const N = net.size;
+      if (!this.nailCanvas || this.nailCanvas.width !== N) {
+        this.nailCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(N, N) : document.createElement('canvas');
+        this.nailCanvas.width = N;
+        this.nailCanvas.height = N;
+        this.nailCtx = this.nailCanvas.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+      }
+      // 영상 밖으로 나간 부분은 검게(모델 입력 크기 고정)
+      this.nailCtx!.fillStyle = '#000';
+      this.nailCtx!.fillRect(0, 0, N, N);
+      this.nailCtx!.drawImage(video, rect.x, rect.y, size, size, 0, 0, N, N);
+      net.submit(this.nailCtx!, rect);
+      if (net.last) out[hi] = { data: net.last.alpha, size: net.last.size, rect: (net.last.tag as typeof rect) ?? rect };
+    }
+    this.nailFx.setMasks(out);
   }
 
   private drawOverlay(face: FaceFrame | null, w: number, h: number): void {

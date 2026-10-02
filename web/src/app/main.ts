@@ -91,6 +91,8 @@ const trackerConfig: TrackerConfig = {
   // 자체 머리카락 모델: ?hairmodel=models/hair-matte-256.onnx (또는 설정 체크박스)
   hairModel: params.get('hairmodel') ?? (localStorage.getItem('iris.hairModel') || ''),
 };
+// 자체 손톱 모델(실험): ?nailmodel=models/nail-seg.onnx
+const NAIL_MODEL_PARAM = params.get('nailmodel') ?? '';
 /** 자체 학습 머리카락 모델(설정 체크박스가 켜면 이 파일) */
 const HAIR_MODEL_URL = 'models/hair-matte-256.onnx';
 
@@ -739,6 +741,7 @@ async function begin(open: () => Promise<void>): Promise<void> {
     await open();
     startEl.hidden = true;
     await engine.tracker.configure(trackerConfig, setStatus);
+    if (NAIL_MODEL_PARAM) await engine.setNailModel(NAIL_MODEL_PARAM, setStatus);
     setStatus(`처리 장치 ${engine.tracker.delegate}`);
     engine.start();
     running = true;

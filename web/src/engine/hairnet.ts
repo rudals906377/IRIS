@@ -17,13 +17,14 @@ type Ort = {
   Tensor: new (type: 'float32', data: Float32Array, dims: number[]) => unknown;
 };
 
+/** 범용 ONNX 매팅 실행기(머리카락·손톱 모두 이 클래스를 쓴다) */
 export class HairNet {
   private ort: Ort | null = null;
   private session: Awaited<ReturnType<Ort['InferenceSession']['create']>> | null = null;
   private busy = false;
   private input: Float32Array | null = null;
   /** 마지막 결과(알파 0~255)와 그때의 입력 크기 */
-  last: { alpha: Uint8ClampedArray; size: number } | null = null;
+  last: { alpha: Uint8ClampedArray; size: number; tag?: unknown } | null = null;
   /** 모델 입력 한 변(ONNX 파일 이름의 숫자). 기본 256 */
   readonly size: number;
   provider = '';
@@ -57,7 +58,7 @@ export class HairNet {
   }
 
   /** 바쁘지 않으면 추론을 시작한다(비동기). 결과는 다음 프레임부터 last 에 들어온다 */
-  submit(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
+  submit(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, tag?: unknown): void {
     if (!this.session || !this.ort || this.busy || !this.input) return;
     const N = this.size;
     const d = ctx.getImageData(0, 0, N, N).data;
@@ -77,7 +78,7 @@ export class HairNet {
         const logit = out[this.session!.outputNames[0]].data;
         const alpha = this.last && this.last.size === N ? this.last.alpha : new Uint8ClampedArray(plane);
         for (let i = 0; i < plane; i++) alpha[i] = 255 / (1 + Math.exp(-logit[i]));
-        this.last = { alpha, size: N };
+        this.last = { alpha, size: N, tag };
         this.lastMs = performance.now() - t0;
       })
       .catch((e) => console.warn('머리카락 모델 추론 실패', e))
