@@ -88,6 +88,8 @@ const trackerConfig: TrackerConfig = {
   delegate: (params.get('delegate') as Delegate) ?? 'GPU',
   segEvery: coarse ? 2 : 1,
   headSeg: params.get('headseg') !== '0',
+  // 자체 머리카락 모델: ?hairmodel=models/hair-matte-256.onnx (또는 설정에서 저장한 주소)
+  hairModel: params.get('hairmodel') ?? localStorage.getItem('iris.hairModel') ?? '',
 };
 
 let running = false;

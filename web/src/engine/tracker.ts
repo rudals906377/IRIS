@@ -1,6 +1,7 @@
 // MediaPipe Tasks(웹) 추적기 모음: 자세(Pose), 다중 클래스 분할(머리카락·피부), 손, 얼굴(선택).
 // GPU(WebGL) 위임을 먼저 시도하고 실패하면 CPU로 전환한다.
 
+import { HairNet } from './hairnet.ts';
 import {
   FaceLandmarker,
   FilesetResolver,
@@ -61,6 +62,8 @@ export interface TrackerConfig {
   segEvery: number;
   /** 머리 주변을 따로 잘라 다시 분할해 머리카락 경계를 세밀하게(얼굴이 보일 때만) */
   headSeg: boolean;
+  /** 자체 학습한 머리카락 매팅 모델(ONNX) 주소. 비우면 범용 분할을 쓴다 */
+  hairModel: string;
   hands: boolean;
   /** 얼굴 점 추적(메이크업) */
   face: boolean;
@@ -73,6 +76,7 @@ export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
   segmentation: true,
   segEvery: 1,
   headSeg: true,
+  hairModel: '',
   hands: false,
   face: true,
 };
@@ -91,6 +95,10 @@ export class Tracker {
   private seg: ImageSegmenter | null = null;
   /** 머리 주변만 잘라 다시 분할하는 두 번째 분할기(머리카락 올 해상도를 높인다) */
   private segHead: ImageSegmenter | null = null;
+  /** 자체 머리카락 모델(있으면 segHead 대신 쓴다) */
+  hairNet: HairNet | null = null;
+  private hairCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+  private hairCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
   private headCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
   private headCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
   private lastFaceLm: NormalizedLandmark[] | null = null;
@@ -173,6 +181,21 @@ export class Tracker {
         this.lastSeg = null;
         this.lastGlobal = null;
       }
+      if (next.hairModel !== (this.hairNet?.url ?? '')) {
+        this.hairNet?.close();
+        this.hairNet = null;
+        if (next.hairModel) {
+          const hn = new HairNet(next.hairModel);
+          try {
+            await hn.load(onStatus);
+            this.hairNet = hn;
+            onStatus?.(`머리카락 모델 준비(${hn.provider})`);
+          } catch (e) {
+            console.warn(e);
+            onStatus?.('머리카락 모델을 못 불러와 범용 분할을 씁니다');
+          }
+        }
+      }
       if (next.hands && (!this.hands || delegateChanged)) {
         onStatus?.('손 모델 불러오는 중…');
         this.hands?.close();
@@ -253,7 +276,7 @@ export class Tracker {
       const every = Math.max(1, this.config.segEvery) * (head ? 3 : 1);
       if (!this.lastGlobal || this.frameNo % every === 0) this.runSeg(video, t);
       if (this.lastGlobal) {
-        const hair = head ? this.runHeadSeg(video, head) : null;
+        const hair = head ? (this.hairNet ? this.runHairNet(video, head) : this.runHeadSeg(video, head)) : null;
         seg = this.merge(this.lastGlobal, hair, head, video.videoWidth, video.videoHeight);
         this.lastSeg = seg;
       }
@@ -306,8 +329,23 @@ export class Tracker {
     return { x, y, size: sz };
   }
 
+  /** 자체 머리카락 모델: 머리 주변을 모델 입력 크기로 잘라 추론을 걸고, 가장 최근 결과를 돌려준다(한 프레임 늦음) */
+  private runHairNet(video: HTMLVideoElement, head: { x: number; y: number; size: number }): { data: Uint8ClampedArray; size: number } | null {
+    const hn = this.hairNet!;
+    const N = hn.size;
+    if (!this.hairCanvas || this.hairCanvas.width !== N) {
+      this.hairCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(N, N) : document.createElement('canvas');
+      this.hairCanvas.width = N;
+      this.hairCanvas.height = N;
+      this.hairCtx = this.hairCanvas.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+    }
+    this.hairCtx!.drawImage(video, head.x, head.y, head.size, head.size, 0, 0, N, N);
+    hn.submit(this.hairCtx!);
+    return hn.last ? { data: hn.last.alpha, size: hn.last.size } : null;
+  }
+
   /** 머리 주변을 잘라 분할하고 머리카락 확률(0~255, HEAD_W²)을 돌려준다 */
-  private runHeadSeg(video: HTMLVideoElement, head: { x: number; y: number; size: number }): Uint8ClampedArray | null {
+  private runHeadSeg(video: HTMLVideoElement, head: { x: number; y: number; size: number }): { data: Uint8ClampedArray; size: number } | null {
     if (!this.segHead) return null;
     if (!this.headCanvas) {
       this.headCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(HEAD_W, HEAD_W) : document.createElement('canvas');
@@ -335,15 +373,17 @@ export class Tracker {
       }
       out = arr;
     });
-    return out;
+    return out ? { data: out, size: HEAD_W } : null;
   }
 
   /**
    * 전체 분할(저해상도)을 HI_W 폭으로 키우고, 머리 영역의 머리카락(R)은 잘라 분할한 고해상도 값으로 바꾼다.
    * 영역 가장자리는 서서히 섞어 이음새가 보이지 않게 한다.
    */
-  private merge(g: { flags: Uint8ClampedArray; w: number; h: number }, hair: Uint8ClampedArray | null, head: { x: number; y: number; size: number } | null, frameW: number, frameH: number): SegOutput {
-    if (!hair || !head) return { flags: g.flags, width: g.w, height: g.h };
+  private merge(g: { flags: Uint8ClampedArray; w: number; h: number }, hairIn: { data: Uint8ClampedArray; size: number } | null, head: { x: number; y: number; size: number } | null, frameW: number, frameH: number): SegOutput {
+    if (!hairIn || !head) return { flags: g.flags, width: g.w, height: g.h };
+    const hair = hairIn.data;
+    const HW = hairIn.size;
     // 잘라 분할한 결과는 머리만 크게 보여 배경(벽 무늬 등)을 머리카락으로 착각할 때가 있다.
     // 전체 분할의 '사람(A)·머리카락(R)'을 한 칸 넓힌 값으로 걸러, 사람 밖에서는 쓰지 않는다
     const gate = new Uint8ClampedArray(g.w * g.h);
@@ -396,24 +436,24 @@ export class Tracker {
     const xe = Math.min(W - 1, Math.ceil(rx0 + rw));
     const ye = Math.min(H - 1, Math.ceil(ry0 + rh));
     for (let y = ys; y <= ye; y++) {
-      const v = ((y - ry0) / rh) * HEAD_W;
-      const vy = Math.max(0, Math.min(HEAD_W - 1.001, v));
+      const v = ((y - ry0) / rh) * HW;
+      const vy = Math.max(0, Math.min(HW - 1.001, v));
       const y0 = vy | 0;
       const ty = vy - y0;
       const wy = Math.min(1, (y - ry0) / feather, (ry0 + rh - y) / feather);
       if (wy <= 0) continue;
       for (let x = xs; x <= xe; x++) {
-        const u = ((x - rx0) / rw) * HEAD_W;
-        const ux = Math.max(0, Math.min(HEAD_W - 1.001, u));
+        const u = ((x - rx0) / rw) * HW;
+        const ux = Math.max(0, Math.min(HW - 1.001, u));
         const x0 = ux | 0;
         const tx = ux - x0;
         const wx = Math.min(1, (x - rx0) / feather, (rx0 + rw - x) / feather);
         const wgt = Math.min(wx, wy);
         if (wgt <= 0) continue;
-        const h00 = hair[y0 * HEAD_W + x0];
-        const h10 = hair[y0 * HEAD_W + x0 + 1];
-        const h01 = hair[(y0 + 1) * HEAD_W + x0];
-        const h11 = hair[(y0 + 1) * HEAD_W + x0 + 1];
+        const h00 = hair[y0 * HW + x0];
+        const h10 = hair[y0 * HW + x0 + 1];
+        const h01 = hair[(y0 + 1) * HW + x0];
+        const h11 = hair[(y0 + 1) * HW + x0 + 1];
         const hp = (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty;
         const o = (y * W + x) * 4;
         // 전체 분할 기준 사람 밖(넓힌 값 < 약 0.15)이면 잘라 분할한 값을 쓰지 않는다
@@ -475,6 +515,8 @@ export class Tracker {
     this.seg?.close();
     this.segHead?.close();
     this.segHead = null;
+    this.hairNet?.close();
+    this.hairNet = null;
     this.hands?.close();
     this.face?.close();
     this.face = null;
