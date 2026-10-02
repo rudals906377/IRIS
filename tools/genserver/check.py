@@ -60,12 +60,17 @@ def main() -> int:
     print("4) 모델 캐시")
     hf = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
     hub = os.path.join(hf, "hub")
-    want = ["models--stable-diffusion-v1-5--stable-diffusion-inpainting", "models--h94--IP-Adapter"]
-    for w in want:
+    want = [
+        ("models--diffusers--stable-diffusion-xl-1.0-inpainting-0.1", "SDXL 인페인팅(GPU 10GB 이상이면 기본, 약 7GB)"),
+        ("models--madebyollin--sdxl-vae-fp16-fix", "SDXL용 VAE(약 0.3GB)"),
+        ("models--stable-diffusion-v1-5--stable-diffusion-inpainting", "SD1.5 인페인팅(GPU 10GB 미만이면 기본, 약 2GB)"),
+        ("models--h94--IP-Adapter", "IP-Adapter(참고 사진 따라 그리기, 약 2~4GB)"),
+    ]
+    for w, desc in want:
         if os.path.isdir(os.path.join(hub, w)):
-            ok(f"내려받음: {w}")
+            ok(f"내려받음: {desc}")
         else:
-            print(f"  [안내] 아직 없음: {w} — 첫 실행 때 자동으로 내려받음(합쳐서 약 4GB, 5~10분)")
+            print(f"  [안내] 아직 없음: {desc} — 첫 실행 때 자동으로 내려받음")
     cache = os.environ.get("IRIS_GEN_CACHE", os.path.join(os.path.expanduser("~"), ".cache", "iris-genserver"))
     print(f"  MediaPipe 모델 폴더: {cache}")
 

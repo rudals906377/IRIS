@@ -8,15 +8,27 @@
 
 | 역할 | 모델 | 크기 |
 |---|---|---|
-| 다시 그리기 | Stable Diffusion 1.5 인페인팅 (`stable-diffusion-v1-5/stable-diffusion-inpainting`) | 약 2GB |
-| 참고 사진 따라 그리기 | IP-Adapter (`h94/IP-Adapter`, SD1.5용) | 약 1.7GB |
+| 다시 그리기(기본, GPU 10GB 이상) | SDXL 인페인팅 (`diffusers/stable-diffusion-xl-1.0-inpainting-0.1`) + fp16 VAE | 약 7GB |
+| 다시 그리기(GPU 10GB 미만·CPU) | Stable Diffusion 1.5 인페인팅 (`stable-diffusion-v1-5/stable-diffusion-inpainting`) | 약 2GB |
+| 참고 사진 따라 그리기 | IP-Adapter (`h94/IP-Adapter`; SDXL은 Plus ViT-H, SD1.5는 기본) | 약 2~4GB |
 | 어디를 그릴지(마스크) | MediaPipe 분할·손 점·자세 점 (웹 앱과 같은 모델) | 약 20MB |
+
+모델은 GPU 메모리를 보고 자동으로 고른다(`IRIS_GEN_MODEL=auto`). 바꾸려면 `python server.py --preload --model sd15` 또는 `--model sdxl`.
+SDXL은 12GB 미만 GPU에서 일부를 CPU에 두고 번갈아 올리므로(자동) 한 장에 10~20초 걸린다.
 
 마스크 안만 새로 그리고 나머지(얼굴·배경)는 원본 픽셀을 그대로 둔다.
 작은 부위(손톱·팔)는 마스크 주변만 잘라 크게 그린 뒤 되붙여 세밀하게 나온다.
 
+**헤어 색 고정**: 생성 모델은 색을 자주 틀린다(노랑 → 연두, 반쪽만 검정 등). 그래서 참고 사진이 있으면 생성 뒤
+머리 영역의 색 분포를 참고 사진 머리색 분포에 맞춘다(Lab 분위수 대응). 끄려면 요청에 `color_lock: false`.
+
 분야별 기본 세기(`strength`): 헤어 0.95(모양을 새로 그림), 네일 0.65, 타투 0.45.
 웹 앱이 보내는 그림에는 실시간 합성(네일 색·타투 도안)이 이미 올라가 있어서, 네일·타투는 그것을 살리며 피부에 녹이는 정도로만 다시 그린다.
+
+## 파일 갱신
+
+서버 코드가 바뀌면(이 저장소에 새 커밋) 서버를 끄고 `python update.py` → 다시 `python server.py --preload`.
+venv·모델·cloudflared.exe 는 그대로 둔다. 처음 한 번은 `curl -L -o update.py "https://raw.githubusercontent.com/rudals906377/iris/claude/virtual-try-on-realtime-7uwjlm/tools/genserver/update.py"` 로 받는다.
 
 ## 설치 (윈도우, 엔비디아 그래픽카드) — 한 번만
 

@@ -20,7 +20,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from masks import Masker
-from pipelines import Generator, GenRequest
+from pipelines import Generator, GenRequest, lock_hair_color
 
 app = FastAPI(title="IRIS 생성 서버")
 # 웹 앱(다른 주소)에서 부를 수 있게. 로컬 전용이므로 모든 출처 허용
@@ -82,6 +82,7 @@ class GenerateBody(BaseModel):
     ip_scale: float = 0.6
     seed: int | None = None
     mask_only: bool = False
+    color_lock: bool = True  # 헤어: 생성 뒤 머리색을 참고 사진에 맞춤
 
 
 @app.get("/health")
@@ -94,6 +95,7 @@ def health() -> dict:
         "device": generator.device or ("cuda" if torch.cuda.is_available() else "cpu"),
         "model_loaded": generator.pipe is not None,
         "model": generator.loaded_model,
+        "model_choice": generator.model_name,
         "log": LOG[-5:],
     }
 
@@ -133,6 +135,8 @@ def generate(body: GenerateBody) -> dict:
                 guidance=body.guidance,
                 ip_scale=body.ip_scale,
                 seed=body.seed,
+                color_lock=body.color_lock,
+                color_fn=lambda res, mask, ref, lg: lock_hair_color(res, mask, ref, lambda im: masker.segment(im)["hair"], lg),
             ),
             log,
         )
@@ -151,8 +155,11 @@ def main() -> None:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--dry-run", action="store_true", help="모델 없이 마스크만 표시(연결 시험)")
     ap.add_argument("--preload", action="store_true", help="시작할 때 모델을 미리 불러온다")
+    ap.add_argument("--model", default=None, help="auto(기본: GPU 메모리로 결정) | sd15 | sdxl | Hugging Face 모델 id")
     a = ap.parse_args()
     generator.dry_run = a.dry_run
+    if a.model:
+        generator.model_name = a.model
     if a.preload and not a.dry_run:
         generator.load(log)
     print(f"IRIS 생성 서버: http://{a.host}:{a.port}  (dry-run={a.dry_run})", flush=True)
