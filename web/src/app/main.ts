@@ -88,9 +88,11 @@ const trackerConfig: TrackerConfig = {
   delegate: (params.get('delegate') as Delegate) ?? 'GPU',
   segEvery: coarse ? 2 : 1,
   headSeg: params.get('headseg') !== '0',
-  // 자체 머리카락 모델: ?hairmodel=models/hair-matte-256.onnx (또는 설정에서 저장한 주소)
-  hairModel: params.get('hairmodel') ?? localStorage.getItem('iris.hairModel') ?? '',
+  // 자체 머리카락 모델: ?hairmodel=models/hair-matte-256.onnx (또는 설정 체크박스)
+  hairModel: params.get('hairmodel') ?? (localStorage.getItem('iris.hairModel') || ''),
 };
+/** 자체 학습 머리카락 모델(설정 체크박스가 켜면 이 파일) */
+const HAIR_MODEL_URL = 'models/hair-matte-256.onnx';
 
 let running = false;
 let lastFaceSeen = performance.now();
@@ -783,6 +785,12 @@ function applySettings(): void {
 async function applyTracker(): Promise<void> {
   trackerConfig.delegate = $<HTMLSelectElement>('opt-delegate').value as Delegate;
   trackerConfig.segEvery = Number($<HTMLSelectElement>('opt-seg-every').value);
+  trackerConfig.hairModel = $<HTMLInputElement>('opt-hair-model').checked ? HAIR_MODEL_URL : '';
+  try {
+    localStorage.setItem('iris.hairModel', trackerConfig.hairModel);
+  } catch {
+    /* 저장 못 해도 동작 */
+  }
   if (!running) return;
   await engine.tracker.configure(trackerConfig, setStatus);
   engine.metrics.reset();
@@ -792,7 +800,7 @@ async function applyTracker(): Promise<void> {
 for (const id of ['opt-mirror', 'opt-seg', 'opt-refine', 'opt-dbg-lm', 'opt-dbg-seg']) {
   $(id).addEventListener('input', applySettings);
 }
-for (const id of ['opt-delegate', 'opt-seg-every']) {
+for (const id of ['opt-delegate', 'opt-seg-every', 'opt-hair-model']) {
   $(id).addEventListener('change', () => void applyTracker());
 }
 $('opt-res').addEventListener('change', () => {
@@ -892,6 +900,7 @@ function applyParams(): void {
   $<HTMLInputElement>('opt-dbg-seg').checked = debug.includes('seg');
   $<HTMLSelectElement>('opt-delegate').value = trackerConfig.delegate;
   $<HTMLSelectElement>('opt-seg-every').value = String(trackerConfig.segEvery);
+  $<HTMLInputElement>('opt-hair-model').checked = trackerConfig.hairModel !== '';
   applySettings();
   const look = params.get('look') as LookName | null;
   selectLook(look && look in LOOKS ? look : 'daily');

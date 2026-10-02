@@ -1,2 +1,2 @@
 *.onnx
-!README.md
+!hair-matte-256.onnx
