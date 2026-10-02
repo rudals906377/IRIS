@@ -1,5 +1,5 @@
 @echo off
-rem IRIS ìƒì„± ì„œë²„ ì‹¤í–‰(ìœˆë„ìš°). ë¨¼ì € README.mdì˜ ì„¤ì¹˜ë¥¼ ë§ˆì¹  ê²ƒ.
+rem IRIS »ı¼º ¼­¹ö ½ÇÇà(À©µµ¿ì). ¸ÕÀú README.mdÀÇ ¼³Ä¡¸¦ ¸¶Ä¥ °Í.
 cd /d %~dp0
 if exist venv\Scripts\activate.bat call venv\Scripts\activate.bat
 python server.py --preload --port 8765

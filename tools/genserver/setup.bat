@@ -1,24 +1,24 @@
 @echo off
-rem IRIS ìƒì„± ì„œë²„ í•œ ë²ˆì— ì„¤ì¹˜(ìœˆë„ìš°, ì—”ë¹„ë””ì•„ GPU). ì²˜ìŒ í•œ ë²ˆë§Œ ì‹¤í–‰.
-rem í•˜ëŠ” ì¼: ê°€ìƒí™˜ê²½ ë§Œë“¤ê¸° â†’ GPUìš© PyTorch ì„¤ì¹˜ â†’ ë‚˜ë¨¸ì§€ íŒ¨í‚¤ì§€ ì„¤ì¹˜ â†’ í™˜ê²½ ê²€ì‚¬(check.py)
+rem IRIS »ı¼º ¼­¹ö ÇÑ ¹ø¿¡ ¼³Ä¡(À©µµ¿ì, ¿£ºñµğ¾Æ GPU). Ã³À½ ÇÑ ¹ø¸¸ ½ÇÇà.
+rem ÇÏ´Â ÀÏ: °¡»óÈ¯°æ ¸¸µé±â ¡æ GPU¿ë PyTorch ¼³Ä¡ ¡æ ³ª¸ÓÁö ÆĞÅ°Áö ¼³Ä¡ ¡æ È¯°æ °Ë»ç(check.py)
 cd /d %~dp0
-where python >nul 2>nul || (echo [ë¬¸ì œ] python ì„ ì°¾ì§€ ëª»í–ˆìŠµë‹ˆë‹¤. python.org ì—ì„œ 3.11 ì„¤ì¹˜ ë•Œ "Add to PATH" ë¥¼ ì²´í¬í•˜ì„¸ìš”. & pause & exit /b 1)
+where python >nul 2>nul || (echo [¹®Á¦] python À» Ã£Áö ¸øÇß½À´Ï´Ù. python.org ¿¡¼­ 3.11 ¼³Ä¡ ¶§ "Add to PATH" ¸¦ Ã¼Å©ÇÏ¼¼¿ä. & pause & exit /b 1)
 if not exist venv (
-  echo ê°€ìƒí™˜ê²½ ë§Œë“œëŠ” ì¤‘...
-  python -m venv venv || (echo [ë¬¸ì œ] ê°€ìƒí™˜ê²½ ìƒì„± ì‹¤íŒ¨ & pause & exit /b 1)
+  echo °¡»óÈ¯°æ ¸¸µå´Â Áß...
+  python -m venv venv || (echo [¹®Á¦] °¡»óÈ¯°æ »ı¼º ½ÇÆĞ & pause & exit /b 1)
 )
 call venv\Scripts\activate.bat
 python -m pip install --upgrade pip
-echo GPUìš© PyTorch ì„¤ì¹˜ ì¤‘(ì•½ 2.5GB, ëª‡ ë¶„ ê±¸ë¦¼)...
+echo GPU¿ë PyTorch ¼³Ä¡ Áß(¾à 2.5GB, ¸î ºĞ °É¸²)...
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 if errorlevel 1 (
-  echo cu126 ì„¤ì¹˜ ì‹¤íŒ¨ - ë“œë¼ì´ë²„ê°€ ì˜¤ë˜ëœ ê²½ìš° cu118 ë¡œ ë‹¤ì‹œ ì‹œë„í•©ë‹ˆë‹¤...
+  echo cu126 ¼³Ä¡ ½ÇÆĞ - µå¶óÀÌ¹ö°¡ ¿À·¡µÈ °æ¿ì cu118 ·Î ´Ù½Ã ½ÃµµÇÕ´Ï´Ù...
   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 )
-echo ë‚˜ë¨¸ì§€ íŒ¨í‚¤ì§€ ì„¤ì¹˜ ì¤‘...
-pip install -r requirements.txt || (echo [ë¬¸ì œ] íŒ¨í‚¤ì§€ ì„¤ì¹˜ ì‹¤íŒ¨ & pause & exit /b 1)
+echo ³ª¸ÓÁö ÆĞÅ°Áö ¼³Ä¡ Áß...
+pip install -r requirements.txt || (echo [¹®Á¦] ÆĞÅ°Áö ¼³Ä¡ ½ÇÆĞ & pause & exit /b 1)
 echo.
 python check.py
 echo.
-echo ìœ„ì— "ëª¨ë‘ ì¤€ë¹„ë¨" ì´ ë³´ì´ë©´ run.bat ë¥¼ ì‹¤í–‰í•˜ì„¸ìš”.
+echo À§¿¡ "¸ğµÎ ÁØºñµÊ" ÀÌ º¸ÀÌ¸é run.bat ¸¦ ½ÇÇàÇÏ¼¼¿ä.
 pause
