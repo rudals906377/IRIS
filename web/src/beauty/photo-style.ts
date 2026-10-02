@@ -27,7 +27,8 @@ export type PhotoMode = 'auto' | 'makeup' | 'hair' | 'nail' | 'tattoo';
 export interface MakeupStyle {
   lip?: { color: RGB; amount: number; gloss: number; style: 'full' | 'gradient' | 'blur' };
   /** pos: 0 눈 밑 사과존 ~ 1 광대 */
-  blush?: { color: RGB; amount: number; pos: number; size: number };
+  /** redness: 사진에서 잰 붉은 기(0.08 이상이면 블러셔로 봄). 스타일 AI의 '블러셔 없음' 힌트가 측정을 덮어쓸지 정할 때 쓴다 */
+  blush?: { color: RGB; amount: number; pos: number; size: number; redness?: number };
   shadow?: { color: RGB; amount: number };
   brow?: { color: RGB; amount: number };
   liner?: { color: RGB; amount: number };
@@ -343,7 +344,7 @@ export function makeupFromMeasure(m: FaceMeasure): MakeupStyle {
   if (best) {
     // 퍼짐: 붉은 기가 두세 곳에 함께 있으면 넓게 바른 것
     const reds = spots.filter((sp) => sp.r && chroma(sp.r)[0] / sp.nat[0] - chroma(sp.r)[1] / sp.nat[1] > 0.03).length;
-    res.blush = { ...best.t, pos: best.pos, size: reds >= 3 ? 1.5 : reds === 2 ? 1.25 : 1 };
+    res.blush = { ...best.t, pos: best.pos, size: reds >= 3 ? 1.5 : reds === 2 ? 1.25 : 1, redness: best.dev };
   }
 
   // 아이섀도: 안쪽·바깥쪽 중 더 진한 쪽 기준(그라데이션은 합성 쪽에서 만든다)
