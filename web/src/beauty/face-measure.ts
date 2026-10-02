@@ -87,6 +87,8 @@ export function fitSkinField(img: ImageData, p: Vec2[], exclude: Vec2[][], skinO
           A[i][6] += b[i] * q.c[ch];
         }
       }
+      // 능형 정칙화: 표본이 얼굴 일부에만 있을 때(머리카락이 반을 덮은 사진) 기울기·곡률이 과하게 커지지 않게
+      for (let i = 1; i < 6; i++) A[i][i] += sel.length * (i < 3 ? 0.02 : 0.2);
       // 가우스 소거
       for (let i = 0; i < 6; i++) {
         let piv = i;
@@ -124,12 +126,28 @@ export function fitSkinField(img: ImageData, p: Vec2[], exclude: Vec2[][], skinO
   const cf = coef;
   const mean: RGB = [0, 0, 0];
   for (const q of sel) for (let i = 0; i < 3; i++) mean[i] += q.c[i] / sel.length;
+  // 표본이 있는 범위(조금 여유) 밖으로는 2차식을 늘리지 않는다: 머리카락이 얼굴 반을 덮은 사진에서
+  // 표본 없는 쪽의 예상 피부색이 0 가까이 떨어져 비율이 수백 배로 튀던 문제
+  let u0 = Infinity;
+  let u1 = -Infinity;
+  let v0 = Infinity;
+  let v1 = -Infinity;
+  for (const q of sel) {
+    u0 = Math.min(u0, q.u);
+    u1 = Math.max(u1, q.u);
+    v0 = Math.min(v0, q.v);
+    v1 = Math.max(v1, q.v);
+  }
+  const pad = 0.08;
   return {
     mean,
     n: sel.length,
     at(q: Vec2): RGB {
-      const b = basis((q.x - cx) / fw, (q.y - cy) / fw);
-      return cf.map((c) => Math.max(1e-3, b.reduce((s, x, i) => s + x * c[i], 0))) as RGB;
+      const u = Math.min(u1 + pad, Math.max(u0 - pad, (q.x - cx) / fw));
+      const v = Math.min(v1 + pad, Math.max(v0 - pad, (q.y - cy) / fw));
+      const b = basis(u, v);
+      // 예상값은 평균의 0.6~1.5배 안으로(그 밖이면 식이 틀어진 것)
+      return cf.map((c, ch) => Math.min(mean[ch] * 1.5, Math.max(mean[ch] * 0.6, b.reduce((s, x, i) => s + x * c[i], 0)))) as RGB;
     },
   };
 }
@@ -189,7 +207,7 @@ export class Sampler {
     this.mc = this.mask.getContext('2d', { willReadFrequently: true })!;
   }
 
-  pixels(polys: Vec2[][], holes: Vec2[][] = []): RGB[] {
+  pixels(polys: Vec2[][], holes: Vec2[][] = [], ok?: (q: Vec2) => boolean): RGB[] {
     const { width: w, height: h, data: d } = this.img;
     const mc = this.mc;
     // 다각형들의 경계 상자만 처리해 빠르게
@@ -225,6 +243,7 @@ export class Sampler {
     for (let y = y0; y <= y1; y++)
       for (let x = x0; x <= x1; x++) {
         if (md[((y - y0) * bw + (x - x0)) * 4] < 128) continue;
+        if (ok && !ok({ x, y })) continue;
         const k = (y * w + x) * 4;
         out.push([lin1(d[k]), lin1(d[k + 1]), lin1(d[k + 2])]);
       }
@@ -267,8 +286,16 @@ export function measureFace(img: ImageData, p: Vec2[], skinOk?: (q: Vec2) => boo
   const S = new Sampler(img);
   const fw = Math.hypot(p[234].x - p[454].x, p[234].y - p[454].y);
   // 피부 조각: 머리카락·배경·그늘이 섞이지 않게 피부색 픽셀만 쓰고, 절반 이상 남아야 인정
+  /** 표본의 절반 넘게 피부 아닌 것(머리카락)으로 덮였으면 그 부위는 재지 않는다 */
+  const covered = (polys: Vec2[][], holes: Vec2[][] = []): boolean => {
+    if (!skinOk) return false;
+    const raw = S.pixels(polys, holes).length;
+    return raw > 0 && S.pixels(polys, holes, skinOk).length < raw * 0.5;
+  };
   const patch = (c: Vec2, r: number): RGB | null => {
-    const all = S.pixels([circle(c, fw * r)]);
+    // 분할이 피부가 아니라고 하는 곳(볼을 덮은 머리카락 등)은 표본에서 뺀다
+    if (covered([circle(c, fw * r)])) return null;
+    const all = S.pixels([circle(c, fw * r)], [], skinOk);
     const sk = all.filter(isSkin);
     if (sk.length < Math.max(12, all.length * 0.5)) return null;
     return trimmedMean(sk);
@@ -305,7 +332,7 @@ export function measureFace(img: ImageData, p: Vec2[], skinOk?: (q: Vec2) => boo
   // 립
   const outer = LIPS_OUTER.map((i) => p[i]);
   const inner = LIPS_INNER.map((i) => p[i]);
-  const lipPx = S.pixels([outer], [inner]);
+  const lipPx = S.pixels([outer], [inner], skinOk);
   const lip = trimmedMean(lipPx);
   const mid = outer.map((q, k) => lerp(q, inner[k], 0.5));
   const edge = trimmedMean(S.pixels([outer], [mid]));
@@ -338,16 +365,18 @@ export function measureFace(img: ImageData, p: Vec2[], skinOk?: (q: Vec2) => boo
     const top = lid.map((q, k) => lerp(q, p[browLower[Math.round((k / (lid.length - 1)) * (browLower.length - 1))]], 0.5));
     // 바깥 절반(0~4)과 안쪽 절반(4~8)
     const half = (a: number, b: number): Vec2[] => [...lid.slice(a, b + 1), ...top.slice(a, b + 1).reverse()];
-    const outPx = S.pixels([half(0, 4)]);
-    const inPx = S.pixels([half(4, 8)]);
+    // 눈꺼풀이 앞머리로 덮였으면(표본 절반 이상이 머리카락) 눈 화장은 재지 않는다
+    if (covered([[...lid, ...[...top].reverse()]])) return null;
+    const outPx = S.pixels([half(0, 4)], [], skinOk);
+    const inPx = S.pixels([half(4, 8)], [], skinOk);
     const strip = [...lid, ...lid.map((q, k) => lerp(q, top[k], 0.16)).reverse()];
-    const stripPx = S.pixels([strip]);
-    const lidPx = S.pixels([[...lid, ...top.reverse()]], [strip]);
+    const stripPx = S.pixels([strip], [], skinOk);
+    const lidPx = S.pixels([[...lid, ...top.reverse()]], [strip], skinOk);
     const lowLine = lower.map((i) => p[i]);
     const underPoly = [...lowLine, ...lowLine.map((q) => ({ x: q.x, y: q.y + fw * 0.03 })).reverse()];
     const inn = trimmedMean(inPx);
     const out = trimmedMean(outPx);
-    const under = trimmedMean(S.pixels([underPoly]));
+    const under = trimmedMean(S.pixels([underPoly], [], skinOk));
     const stripM = trimmedMean(stripPx, 6);
     const lidM = trimmedMean(lidPx);
     const brow = trimmedMean(S.pixels([[...bl, ...bu]]));

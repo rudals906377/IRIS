@@ -184,12 +184,29 @@ export class PhotoAnalyzer {
 
     // 얼굴이 사진 폭의 12% 이상이면 메이크업을 잰다
     const faceW = facePts ? Math.hypot(facePts[234].x - facePts[454].x, facePts[234].y - facePts[454].y) : 0;
+    // 머리색은 먼저 잰다: 얼굴 위에 드리운 머리카락(앞머리·볼 옆)을 피부 표본에서 빼는 데 쓴다
+    const hairM = segMasks ? measureHair(px, segMasks) : null;
     if (wantFace && facePts && (mode === 'makeup' || faceW > px.w * 0.12)) {
       const sm = segMasks as SegMasks | null;
+      const hairG = hairM ? hairM.color : null; // 감마 공간
       const skinOk = sm
         ? (q: Vec2): boolean => {
             const si = Math.floor((q.y * sm.h) / px.h) * sm.w + Math.floor((q.x * sm.w) / px.w);
-            return sm.face[si] > 0.5 || sm.body[si] > 0.5;
+            // 분할이 머리카락이라 하는 곳은 피부가 아니다
+            if (sm.hair[si] >= 0.35 || !(sm.face[si] > 0.5 || sm.body[si] > 0.5)) return false;
+            // 분할이 놓친 가는 앞머리: 픽셀 색이 이 사진의 머리색과 비슷하면 뺀다(머리색이 블러셔·아이섀도로 읽히는 것 방지)
+            if (hairG) {
+              const k = (Math.round(q.y) * px.w + Math.round(q.x)) * 4;
+              const r = px.d[k] / 255;
+              const g = px.d[k + 1] / 255;
+              const b = px.d[k + 2] / 255;
+              // 색감(밝기로 나눈 비율)과 밝기가 모두 머리색과 가까우면 머리카락으로 본다
+              const lp = (r + g + b) / 3;
+              const lh = (hairG[0] + hairG[1] + hairG[2]) / 3;
+              const d = Math.hypot(r / lp - hairG[0] / lh, g / lp - hairG[1] / lh, b / lp - hairG[2] / lh);
+              if (d < 0.25 && Math.abs(lp - lh) < 0.25) return false;
+            }
+            return true;
           }
         : undefined;
       out.measure = measureFace(px.img, facePts, skinOk);
@@ -198,7 +215,7 @@ export class PhotoAnalyzer {
       if (got.length) parts.push(`메이크업(${got.map((k) => ({ lip: '립', blush: '블러셔', shadow: '아이섀도', liner: '아이라인', brow: '눈썹' })[k]).join('·')})`);
     }
     if (wantHair && segMasks) {
-      const h = measureHair(px, segMasks);
+      const h = hairM;
       if (h && (mode === 'hair' || h.frac > 0.03)) {
         out.hair = { color: h.color, tip: h.tip, amount: 0.85 };
         parts.push(h.tip ? '헤어(옴브레)' : '헤어');
