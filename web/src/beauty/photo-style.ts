@@ -343,7 +343,8 @@ export function makeupFromMeasure(m: FaceMeasure): MakeupStyle {
   }
   if (best) {
     // 퍼짐: 붉은 기가 두세 곳에 함께 있으면 넓게 바른 것
-    const reds = spots.filter((sp) => sp.r && chroma(sp.r)[0] / sp.nat[0] - chroma(sp.r)[1] / sp.nat[1] > 0.03).length;
+    // 0.03은 자연 피부의 흔들림 수준이라 사과존만 바른 사진도 넓게 번지게 했음 → 0.06
+    const reds = spots.filter((sp) => sp.r && chroma(sp.r)[0] / sp.nat[0] - chroma(sp.r)[1] / sp.nat[1] > 0.06).length;
     res.blush = { ...best.t, pos: best.pos, size: reds >= 3 ? 1.5 : reds === 2 ? 1.25 : 1, redness: best.dev };
   }
 
