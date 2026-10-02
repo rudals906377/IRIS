@@ -49,7 +49,8 @@ cd tools/harness && npm install                         # playwright
 
 0. **자체 모델(사용자와 합의, 2026-10-02)**: ① 머리카락 전용 매팅 모델(실시간 올 디테일) ② 손톱 전용 분할 모델(손톱 위치) ③ 헤어 생성 LoRA. 순서 ①→②→③.
    ②는 라벨 도구 `web/label.html`(배포됨: /IRIS/label.html) + 학습 스크립트 `tools/train/nail/`이 준비됐고, 사용자가 손 사진을 찍어 라벨을 단다(목표 300장). 학습은 학교 GPU PC(생성 서버 venv 재사용).
-   ①은 `tools/train/hair/`(prepare.py: CelebAMask-HQ + ViTMatte/BiRefNet 정밀화, train.py: 0.4M 경량 U-Net) 완성. 1차 학습본(1,425장, CPU 8회, 검증 MAD 7.4%)을 `web/public/models/hair-matte-256.onnx`로 커밋, 설정 체크박스 '자체 학습 머리카락 모델'로 켠다. 시험 영상에서 범용 분할과 동급(아직 우위 아님). 다음: 학교 GPU에서 전체 데이터(--shards 6 --test) + 사용자 웹캠 사진(--webcam)으로 재학습, 384 입력 모델로 교체.
+   주의: 작업 환경(클라우드 컨테이너)은 세션이 유휴가 되면 재시작되어 떼어 놓은(setsid) 긴 작업이 죽는다 — 긴 학습은 세션을 깨워 둔 채(10분 단위 대기) 돌릴 것. `export_onnx.py`로 best.pt만 따로 ONNX로 뽑을 수 있다.
+   ①은 `tools/train/hair/`(prepare.py: CelebAMask-HQ + ViTMatte/BiRefNet 정밀화, train.py: 0.4M 경량 U-Net) 완성. 2차 학습본(CelebAMask 2,092장 + 시험 영상 웹캠 풍 프레임 90장 자동 라벨, 1차 가중치에서 CPU 9회 이어 학습, 검증 MAD 6.6%; 시험 영상 4개에서 범용 분할·1차보다 경계가 깨끗)을 `web/public/models/hair-matte-256.onnx`로 커밋(1차는 1,425장·MAD 7.4%), 설정 체크박스 '자체 학습 머리카락 모델'로 켠다. 시험 영상에서 범용 분할과 동급(아직 우위 아님). 다음: 학교 GPU에서 전체 데이터(--shards 6 --test) + 사용자 웹캠 사진(--webcam)으로 재학습, 384 입력 모델로 교체.
 
 1. **생성 모드 실사용 확인(방향 (a): 내 컴퓨터 GPU 서버로 확정)**: 시험 PC는 윈도우, RTX 3080 10GB, RAM 32GB(기본 설정 그대로 가능, SDXL도 fp16으로 가능한 사양). 사용자가 학교 GPU PC에서 `tools/genserver/setup.bat` → `run.bat` → README의 "실행과 첫 생성" 순서대로 시험 → 헤어·네일·타투 결과 품질 확인. 헤어는 마스크가 넓어 옷·배경이 바뀔 수 있음(grow 줄이기, 또는 옷 분할을 마스크에서 빼는 옵션). 품질이 부족하면 SDXL 인페인팅 + IP-Adapter-plus, 헤어 전용(Stable-Hair) 검토
 2. **사진 따라하기 잔여 오차(21장 회귀, 2026-10-02 저녁)**: 립 평균 0.002. 블러셔·섀도 색조 오차 평균 0.05~0.08. 튀는 것: 04(사과존만 바른 사진인데 결과는 볼 가운데까지 분홍, B 채널 과함 1.17 vs 1.02), 16(섀도 B 채널 결과 1.0 vs 사진 0.8 — matchTint가 주도 채널(R)만 맞추고 B는 못 내림), 13·05(섀도 안쪽 약간 약함). 되먹임에서 주도 채널 외 채널도 함께 맞추는 개선 여지
