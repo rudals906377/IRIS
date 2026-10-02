@@ -118,6 +118,7 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--workers", type=int, default=0)
+    ap.add_argument("--init", default=None, help="이어서 학습할 가중치(best.pt)")
     a = ap.parse_args()
     random.seed(0)
     torch.manual_seed(0)
@@ -133,7 +134,10 @@ def main() -> None:
     dl = torch.utils.data.DataLoader(HairData(tr, root, True), batch_size=a.batch, shuffle=True, num_workers=a.workers, drop_last=True, pin_memory=dev == "cuda")
     dv = torch.utils.data.DataLoader(HairData(val, root, False), batch_size=a.batch, shuffle=False, num_workers=a.workers)
     model = HairNet().to(dev)
-    print(f"매개변수 {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
+    if a.init:
+        model.load_state_dict(torch.load(a.init, map_location=dev))
+        print("이어서 학습:", a.init)
+    print(f"매개변수 {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.epochs * len(dl))
     scaler = torch.amp.GradScaler(enabled=dev == "cuda")
@@ -168,7 +172,7 @@ def main() -> None:
                 if k == 0 and (ep % 4 == 3 or ep == a.epochs - 1):
                     save_samples(x, y, p, out / "samples" / f"ep{ep + 1:03d}.png")
         mad /= max(cnt, 1)
-        print(f"[{ep + 1}/{a.epochs}] 손실 {tot / len(dl):.4f}  검증 평균오차(MAD) {mad * 100:.2f}%")
+        print(f"[{ep + 1}/{a.epochs}] 손실 {tot / len(dl):.4f}  검증 평균오차(MAD) {mad * 100:.2f}%", flush=True)
         if mad < best:
             best = mad
             torch.save(model.state_dict(), out / "best.pt")
