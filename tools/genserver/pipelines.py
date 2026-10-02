@@ -79,12 +79,9 @@ class Generator:
         log("IP-Adapter 불러오는 중")
         pipe.load_ip_adapter(IP_ADAPTER[0], subfolder=IP_ADAPTER[1], weight_name=IP_ADAPTER[2])
         pipe = pipe.to(dev)
-        if dev == "cuda":
-            try:
-                pipe.enable_xformers_memory_efficient_attention()
-            except Exception:
-                pass
-            pipe.enable_attention_slicing()
+        # 주의: enable_attention_slicing / xformers 는 IP-Adapter 가 바꿔 둔 어텐션 처리기를 덮어써서
+        # "'tuple' object has no attribute 'shape'" 로 생성이 실패한다(RTX 3080에서 확인). 켜지 않는다.
+        # 메모리가 모자라면 IRIS_GEN_MAX_SIDE 로 생성 크기를 줄인다.
         self.pipe = pipe
         self.loaded_model = MODEL_ID
         log("준비 완료")
