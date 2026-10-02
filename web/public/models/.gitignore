@@ -1,0 +1,2 @@
+*.onnx
+!hair-matte-256.onnx
