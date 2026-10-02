@@ -86,37 +86,46 @@ void main() {
   // 얼굴 피부·손 위에는 칠하지 않는다(분할이 이마 잔머리 쪽으로 번지는 것 방지)
   vec4 s = texture(uSeg, vUv);
   p *= 1.0 - smoothstep(0.5, 0.9, max(s.b, s.g));
+  // 안쪽(확실한 머리카락)용 세기와 경계용 덮임 비율. 경계는 확률을 거의 그대로 덮임 비율로 쓴다:
+  // 반쯤 섞인 픽셀을 반만 염색해야 어두운 테두리가 남지 않는다
   float m = smoothstep(0.25, 0.9, p) * uAmount;
-  if (m < 0.003) discard;
+  float mo = clamp((p - 0.05) / 0.9, 0.0, 1.0) * uAmount;
+  if (mo < 0.003) discard;
 
-  float var = max(st.a / max(st.g, 1e-4) - mean * mean, 1e-5);
   float L = dot(c, W);
-  // 상대 밝기: 평균이면 1. 표준편차로 나눠 대비를 일정하게 맞춘 뒤 목표 대비(0.35)로 다시 편다.
-  // 경계(확률 낮은 곳)는 배경 밝기가 섞여 있으므로 상대 밝기를 1 쪽으로 눌러 번쩍이는 테두리를 막는다
-  float z = (L - mean) / sqrt(var);
   float edge = smoothstep(0.45, 0.95, p);
-  float rel = mix(1.0, clamp(1.0 + z * 0.35, 0.2, 1.9), edge);
+  // 명암(결)은 비율로 잰다: 어두운 머리도 밝은 머리도 올의 밝기 '비율'은 비슷하므로,
+  //  - 올 결: 픽셀 / 바로 주변(약 3px) 평균 → 가는 올 하나하나
+  //  - 큰 명암: 주변(약 11px) / 머리 전체 평균 → 정수리·옆머리의 밝고 어두움(압축해서 과하지 않게)
+  // 경계(확률 낮은 곳)는 배경이 섞여 있으므로 1 쪽으로 눌러 번쩍이는 테두리를 막는다
+  const float e = 0.02;
+  float Lsm = dot(textureLod(uCam, vUv, 1.5).rgb, W);
+  float Lrg = dot(textureLod(uCam, vUv, 3.5).rgb, W);
+  float strandR = clamp((L + e) / (Lsm + e), 0.45, 2.2);
+  float regionR = pow(clamp((Lrg + e) / (mean + e), 0.25, 4.0), 0.6);
+  float shade = mix(1.0, regionR * mix(1.0, strandR, 0.85), edge);
 
   vec3 target = uColor;
   if (uTipOn > 0.5) {
     float t = smoothstep(uSpan.x, uSpan.y, vUv.y);
     target = mix(uColor, uTip, t);
   }
-  vec3 dyed = target * rel;
-  // 실제 머리카락처럼: 밝은 결은 채도가 빠지고, 그늘은 원래 색이 조금 비친다
+  vec3 dyed = target * shade;
+  // 실제 머리카락처럼: 밝은 결은 채도가 빠져 흰빛에 가까워지고(클리핑 대신), 그늘은 원래 색이 조금 비친다
   float dl = dot(dyed, W);
-  dyed = mix(dyed, vec3(dl), smoothstep(1.1, 1.8, rel) * 0.45);
-  dyed = mix(dyed, c * (dot(target, W) / max(mean, 0.03)), (1.0 - smoothstep(0.4, 0.9, rel)) * 0.35);
+  dyed = mix(dyed, vec3(dl), smoothstep(1.15, 2.2, shade) * 0.6);
+  dyed = mix(dyed, c * (dot(target, W) / max(mean, 0.03)), (1.0 - smoothstep(0.45, 0.9, shade)) * 0.35);
+  dyed = clamp(dyed, 0.0, 1.0);
   // 윤기(주변보다 밝은 결)는 흰 빛으로 조금 더해 광택을 유지(경계는 제외)
   float Lblur = dot(textureLod(uCam, vUv, 3.0).rgb, W);
   dyed += vec3(max(0.0, L - Lblur) * 0.5 * edge);
   vec3 inner = mix(c, clamp(dyed, 0.0, 1.0), m);
   // 경계: 픽셀은 머리카락과 배경이 섞인 값이라, 통째로 섞으면 원래 머리색이 테두리로 남는다(밝게 염색할 때 어두운 테두리).
-  // 가이디드 필터 확률을 섞인 비율로 보고, 주변 머리카락의 평균색을 빼고 그 염색색을 더한다(배경 몫은 그대로).
+  // 확률을 섞인 비율로 보고, 주변 머리카락의 평균색을 빼고 그 염색색을 더한다(배경 몫은 그대로).
   vec4 hc = textureLod(uStatsC, vec2(vUv.x, 1.0 - vUv.y), 2.0);
   vec3 Hloc = hc.a > 1e-3 ? hc.rgb / hc.a : vec3(mean);
-  float relH = clamp(1.0 + (dot(Hloc, W) - mean) / sqrt(var) * 0.35, 0.2, 1.9);
-  vec3 outer = c + (target * relH - Hloc) * m;
+  float shadeH = clamp(pow((dot(Hloc, W) + e) / (mean + e), 0.35), 0.7, 1.4);
+  vec3 outer = c + (target * shadeH - Hloc) * mo;
   o = vec4(mix(clamp(outer, 0.0, 1.0), inner, edge), 1.0);
 }`;
 

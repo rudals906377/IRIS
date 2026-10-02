@@ -104,6 +104,8 @@ export class Tracker {
   private lastFaceLm: NormalizedLandmark[] | null = null;
   private lastGlobal: { flags: Uint8ClampedArray; w: number; h: number } | null = null;
   private headTs = 0;
+  /** 앞 프레임의 머리카락 확률(R)과 머리 영역: 프레임 간 떨림을 줄이는 데 쓴다 */
+  private prevHair: { r: Uint8ClampedArray; w: number; h: number; cx: number; cy: number; size: number } | null = null;
   private hands: HandLandmarker | null = null;
   private face: FaceLandmarker | null = null;
   private configured = false;
@@ -468,6 +470,29 @@ export class Tracker {
         const keep = Math.max(0, Math.min(1, (gv - 25) / 60));
         out[o] = out[o] * (1 - wgt) + hp * keep * wgt;
       }
+    }
+    // 프레임 간 안정화: 머리가 거의 안 움직였으면 앞 프레임 확률과 섞어 경계 떨림을 줄인다(움직이면 섞지 않는다)
+    const cx = head.x + head.size / 2;
+    const cy = head.y + head.size / 2;
+    const pv = this.prevHair;
+    if (pv && pv.w === W && pv.h === H && Math.hypot(cx - pv.cx, cy - pv.cy) < head.size * 0.02 && Math.abs(head.size - pv.size) < head.size * 0.03) {
+      const r = pv.r;
+      for (let y = ys; y <= ye; y++) {
+        for (let x = xs; x <= xe; x++) {
+          const i = y * W + x;
+          const o = i * 4;
+          const v = out[o] * 0.6 + r[i] * 0.4;
+          out[o] = v;
+          r[i] = v;
+        }
+      }
+      pv.cx = cx;
+      pv.cy = cy;
+      pv.size = head.size;
+    } else {
+      const r = new Uint8ClampedArray(W * H);
+      for (let i = 0; i < W * H; i++) r[i] = out[i * 4];
+      this.prevHair = { r, w: W, h: H, cx, cy, size: head.size };
     }
     return { flags: out, width: W, height: H, headRect: { x: head.x / frameW, y: head.y / frameH, w: head.size / frameW, h: head.size / frameH } };
   }
