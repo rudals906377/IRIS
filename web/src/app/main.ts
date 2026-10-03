@@ -488,6 +488,7 @@ function applyHints(r: StyleResult, h: StyleHints): void {
 const genEl = $<HTMLElement>('gen');
 const genStatusEl = $<HTMLElement>('gen-status');
 const genCatEl = $<HTMLSelectElement>('gen-cat');
+const genEngineEl = $<HTMLSelectElement>('gen-engine');
 const genGrowEl = $<HTMLInputElement>('gen-grow');
 const genExtendEl = $<HTMLInputElement>('gen-extend');
 const genDescEl = $<HTMLInputElement>('gen-desc');
@@ -515,7 +516,10 @@ async function refreshGenStatus(): Promise<boolean> {
     genRunEl.disabled = true;
     return false;
   }
-  genStatusEl.textContent = h.dry_run ? '연결됨 (시험 모드: 영역만 표시)' : `연결됨 · ${h.device === 'cuda' ? 'GPU' : h.device.toUpperCase()}${h.model_loaded ? '' : ' · 첫 생성 때 모델을 불러와요'}`;
+  genStatusEl.textContent = h.dry_run ? '연결됨 (시험 모드: 영역만 표시)' : `연결됨 · ${h.device === 'cuda' ? 'GPU' : h.device.toUpperCase()}${h.model_loaded ? '' : ' · 첫 생성 때 모델을 불러와요'}${h.anydoor ? ' · AnyDoor 준비' : ''}`;
+  // AnyDoor 서버가 꺼져 있으면 엔진 선택을 기본으로 되돌린다
+  if (!h.anydoor && genEngineEl.value === 'anydoor') genEngineEl.value = 'default';
+  genEngineEl.title = h.anydoor ? 'AnyDoor 서버 연결됨' : 'AnyDoor 서버(8766)가 꺼져 있어요 — tools/anydoor/run.bat';
   genRunEl.disabled = false;
   return true;
 }
@@ -569,7 +573,7 @@ async function runGen(): Promise<void> {
     const image = toDataUrl(cap.image, 1024);
     const reference = genUseRefEl.checked && lastStyle ? lastStyle.thumb.toDataURL('image/jpeg', 0.9) : undefined;
     genBeforeEl.src = image;
-    genStatusEl.textContent = '생성 중… (GPU 5~15초, CPU는 몇 분)';
+    genStatusEl.textContent = genEngineEl.value === 'anydoor' ? '합성 중… (AnyDoor, 한 자리에 15~30초)' : '생성 중… (GPU 5~15초, CPU는 몇 분)';
     const r = await genGenerate({
       category: cat,
       image,
@@ -578,11 +582,12 @@ async function runGen(): Promise<void> {
       place: tattoo.place,
       grow: Number(genGrowEl.value),
       extend: Number(genExtendEl.value),
+      engine: genEngineEl.value === 'anydoor' ? 'anydoor' : 'default',
     });
     genAfterEl.src = r.image;
     genAfterEl.style.clipPath = `inset(0 0 0 ${genSliderEl.value}%)`;
     genSaveEl.href = r.image;
-    genInfoEl.textContent = `${(r.elapsed_ms / 1000).toFixed(1)}초 · ${r.model === 'dry-run' ? '시험 모드' : r.model}`;
+    genInfoEl.textContent = `${(r.elapsed_ms / 1000).toFixed(1)}초 · ${r.model === 'dry-run' ? '시험 모드' : r.model === 'anydoor' ? 'AnyDoor 합성' : r.model}`;
     genResultEl.hidden = false;
     genStatusEl.textContent = '완료 — 가운데 막대를 움직여 전후를 비교하세요';
     lastGen = { elapsed_ms: r.elapsed_ms, prompt: r.prompt, model: r.model };

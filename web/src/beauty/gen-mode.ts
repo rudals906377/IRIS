@@ -17,6 +17,8 @@ export interface GenOptions {
   steps?: number;
   strength?: number;
   seed?: number;
+  /** 엔진: default(인페인팅) | anydoor(물체 합성) */
+  engine?: 'default' | 'anydoor';
 }
 
 export interface GenResult {
@@ -33,6 +35,8 @@ export interface GenHealth {
   device: string;
   model_loaded: boolean;
   model: string | null;
+  /** AnyDoor 합성 서버(8766)가 켜져 있는지 */
+  anydoor?: boolean;
 }
 
 export const DEFAULT_GEN_URL = 'http://127.0.0.1:8765';

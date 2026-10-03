@@ -20,6 +20,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from masks import Masker
+import anydoor_client
 from pipelines import Generator, GenRequest, lock_hair_color
 
 app = FastAPI(title="IRIS 생성 서버")
@@ -83,6 +84,8 @@ class GenerateBody(BaseModel):
     seed: int | None = None
     mask_only: bool = False
     color_lock: bool = True  # 헤어: 생성 뒤 머리색을 참고 사진에 맞춤
+    engine: str = "default"  # default(SDXL/SD1.5 인페인팅) | anydoor(tools/anydoor 합성 서버)
+    reference_mask: str | None = None  # 참고 사진에서 합성할 물체 마스크(dataURL, 흰색=물체). 없으면 서버가 추정
 
 
 @app.get("/health")
@@ -96,6 +99,7 @@ def health() -> dict:
         "model_loaded": generator.pipe is not None,
         "model": generator.loaded_model,
         "model_choice": generator.model_name,
+        "anydoor": anydoor_client.health() is not None,
         "log": LOG[-5:],
     }
 
@@ -121,6 +125,8 @@ def generate(body: GenerateBody) -> dict:
     log(f"마스크 {body.category} {int((mask > 0).sum())}px {int((time.time() - t0) * 1000)}ms")
     if body.mask_only:
         return {"mask": encode(Image.fromarray(mask), "PNG"), "found": found}
+    if body.engine == "anydoor":
+        return generate_anydoor(body, img, ref, mask, found, t0)
     try:
         out = generator.generate(
             GenRequest(
@@ -145,6 +151,50 @@ def generate(body: GenerateBody) -> dict:
         raise HTTPException(500, f"생성 실패: {e}") from e
     log(f"완료 {out['elapsed_ms']}ms")
     return {"image": encode(out["image"]), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": out["elapsed_ms"], "prompt": out["prompt"], "model": out["model"], "found": found}
+
+
+def generate_anydoor(body: GenerateBody, img: Image.Image, ref: Image.Image | None, mask, found, t0: float) -> dict:
+    """AnyDoor 엔진: 참고 물체 마스크 → 대상 자리마다 합성 → (헤어) 색 고정."""
+    if ref is None:
+        raise HTTPException(400, "AnyDoor 엔진은 참고 사진이 필요합니다(📷 사진 따라하기로 먼저 올리세요)")
+    if anydoor_client.health() is None:
+        raise HTTPException(503, f"AnyDoor 서버가 꺼져 있습니다({anydoor_client.ANYDOOR_URL}) — tools/anydoor/run.bat")
+    given = None
+    if body.reference_mask:
+        given = (np.asarray(decode(body.reference_mask).convert("L")) > 127).astype(np.uint8)
+        if given.shape != (ref.height, ref.width):
+            given = cv2_resize_nearest(given, ref.size)
+    ref_mask = anydoor_client.ref_object_mask(masker, body.category, ref, given)
+    if ref_mask is None:
+        raise HTTPException(422, "참고 사진에서 합성할 물체(머리카락·손톱·타투)를 찾지 못했습니다")
+    targets = anydoor_client.target_masks(body.category, mask, ref_mask)
+    if not targets:
+        raise HTTPException(422, "합성할 자리를 찾지 못했습니다")
+    steps = max(10, min(50, body.steps))
+    guidance = body.guidance if body.guidance is not None else 5.0
+    out = img
+    log(f"AnyDoor {body.category}: 자리 {len(targets)}곳, {steps}단계")
+    for i, tm in enumerate(targets):
+        try:
+            out = anydoor_client.compose(ref, ref_mask, out, tm, steps=steps, guidance=guidance, seed=body.seed)
+        except RuntimeError as e:
+            log(str(e))
+            raise HTTPException(500, str(e)) from e
+        log(f"  자리 {i + 1}/{len(targets)} 완료")
+    if body.category == "hair" and body.color_lock:
+        try:
+            out = lock_hair_color(out, mask, ref, lambda im: masker.segment(im)["hair"], log)
+        except Exception as e:  # noqa: BLE001
+            log(f"색 맞추기 건너뜀: {e}")
+    ms = int((time.time() - t0) * 1000)
+    log(f"완료 {ms}ms (AnyDoor)")
+    return {"image": encode(out), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": ms, "prompt": "", "model": "anydoor", "found": found, "targets": len(targets)}
+
+
+def cv2_resize_nearest(m, size):
+    import cv2
+
+    return cv2.resize(m, size, interpolation=cv2.INTER_NEAREST)
 
 
 def main() -> None:

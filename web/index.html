@@ -56,6 +56,8 @@
           <div class="gen-body">
             <label>대상 <select id="gen-cat">
               <option value="hair">헤어 모양·길이</option><option value="nail">네일아트</option><option value="tattoo">타투</option></select></label>
+            <label title="기본: 다시 그리기(SDXL/SD 인페인팅 + 참고 사진). AnyDoor: 참고 사진의 물체를 그 자리에 합성(과제 엔진, tools/anydoor 서버 필요)">엔진 <select id="gen-engine">
+              <option value="default">기본(다시 그리기)</option><option value="anydoor">AnyDoor(물체 합성)</option></select></label>
             <label id="gen-grow-row">머리 범위 <input type="range" id="gen-grow" min="0.1" max="0.6" step="0.05" value="0.25" title="길게 기르려면 크게" /></label>
             <label id="gen-extend-row" hidden>손톱 길이 <input type="range" id="gen-extend" min="0" max="1" step="0.05" value="0" /></label>
             <label class="gen-desc">설명(영어) <input type="text" id="gen-desc" placeholder="예: long layered hair, golden blonde balayage" /></label>

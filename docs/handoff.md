@@ -47,6 +47,11 @@ cd tools/harness && npm install                         # playwright
 
 ## 5. 다음 할 일 (우선순위 순)
 
+0. **과제(AnyDoor) 연동 — 2026-10-03**: 과제 핵심은 "참고 사진의 물체를 내 사진의 지정 자리에 합성"(AnyDoor, ali-vilab, MIT). ✨ 생성 모드의 엔진으로 붙였다.
+   `tools/anydoor/`(공식 저장소 래퍼 `anydoor_server.py` 8766, `setup.bat` 로 전용 venv·torch 2.0.1 cu118·가중치(축약본 4.9GB + DINOv2 4.5GB)·설정 경로), 생성 서버 `engine: anydoor`(`anydoor_client.py`: 참고 물체 마스크 추정 — 헤어 분할/손톱/잉크, 대상 자리 — 헤어 마스크/손톱마다/팔 가운데 비율 상자), 웹 ✨ 패널 엔진 선택.
+   흉내 서버(stub)로 헤어·네일(5자리)·타투 흐름 확인. **실제 AnyDoor는 학교 GPU에서 미검증**: 저메모리 모드(`save_memory`, low_vram_shift)로 10GB 를 겨냥했으나 실측 필요. 파이썬 3.11 + torch 2.0.1 조합은 핀을 완화한 requirements 로 설치(실패 시 파이썬 3.10 권장).
+   보고서용 비교 실험(기본 엔진 vs AnyDoor, 같은 참고 사진 20장) 예정.
+
 0. **자체 모델(사용자와 합의, 2026-10-02)**: ① 머리카락 전용 매팅 모델(실시간 올 디테일) ② 손톱 전용 분할 모델(손톱 위치) ③ 헤어 생성 LoRA. 순서 ①→②→③.
    ②는 라벨 도구 `web/label.html`(배포됨: /IRIS/label.html) + 학습 스크립트 `tools/train/nail/`이 준비됐고, 사용자가 손 사진을 찍어 라벨을 단다(목표 300장). 학습은 학교 GPU PC(생성 서버 venv 재사용).
    주의: 작업 환경(클라우드 컨테이너)은 세션이 유휴가 되면 재시작되어 떼어 놓은(setsid) 긴 작업이 죽는다 — 긴 학습은 세션을 깨워 둔 채(10분 단위 대기) 돌릴 것. `export_onnx.py`로 best.pt만 따로 ONNX로 뽑을 수 있다.
