@@ -27,14 +27,14 @@ SDXL은 12GB 미만 GPU에서 일부를 CPU에 두고 번갈아 올리므로(자
 
 ## 파일 갱신
 
-서버 코드가 바뀌면(이 저장소에 새 커밋) 서버를 끄고 `python update.py` → 다시 `python server.py --preload`.
+서버 코드가 바뀌면(이 저장소에 새 커밋) 서버를 끄고 `python update.py` → 다시 `run.bat`. 설치·실행 논리는 파이썬 파일(setup.py, tunnel.py)에 있고 .bat 은 그것을 부르는 한 줄짜리(한글 인코딩으로 깨지지 않게).
 venv·모델·cloudflared.exe 는 그대로 둔다. 처음 한 번은 `curl -L -o update.py "https://raw.githubusercontent.com/rudals906377/iris/claude/virtual-try-on-realtime-7uwjlm/tools/genserver/update.py"` 로 받는다.
 
 ## 설치 (윈도우, 엔비디아 그래픽카드) — 한 번만
 
 1. Python 3.10~3.12 설치 (python.org, **"Add to PATH" 체크**). `python --version` 으로 확인.
 2. 이 저장소를 내려받아(초록 Code 버튼 → Download ZIP, 또는 `git clone`) `IRIS\tools\genserver` 폴더를 연다.
-3. **`setup.bat` 더블클릭** — 가상환경 만들기 → GPU용 PyTorch(cu126, 실패하면 cu118) → 나머지 패키지 → `check.py` 환경 검사까지 한 번에 한다. 10~15분.
+3. 명령 프롬프트에서 **`python setup.py`** (더블클릭이 되면 `setup.bat` 도 같음) — 가상환경 만들기 → GPU용 PyTorch(cu126, 실패하면 cu118) → 나머지 패키지 → `check.py` 환경 검사까지 한 번에 한다. 10~15분.
 4. 마지막에 `모두 준비됨` 이 보이면 끝. `[문제]` 가 보이면 그 줄의 → 안내대로 고치고 `python check.py` 로 다시 확인.
 
 리눅스는 `bash setup.sh`, 실행은 `bash run.sh`.
@@ -51,7 +51,7 @@ python check.py
 
 ## 실행과 첫 생성 (내일 할 순서)
 
-1. `run.bat` 더블클릭 (= `python server.py --preload`). 처음엔 모델 약 4GB를 내려받아 5~10분, 그 뒤 `준비 완료`.
+1. `run.bat` (= `venv\Scripts\python server.py --preload`). 처음엔 모델 약 4GB를 내려받아 5~10분, 그 뒤 `준비 완료`.
 2. 브라우저에서 http://127.0.0.1:8765/health → `"ok": true, "device": "cuda"` 인지 확인. `"device": "cpu"` 면 GPU용 torch가 안 깔린 것(`python check.py`).
 3. https://rudals906377.github.io/IRIS/ 열기 → 카메라 허용 → **✨ 생성** 버튼 → 상태가 `연결됨 · GPU` 인지 확인.
    - 크롬이 "이 사이트가 로컬 네트워크 기기에 접근하려고 합니다" 같은 허용 창을 띄우면 **허용**.
@@ -68,7 +68,7 @@ GPU 메모리 6GB 이하면 `set IRIS_GEN_MAX_SIDE=512` 뒤 `run.bat`. GPU가 �
 
 서버는 한 대(GPU PC)에만 켜 두고, 다른 컴퓨터의 웹 앱이 그 서버를 부르게 할 수 있다.
 
-- **가장 쉬운 방법: 임시 인터넷 주소(터널)**. GPU PC에서 `run.bat` 로 서버를 켠 뒤 **`tunnel.bat`** 실행 → 화면에 `https://xxxx.trycloudflare.com` 주소가 나온다.
+- **가장 쉬운 방법: 임시 인터넷 주소(터널)**. GPU PC에서 `run.bat` 로 서버를 켠 뒤 **`python tunnel.py`**(= `tunnel.bat`) 실행 → 화면에 `https://xxxx.trycloudflare.com` 주소가 나온다.
   맥북의 웹 앱(https://rudals906377.github.io/IRIS/) → 설정(톱니바퀴) → **생성 서버 주소**에 그 주소를 넣는다. 같은 와이파이가 아니어도(집에서도) 된다.
   주의: 그 주소를 아는 사람은 누구나 서버를 쓸 수 있고, 사진이 Cloudflare를 거쳐 전달된다(암호화됨). 창을 닫으면 주소가 사라지고 다음에 켜면 새 주소가 나온다.
 - 같은 와이파이 안에서만: `python server.py --preload --host 0.0.0.0` 로 켜고 맥북에서 `http://<GPU PC의 IP>:8765` 를 쓴다.

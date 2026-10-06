@@ -48,7 +48,7 @@ cd tools/harness && npm install                         # playwright
 ## 5. 다음 할 일 (우선순위 순)
 
 0. **과제(AnyDoor) 연동 — 2026-10-03**: 과제 핵심은 "참고 사진의 물체를 내 사진의 지정 자리에 합성"(AnyDoor, ali-vilab, MIT). ✨ 생성 모드의 엔진으로 붙였다.
-   `tools/anydoor/`(공식 저장소 래퍼 `anydoor_server.py` 8766, `setup.bat` 로 전용 venv·torch 2.0.1 cu118·가중치(축약본 4.9GB + DINOv2 4.5GB)·설정 경로), 생성 서버 `engine: anydoor`(`anydoor_client.py`: 참고 물체 마스크 추정 — 헤어 분할/손톱/잉크, 대상 자리 — 헤어 마스크/손톱마다/팔 가운데 비율 상자), 웹 ✨ 패널 엔진 선택.
+   `tools/anydoor/`(공식 저장소 래퍼 `anydoor_server.py` 8766, `setup.py`(.bat 은 한 줄 래퍼) 로 전용 venv·torch 2.0.1 cu118·가중치(축약본 4.9GB + DINOv2 4.5GB)·설정 경로), 생성 서버 `engine: anydoor`(`anydoor_client.py`: 참고 물체 마스크 추정 — 헤어 분할/손톱/잉크, 대상 자리 — 헤어 마스크/손톱마다/팔 가운데 비율 상자), 웹 ✨ 패널 엔진 선택.
    흉내 서버(stub)로 헤어·네일(5자리)·타투 흐름 확인. **실제 AnyDoor는 학교 GPU에서 미검증**: 저메모리 모드(`save_memory`, low_vram_shift)로 10GB 를 겨냥했으나 실측 필요. 파이썬 3.11 + torch 2.0.1 조합은 핀을 완화한 requirements 로 설치(실패 시 파이썬 3.10 권장).
    보고서용 비교 실험(기본 엔진 vs AnyDoor, 같은 참고 사진 20장) 예정.
 
@@ -57,7 +57,7 @@ cd tools/harness && npm install                         # playwright
    주의: 작업 환경(클라우드 컨테이너)은 세션이 유휴가 되면 재시작되어 떼어 놓은(setsid) 긴 작업이 죽는다 — 긴 학습은 세션을 깨워 둔 채(10분 단위 대기) 돌릴 것. `export_onnx.py`로 best.pt만 따로 ONNX로 뽑을 수 있다.
    ①은 `tools/train/hair/`(prepare.py: CelebAMask-HQ + ViTMatte/BiRefNet 정밀화, train.py: 0.4M 경량 U-Net) 완성. 2차 학습본(CelebAMask 2,092장 + 시험 영상 웹캠 풍 프레임 90장 자동 라벨, 1차 가중치에서 CPU 9회 이어 학습, 검증 MAD 6.6%; 시험 영상 4개에서 범용 분할·1차보다 경계가 깨끗)을 `web/public/models/hair-matte-256.onnx`로 커밋(1차는 1,425장·MAD 7.4%), 설정 체크박스 '자체 학습 머리카락 모델'로 켠다. 시험 영상에서 범용 분할과 동급(아직 우위 아님). 다음: 학교 GPU에서 전체 데이터(--shards 6 --test) + 사용자 웹캠 사진(--webcam)으로 재학습, 384 입력 모델로 교체.
 
-1. **생성 모드 실사용 확인(방향 (a): 내 컴퓨터 GPU 서버로 확정)**: 시험 PC는 윈도우, RTX 3080 10GB, RAM 32GB(기본 설정 그대로 가능, SDXL도 fp16으로 가능한 사양). 사용자가 학교 GPU PC에서 `tools/genserver/setup.bat` → `run.bat` → README의 "실행과 첫 생성" 순서대로 시험 → 헤어·네일·타투 결과 품질 확인. 헤어는 마스크가 넓어 옷·배경이 바뀔 수 있음(grow 줄이기, 또는 옷 분할을 마스크에서 빼는 옵션). 품질이 부족하면 SDXL 인페인팅 + IP-Adapter-plus, 헤어 전용(Stable-Hair) 검토
+1. **생성 모드 실사용 확인(방향 (a): 내 컴퓨터 GPU 서버로 확정)**: 시험 PC는 윈도우, RTX 3080 10GB, RAM 32GB(기본 설정 그대로 가능, SDXL도 fp16으로 가능한 사양). 사용자가 학교 GPU PC에서 `tools/genserver/setup.py` → `run.bat` → README의 "실행과 첫 생성" 순서대로 시험 → 헤어·네일·타투 결과 품질 확인. 헤어는 마스크가 넓어 옷·배경이 바뀔 수 있음(grow 줄이기, 또는 옷 분할을 마스크에서 빼는 옵션). 품질이 부족하면 SDXL 인페인팅 + IP-Adapter-plus, 헤어 전용(Stable-Hair) 검토
 2. **사진 따라하기 잔여 오차(21장 회귀, 2026-10-02 저녁)**: 립 평균 0.002. 블러셔·섀도 색조 오차 평균 0.05~0.08. 튀는 것: 04(사과존만 바른 사진인데 결과는 볼 가운데까지 분홍, B 채널 과함 1.17 vs 1.02), 16(섀도 B 채널 결과 1.0 vs 사진 0.8 — matchTint가 주도 채널(R)만 맞추고 B는 못 내림), 13·05(섀도 안쪽 약간 약함). 되먹임에서 주도 채널 외 채널도 함께 맞추는 개선 여지
 2. **손톱 자동 라벨은 실패**: Mixkit 손 영상(손 겹침·옆면)에서 손 점이 엇나가 SAM 마스크가 엉뚱한 곳을 잡음(388개 중 쓸 만한 것 거의 없음). `autolabel.py`는 사용자의 깨끗한 웹캠 손 사진에서 초안용으로만. 실제 라벨 필수
 2. **실제 웹캠 재확인**: 머리 주변 재분할(headSeg)·GF 1/2 해상도의 속도 영향(HUD 분할 ms), 손톱 위치(엄지·소지)는 실제 카메라 스크린샷으로 다시 맞춘다. 사용자 스크린샷 기반 시험 영상(`testdata/user/`)은 효과가 이미 입혀져 있어 위치 확인용으로만 쓸 것

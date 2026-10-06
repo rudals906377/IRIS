@@ -10,14 +10,13 @@ IRIS 에서는 ✨ 생성 모드의 엔진으로 쓴다: 참고 사진의 헤어
 
 ## 설치 (윈도우, 엔비디아 GPU, 처음 한 번)
 
-1. `git` 이 없으면 https://git-scm.com/download/win 설치(기본값으로 다음만 누르면 됨).
-2. 명령 프롬프트에서:
+1. 명령 프롬프트에서(한 줄씩):
    ```
    cd 저장소폴더\tools\anydoor
-   setup.bat
+   python setup.py
    ```
-   공식 저장소를 받고, 전용 가상환경에 PyTorch 2.0.1(CUDA 11.8, AnyDoor 코드가 맞춰진 버전)과 패키지를 설치하고, 가중치 두 개(AnyDoor 축약본 4.9GB, DINOv2 4.5GB)를 내려받는다. 20~40분.
-3. 실행: `run.bat` → `준비 완료` 가 뜨면 http://127.0.0.1:8766/health 에서 `"ok": true`.
+   공식 저장소를 받고(git 이 없으면 ZIP 으로), 전용 가상환경에 PyTorch 2.0.1(CUDA 11.8, AnyDoor 코드가 맞춰진 버전)과 패키지를 설치하고, 가중치 두 개(AnyDoor 축약본 4.9GB, DINOv2 4.5GB)를 내려받는다. 20~40분.
+3. 실행: `run.bat`(= `python run.py`) → `준비 완료` 가 뜨면 http://127.0.0.1:8766/health 에서 `"ok": true`.
 4. IRIS 생성 서버(`tools\genserver`)도 평소처럼 켠다. 두 창 모두 켜 둔 채 웹 앱 ✨ 생성에서 **엔진: AnyDoor** 를 고른다.
 
 ## 메모리
