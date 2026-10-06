@@ -92,18 +92,58 @@ def ref_object_mask(masker, category: str, ref: Image.Image, given: np.ndarray |
         # 손 전체가 안 보이는 네일 근접 사진: 가운데 45% 상자를 물체로 본다
         H, W = ref.height, ref.width
         return box_mask((H, W), W / 2, H / 2, W * 0.45, H * 0.45)
-    # 타투: 사람 안의 피부 위 어두운·무채색 픽셀(잉크)
+    return tattoo_object_mask(masker, ref)
+
+
+def tattoo_object_mask(masker, ref: Image.Image) -> np.ndarray | None:
+    """참고 사진에서 타투(도안 + 그 사이 피부)를 찾는다.
+    잉크 = 피부 위에서 주변 피부보다 뚜렷이 어두운 픽셀(국소 대비). 옷·머리카락·검은 끈처럼 새까맣고 큰 덩어리는 뺀다.
+    도안은 잔선·점으로 흩어져 있으므로(나비 두 마리 + 별), 잉크를 넓혀 한 무리로 묶고 그 무리의 볼록 껍질을 물체로 본다."""
     s = masker.segment(ref)
+    H, W = ref.height, ref.width
+    short = min(H, W)
     rgb = np.asarray(ref).astype(np.float32)
-    mx = rgb.max(-1)
-    mn = rgb.min(-1)
-    sat = (mx - mn) / np.maximum(mx, 1)
-    dark = (mx < 110) & (sat < 0.45)
-    person = (s["bg"] < 0.5)
-    skin_near = cv2.dilate(((s["body"] > 0.5) | (s["face"] > 0.5)).astype(np.uint8), np.ones((15, 15), np.uint8)) > 0
-    ink = (dark & person & skin_near).astype(np.uint8)
-    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
-    return largest_component(ink, 150)
+    L = (0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]) / 255.0
+    k = max(9, int(short * 0.06)) | 1
+    local = cv2.GaussianBlur(L, (k, k), 0)
+    skin = ((s["body"] > 0.6) | (s["face"] > 0.6)) & (s["clothes"] < 0.3) & (s["hair"] < 0.3)
+    er = max(3, int(short * 0.015)) | 1
+    skin = cv2.erode(skin.astype(np.uint8), np.ones((er, er), np.uint8)) > 0
+    ink = ((local - L) > 0.10) & skin
+    ink = ink.astype(np.uint8)
+    # 새까맣고 큰 덩어리(끈·머리카락이 피부로 분류된 것) 제거: 잉크 선은 피부와 섞여 회색으로 찍힌다
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area < 4:
+            ink[lab == i] = 0
+            continue
+        if area > H * W * 0.003 and np.percentile(L[lab == i], 20) < 0.14:
+            ink[lab == i] = 0
+    if int(ink.sum()) < short * 0.5:
+        return None
+    # 흩어진 도안을 한 무리로: 짧은 변의 4% 만큼 넓혀 가장 큰 무리를 고르고, 그 안의 잉크로 볼록 껍질
+    d = max(5, int(short * 0.04)) | 1
+    grown = cv2.dilate(ink, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d, d)))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(grown, 8)
+    if n <= 1:
+        return None
+    # 무리 점수 = 그 안의 잉크 양(넓힌 면적이 아니라)
+    best, best_ink = 0, 0
+    for i in range(1, n):
+        amt = int(ink[lab == i].sum())
+        if amt > best_ink:
+            best, best_ink = i, amt
+    pts = np.column_stack(np.where((lab == best) & (ink > 0)))[:, ::-1].astype(np.int32)
+    if len(pts) < 20:
+        return None
+    hull = cv2.convexHull(pts)
+    m = np.zeros((H, W), np.uint8)
+    cv2.fillConvexPoly(m, hull, 1)
+    # 껍질을 살짝 넓혀 주변 피부를 조금 포함(AnyDoor 가 피부 질감을 함께 보도록)
+    g = max(3, int(short * 0.01)) | 1
+    m = cv2.dilate(m, np.ones((g, g), np.uint8))
+    return m
 
 
 def box_mask(shape: tuple[int, int], cx: float, cy: float, w: float, h: float) -> np.ndarray:
