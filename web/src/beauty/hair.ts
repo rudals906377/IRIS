@@ -21,7 +21,11 @@ const HAIR_PROB = /* glsl */ `
 float hairProb(vec2 uv, vec3 c) {
   float p = texture(uSeg, uv).r;
   if (uUseGF > 0.5) {
-    vec4 gf = textureLod(uGF, vec2(uv.x, 1.0 - uv.y), 0.0);
+    // 가이디드 필터 계수를 주변 4점과 평균해 쓴다: 이마 경계의 잔머리 때문에 확률이 들쭉날쭉해
+    // 점점이 칠해지는 것(얼룩·계단)을 줄인다
+    vec2 guv = vec2(uv.x, 1.0 - uv.y);
+    vec2 d = 0.75 / vec2(textureSize(uGF, 0));
+    vec4 gf = 0.2 * (textureLod(uGF, guv, 0.0) + textureLod(uGF, guv + vec2(d.x, 0.0), 0.0) + textureLod(uGF, guv - vec2(d.x, 0.0), 0.0) + textureLod(uGF, guv + vec2(0.0, d.y), 0.0) + textureLod(uGF, guv - vec2(0.0, d.y), 0.0));
     p = clamp(gf.x * dot(c, W) + gf.y, 0.0, 1.0);
   }
   return p;

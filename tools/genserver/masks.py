@@ -168,15 +168,31 @@ class Masker:
     POSE = {"shoulderL": 11, "shoulderR": 12, "elbowL": 13, "elbowR": 14, "wristL": 15, "wristR": 16, "earL": 7, "earR": 8}
 
     def arm_mask(self, img: Image.Image, place: str = "forearmL") -> np.ndarray:
-        """부위 캡슐 ∩ 몸 피부(넓힌 것). 자세를 못 찾으면 몸 피부 전체."""
+        """부위 캡슐 ∩ 몸 피부(넓힌 것). 자세를 못 찾거나 그 부위가 화면 밖·가려짐이면 빈 마스크(→ 서버가 안내 문구로 거절).
+        (전에는 몸 피부 전체로 대체했는데, 팔이 안 보이는 얼굴 사진에서 얼굴·머리를 다시 그려 버렸다)"""
         s = self.segment(img)
         skin = ((s["body"] > 0.5) | (s["face"] > 0.5)).astype(np.uint8)
         res = self.pose().detect(self._image(img))
         W, H = img.width, img.height
+        empty = np.zeros((H, W), np.uint8)
         if not res.pose_landmarks:
-            return (skin * 255).astype(np.uint8)
-        P = {k: np.array([res.pose_landmarks[0][i].x * W, res.pose_landmarks[0][i].y * H]) for k, i in self.POSE.items()}
+            return empty
+        lm = res.pose_landmarks[0]
+        P = {k: np.array([lm[i].x * W, lm[i].y * H]) for k, i in self.POSE.items()}
+
+        def seen(k: str) -> bool:
+            # 보임 확률이 낮거나 화면 밖(여유 5%)이면 그 부위는 없는 것으로
+            v = getattr(lm[self.POSE[k]], "visibility", 1.0) or 0.0
+            x, y = P[k]
+            return v > 0.5 and -0.05 * W <= x <= 1.05 * W and -0.05 * H <= y <= 1.05 * H
+
         side = "L" if place.endswith("L") else "R"
+        need = {"forearm": ("elbow", "wrist"), "upperArm": ("shoulder", "elbow"), "neck": ("ear", "shoulder")}
+        for key, parts in need.items():
+            if place.startswith(key) and not all(seen(q + side) for q in parts):
+                return empty
+        if place.startswith("chest") and not (seen("shoulderL") and seen("shoulderR")):
+            return empty
         if place.startswith("forearm"):
             a, b, r = P["elbow" + side], P["wrist" + side], 0.22
         elif place.startswith("upperArm"):
@@ -195,6 +211,9 @@ class Masker:
         k = max(3, int(min(W, H) * 0.03)) | 1
         skin_grown = cv2.dilate(skin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
         m[skin_grown == 0] = 0
+        # 얼굴 피부는 어느 부위든 제외(목 캡슐이 귀에서 내려오며 뺨을 덮거나, 팔 캡슐이 얼굴을 스치는 것 방지)
+        face_grown = cv2.dilate((s["face"] > 0.5).astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+        m[face_grown > 0] = 0
         return m
 
 

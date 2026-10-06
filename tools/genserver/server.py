@@ -166,7 +166,12 @@ def generate(body: GenerateBody) -> dict:
             raise HTTPException(422, "손톱을 찾지 못했습니다. 손등이 카메라를 향하게 해 주세요")
     else:
         mask = masker.arm_mask(img, place=body.place)
-    if int((mask > 0).sum()) < 64:
+    # 타투는 자리가 너무 작으면(화면의 0.3% 미만, 예: 목이 살짝만 보임) 그리지 않는다
+    if int((mask > 0).sum()) < (max(64, int(mask.size * 0.003)) if body.category == "tattoo" else 64):
+        if body.category == "tattoo":
+            where = {"forearm": "팔 아래쪽(팔꿈치~손목)", "upperArm": "팔 위쪽(어깨~팔꿈치)", "neck": "목(귀~어깨)", "chest": "가슴(양쪽 어깨)"}
+            part = next((v for k, v in where.items() if body.place.startswith(k)), "선택한 부위")
+            raise HTTPException(422, f"카메라에 {part} 부위가 보이지 않습니다. 타투 탭의 '위치'를 보이는 부위로 바꾸거나 그 부위를 비춰 주세요")
         raise HTTPException(422, "다시 그릴 영역을 찾지 못했습니다(머리카락·손·팔이 보여야 합니다)")
     log(f"마스크 {body.category} {int((mask > 0).sum())}px {int((time.time() - t0) * 1000)}ms")
     if body.mask_only:
