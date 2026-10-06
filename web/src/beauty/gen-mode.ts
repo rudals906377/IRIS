@@ -72,23 +72,41 @@ export async function checkGenServer(url = genServerUrl()): Promise<GenHealth | 
   }
 }
 
-/** 생성 요청. 실패하면 서버가 준 한국어 이유를 담아 던진다 */
-export async function generate(opts: GenOptions, url = genServerUrl()): Promise<GenResult> {
-  const r = await fetch(`${url}/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(opts),
-  });
-  if (!r.ok) {
-    let detail = `${r.status}`;
-    try {
-      detail = ((await r.json()) as { detail?: string }).detail ?? detail;
-    } catch {
-      /* 본문 없음 */
-    }
-    throw new Error(detail);
+async function errorOf(r: Response): Promise<Error> {
+  let detail = `${r.status}`;
+  try {
+    detail = ((await r.json()) as { detail?: string }).detail ?? detail;
+  } catch {
+    /* 본문 없음 */
   }
-  return (await r.json()) as GenResult;
+  return new Error(detail);
+}
+
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+/** 생성 요청. 실패하면 서버가 준 한국어 이유를 담아 던진다.
+ *  서버가 작업 번호를 주면(/generate/start) 2초마다 완료를 물어본다 — 무료 터널은 100초 넘는 응답을 끊기 때문.
+ *  옛 서버(그 경로가 없음)면 예전처럼 한 번에 기다린다. onProgress 는 경과 시간(ms)과 서버 로그 마지막 줄을 준다. */
+export async function generate(opts: GenOptions, url = genServerUrl(), onProgress?: (elapsedMs: number, line: string) => void): Promise<GenResult> {
+  const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(opts) };
+  const start = await fetch(`${url}/generate/start`, init);
+  if (start.status === 404 || start.status === 405) {
+    const r = await fetch(`${url}/generate`, init);
+    if (!r.ok) throw await errorOf(r);
+    return (await r.json()) as GenResult;
+  }
+  if (!start.ok) throw await errorOf(start);
+  const { job } = (await start.json()) as { job: string };
+  const t0 = performance.now();
+  for (;;) {
+    await sleep(2000);
+    const r = await fetch(`${url}/job/${job}`);
+    if (!r.ok) throw await errorOf(r);
+    const j = (await r.json()) as { status: string; elapsed_ms: number; log?: string[]; result?: GenResult; detail?: string };
+    if (j.status === 'done' && j.result) return j.result;
+    if (j.status === 'error') throw new Error(j.detail ?? '생성 실패');
+    onProgress?.(performance.now() - t0, j.log?.[j.log.length - 1] ?? '');
+  }
 }
 
 /** 캔버스 그림을 JPEG dataURL로(전송용, 긴 변 maxSide 이하) */

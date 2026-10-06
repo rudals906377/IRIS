@@ -573,17 +573,24 @@ async function runGen(): Promise<void> {
     const image = toDataUrl(cap.image, 1024);
     const reference = genUseRefEl.checked && lastStyle ? lastStyle.thumb.toDataURL('image/jpeg', 0.9) : undefined;
     genBeforeEl.src = image;
-    genStatusEl.textContent = genEngineEl.value === 'anydoor' ? '합성 중… (AnyDoor, 한 자리에 15~30초)' : '생성 중… (GPU 5~15초, CPU는 몇 분)';
-    const r = await genGenerate({
-      category: cat,
-      image,
-      reference,
-      desc: genDescEl.value.trim() || undefined,
-      place: tattoo.place,
-      grow: Number(genGrowEl.value),
-      extend: Number(genExtendEl.value),
-      engine: genEngineEl.value === 'anydoor' ? 'anydoor' : 'default',
-    });
+    const working = genEngineEl.value === 'anydoor' ? '합성 중… (AnyDoor, 한 자리에 30~120초)' : '생성 중… (GPU 5~30초, CPU는 몇 분)';
+    genStatusEl.textContent = working;
+    const r = await genGenerate(
+      {
+        category: cat,
+        image,
+        reference,
+        desc: genDescEl.value.trim() || undefined,
+        place: tattoo.place,
+        grow: Number(genGrowEl.value),
+        extend: Number(genExtendEl.value),
+        engine: genEngineEl.value === 'anydoor' ? 'anydoor' : 'default',
+      },
+      undefined,
+      (ms, line) => {
+        genStatusEl.textContent = `${working} ${Math.round(ms / 1000)}초${line ? ' · ' + line.replace(/^\d\d:\d\d:\d\d /, '') : ''}`;
+      },
+    );
     genAfterEl.src = r.image;
     genAfterEl.style.clipPath = `inset(0 0 0 ${genSliderEl.value}%)`;
     genSaveEl.href = r.image;

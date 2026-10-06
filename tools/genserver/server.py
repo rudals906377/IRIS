@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import base64
 import io
+import threading
 import time
+import uuid
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -102,6 +104,50 @@ def health() -> dict:
         "anydoor": anydoor_client.health() is not None,
         "log": LOG[-5:],
     }
+
+
+# 비동기 작업: 무료 터널(trycloudflare)은 응답을 100초까지만 기다리므로, 오래 걸리는 생성은
+# /generate/start 로 작업 번호를 바로 받고 /job/{id} 로 2초마다 물어보는 방식을 쓴다(웹 앱 기본).
+JOBS: dict[str, dict] = {}
+GPU_LOCK = threading.Lock()  # 생성은 한 번에 하나(GPU 메모리)
+
+
+def _run_job(job_id: str, body: "GenerateBody") -> None:
+    job = JOBS[job_id]
+    try:
+        with GPU_LOCK:
+            job["result"] = generate(body)
+        job["status"] = "done"
+    except HTTPException as e:
+        job.update(status="error", detail=str(e.detail))
+    except Exception as e:  # noqa: BLE001
+        job.update(status="error", detail=f"생성 실패: {e}")
+
+
+@app.post("/generate/start")
+def generate_start(body: "GenerateBody") -> dict:
+    now = time.time()
+    for k in [k for k, j in JOBS.items() if now - j["t0"] > 900]:
+        del JOBS[k]
+    job_id = uuid.uuid4().hex[:12]
+    JOBS[job_id] = {"status": "running", "t0": now}
+    threading.Thread(target=_run_job, args=(job_id, body), daemon=True).start()
+    return {"job": job_id}
+
+
+@app.get("/job/{job_id}")
+def job_status(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "그런 작업이 없습니다(서버가 다시 켜졌을 수 있음)")
+    out = {"status": job["status"], "elapsed_ms": int((time.time() - job["t0"]) * 1000), "log": LOG[-3:]}
+    if job["status"] == "done":
+        out["result"] = job["result"]
+        del JOBS[job_id]
+    elif job["status"] == "error":
+        out["detail"] = job["detail"]
+        del JOBS[job_id]
+    return out
 
 
 @app.post("/generate")

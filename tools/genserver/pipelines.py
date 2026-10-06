@@ -12,6 +12,8 @@ import os
 import time
 from dataclasses import dataclass
 
+from typing import Callable
+
 import numpy as np
 from PIL import Image
 
@@ -87,8 +89,9 @@ class GenRequest:
     seed: int | None = None
     # 헤어: 생성 뒤 머리 영역의 색을 참고 사진 머리색에 맞춘다(모델이 색을 틀리거나 투톤으로 그리는 것을 막음)
     color_lock: bool = True
-    # 색 맞추기에 쓸 함수(원본, 결과, 마스크, 참고 사진) → 결과. masks.Masker 를 아는 server 가 넣어 준다
-    color_fn=None
+    # 색 맞추기에 쓸 함수(결과, 마스크, 참고 사진, 로그) → 결과. masks.Masker 를 아는 server 가 넣어 준다
+    # (타입 표기가 없으면 dataclass 필드로 안 잡혀 생성 요청이 통째로 실패한다)
+    color_fn: Callable | None = None
 
 
 class Generator:
