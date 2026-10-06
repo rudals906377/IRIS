@@ -75,8 +75,15 @@ def load_model(save_memory: bool) -> None:
     model = create_model(config.config_file).cpu()
     model.load_state_dict(load_state_dict(ckpt, location="cpu"))
     if save_memory:
-        # 저메모리: 전체를 GPU에 두지 않고, low_vram_shift 가 단계마다 필요한 부분만 올린다
+        # 저메모리: 전체를 GPU에 두지 않고, low_vram_shift 가 단계마다 필요한 부분(UNet+ControlNet / DINOv2+VAE)만 올린다.
+        # 단, 모델 본체에 직접 달린 버퍼(betas, alphas_cumprod 등)는 GPU에 있어야 한다: DDIM 샘플러가 잡음을
+        # betas 가 있는 장치에 만들기 때문(공식 코드는 model.cuda() 뒤에 shift 하지만 그러면 한순간 10GB 를 넘는다).
         model = model.cpu()
+        model._buffers = {k: (v.cuda() if v is not None else None) for k, v in model._buffers.items()}
+        for prm in model.parameters(recurse=False):
+            prm.data = prm.data.cuda()
+        if torch.is_tensor(getattr(model, "logvar", None)):
+            model.logvar = model.logvar.cuda()
         model.low_vram_shift(is_diffusing=False)
     else:
         model = model.cuda()
