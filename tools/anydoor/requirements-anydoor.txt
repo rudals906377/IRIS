@@ -11,8 +11,11 @@ Pillow>=9.4,<10
 pytorch_lightning==1.5.0
 safetensors>=0.3
 scipy>=1.9.3,<1.11
-timm==0.6.12
-transformers==4.19.2
+# timm 0.6.12 는 파이썬 3.11 에서 import 오류(dataclass) → 0.9 대
+timm>=0.9,<1.0
+# transformers 4.19 은 tokenizers 0.12(파이썬 3.11 용 미리 빌드 없음 → Rust 컴파일 실패)를 요구하므로 올림. AnyDoor 는 DINOv2 를 쓰고 CLIP/T5 는 import 만 함
+transformers>=4.30,<4.40
+torchmetrics==0.6.0
 tqdm
 fastapi
 uvicorn[standard]
