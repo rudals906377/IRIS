@@ -1,0 +1,9 @@
+{
+  "name": "iris-harness",
+  "private": true,
+  "type": "module",
+  "description": "IRIS 헤드리스 브라우저 시험 도구",
+  "dependencies": {
+    "playwright": "1.56.1"
+  }
+}

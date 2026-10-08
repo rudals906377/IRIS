@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <!-- 스타일 AI 분류기(별도 저장소)가 쓰는 Transformers.js — 사진 따라하기를 켤 때만 내려받는다 -->
+    <script type="importmap">
+      { "imports": { "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/dist/transformers.min.js" } }
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="웹캠 속 내 얼굴에 메이크업·헤어 컬러·타투·네일을 실시간으로 입혀 보는 가상 뷰티 체험" />
+    <title>IRIS 가상 뷰티</title>
+    <link rel="stylesheet" href="./src/app/styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <header class="topbar">
+        <div class="brand"><span class="logo" aria-hidden="true">◉</span> IRIS <small>실시간 가상 뷰티</small></div>
+        <div class="status" id="status" role="status" aria-live="polite"></div>
+        <div class="actions">
+          <button id="btn-hud" class="ghost" title="지연·FPS 표시">측정</button>
+          <button id="btn-settings" class="ghost" title="설정">설정</button>
+        </div>
+      </header>
+
+      <section class="stage" id="stage">
+        <div class="view" id="view">
+          <canvas id="gl"></canvas>
+          <canvas id="overlay"></canvas>
+        </div>
+        <video id="video" muted playsinline></video>
+        <pre class="hud" id="hud" hidden></pre>
+        <div class="guide" id="guide" hidden>얼굴이 화면 가운데에 정면으로 보이게 해 주세요</div>
+
+        <div class="start" id="start">
+          <h1>내 얼굴에 바로 발라 보기</h1>
+          <p>피부 보정·윤곽·립·아이섀도·블러셔·아이라이너·눈썹, 헤어 컬러·네일·타투를 고르면 웹캠 속 지금의 나에게 바로 입혀지고, 움직임을 거울처럼 따라갑니다. 방의 조명에 맞춰 색이 자연스럽게 보이도록 조정됩니다.</p>
+          <div class="start-buttons">
+            <button id="btn-camera" class="primary">카메라로 시작</button>
+            <button id="btn-sample">예시 영상으로 체험</button>
+            <label class="file-btn">내 동영상 파일로<input type="file" id="file-video" accept="video/*" hidden /></label>
+          </div>
+          <p class="privacy">🔒 카메라 영상은 이 기기 안에서만 처리됩니다. 어디에도 전송하거나 저장하지 않습니다.</p>
+          <p class="tips">잘 나오는 조건: 밝고 고른 조명 · 얼굴 정면 · 맨얼굴이나 옅은 화장</p>
+          <p class="credit">예시 영상: Intel IoT DevKit sample-videos (CC BY 4.0)</p>
+        </div>
+      </section>
+
+      <nav class="rail" id="rail" aria-label="뷰티 선택">
+        <div class="tabs" id="tabs"><button class="tab photo primary" id="btn-photo" title="마음에 드는 사진을 올리면 그 사진의 색·스타일을 내게 적용합니다">📷 사진 따라하기</button><button class="tab photo" id="btn-gen" title="실시간으로 안 되는 헤어 모양·네일아트·타투를 생성형 AI로 그립니다(내 컴퓨터의 생성 서버 필요)">✨ 생성</button></div>
+        <div class="gen" id="gen" hidden>
+          <div class="gen-head">
+            <strong>✨ 생성 모드(사진 한 장)</strong>
+            <span id="gen-status" class="muted">서버 확인 중…</span>
+            <button id="gen-close" title="닫기">✕</button>
+          </div>
+          <div class="gen-body">
+            <label>대상 <select id="gen-cat">
+              <option value="hair">헤어 모양·길이</option><option value="nail">네일아트</option><option value="tattoo">타투</option></select></label>
+            <label title="기본: 다시 그리기(SDXL/SD 인페인팅 + 참고 사진). AnyDoor: 참고 사진의 물체를 그 자리에 합성(과제 엔진, tools/anydoor 서버 필요)">엔진 <select id="gen-engine">
+              <option value="default">기본(다시 그리기)</option><option value="anydoor">AnyDoor(물체 합성)</option></select></label>
+            <label id="gen-grow-row">머리 범위 <input type="range" id="gen-grow" min="0.1" max="0.6" step="0.05" value="0.25" title="길게 기르려면 크게" /></label>
+            <label id="gen-extend-row" hidden>손톱 길이 <input type="range" id="gen-extend" min="0" max="1" step="0.05" value="0" /></label>
+            <label class="gen-desc">설명(영어) <input type="text" id="gen-desc" placeholder="예: long layered hair, golden blonde balayage" /></label>
+            <label><input type="checkbox" id="gen-use-ref" checked /> 참고 사진 따라 그리기</label>
+            <button id="gen-run" class="primary">📸 지금 모습으로 생성</button>
+          </div>
+          <div class="gen-result" id="gen-result" hidden>
+            <div class="gen-compare"><img id="gen-before" alt="생성 전" /><img id="gen-after" alt="생성 후" /><input type="range" id="gen-slider" min="0" max="100" value="50" /></div>
+            <div class="gen-actions"><span id="gen-info" class="muted"></span><a id="gen-save" download="iris-생성.jpg">저장</a></div>
+          </div>
+        </div>
+        <div class="ref" id="ref" hidden><img id="ref-img" alt="참고 사진" /><span id="ref-text"></span><button id="ref-clear" title="참고 사진 지우기">✕</button></div>
+        <div class="swatches" id="swatches"></div>
+        <div class="amount-row">
+          <label id="amount-row">진하기 <input type="range" id="amount" min="0.05" max="1" step="0.01" value="0.6" /></label>
+          <label id="gloss-row">광택 <input type="range" id="gloss" min="0" max="1" step="0.01" value="0.3" /></label>
+          <label id="lstyle-row" hidden>모양 <select id="lstyle">
+            <option value="full">풀 립</option><option value="gradient">그라데이션</option><option value="blur">블러</option></select></label>
+          <label id="over-row" hidden title="왼쪽: 입술 안쪽만, 오른쪽: 윤곽보다 도톰하게(오버립)">라인 <input type="range" id="over" min="-1" max="1" step="0.05" value="0" /></label>
+          <label id="pearl-row" hidden>펄 <input type="range" id="pearl" min="0" max="1" step="0.01" value="0" /></label>
+          <label id="place-row" hidden>위치 <select id="place"></select></label>
+          <label id="nstyle-row" hidden>무늬 <select id="nstyle">
+            <option value="solid">단색</option><option value="french">프렌치</option><option value="gradient">그라데이션</option>
+            <option value="glitter">글리터</option><option value="dots">도트</option>
+            <option value="chrome">크롬</option><option value="jelly">젤리</option><option value="cateye">캣아이</option><option value="aurora">오로라</option></select></label>
+          <label id="nlen-row" hidden>길이(실험) <input type="range" id="nlen" min="0" max="1" step="0.01" value="0" /></label>
+          <label id="size-row" hidden>크기 <input type="range" id="size" min="0" max="1" step="0.01" value="0.5" /></label>
+          <button id="tattoo-pick" hidden title="화면에서 팔·목·가슴의 원하는 곳을 누르면 그 자리에 타투를 옮깁니다">📍 자리 누르기</button>
+          <button id="tattoo-crop" hidden title="참고 사진에서 타투 부분을 직접 드래그해 고릅니다">✂️ 도안 영역</button>
+        </div>
+        <input type="file" id="tattoo-file" accept="image/*" hidden />
+        <input type="file" id="style-file" accept="image/*" hidden />
+      </nav>
+
+      <aside class="panel" id="panel" hidden>
+        <div class="panel-head">
+          <h2>설정</h2>
+          <button id="btn-close" class="ghost" aria-label="닫기">✕</button>
+        </div>
+
+        <h3>보기</h3>
+        <label class="row"><input type="checkbox" id="opt-mirror" checked /> 거울 모드(좌우 반전)</label>
+        <label class="row">생성 서버 주소 <input type="text" id="opt-gen-url" value="http://127.0.0.1:8765" style="width: 220px" /> <span class="muted">(tools/genserver, 사진 한 장 모드)</span></label>
+        <label class="row"><input type="checkbox" id="opt-style-ai" checked /> 사진 따라하기에 스타일 AI 사용(처음 한 번 약 94MB 모델을 내려받아 무늬·모양·기법까지 읽음)</label>
+        <label class="row"><input type="checkbox" id="opt-seg" checked /> 머리카락·피부 인식(분할) 사용 — 손이 얼굴을 가리면 화장을 숨김</label>
+        <label class="row"><input type="checkbox" id="opt-refine" checked /> 머리카락 경계 정밀화</label>
+        <label class="row"><input type="checkbox" id="opt-hair-model" /> 자체 학습 머리카락 모델 사용(실험: 1차 학습본, 1.6MB)</label>
+
+        <h3>성능</h3>
+        <label class="row">분할 주기
+          <select id="opt-seg-every">
+            <option value="1" selected>매 프레임</option>
+            <option value="2">2프레임마다</option>
+            <option value="3">3프레임마다</option>
+          </select>
+        </label>
+        <label class="row">처리 장치
+          <select id="opt-delegate">
+            <option value="GPU" selected>GPU</option>
+            <option value="CPU">CPU</option>
+          </select>
+        </label>
+        <label class="row">카메라 해상도
+          <select id="opt-res">
+            <option value="640x480">640×480</option>
+            <option value="1280x720" selected>1280×720</option>
+            <option value="1920x1080">1920×1080</option>
+          </select>
+        </label>
+
+        <h3>개발자 표시</h3>
+        <label class="row"><input type="checkbox" id="opt-dbg-lm" /> 얼굴 점</label>
+        <label class="row"><input type="checkbox" id="opt-dbg-seg" /> 분할 결과</label>
+
+        <h3>지연 측정</h3>
+        <p class="note">노트북 화면 앞에 거울을 들어 카메라가 화면을 비추게 한 뒤 시작하세요. 화면이 검정·흰색으로 약 30번 깜빡입니다.</p>
+        <button id="btn-loopback">거울 루프백 측정 시작</button>
+        <pre class="result" id="loopback-result"></pre>
+        <button id="btn-export">측정 기록 내려받기(JSON)</button>
+      </aside>
+    </main>
+    <script type="module" src="./src/app/main.ts"></script>
+  </body>
+</html>
