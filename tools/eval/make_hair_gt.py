@@ -140,6 +140,12 @@ def main() -> None:
             x, y, s = r
             crop = img.crop((x, y, x + s, y + s)).resize((1024, 1024), Image.LANCZOS)
             hp = parser.hair(crop)
+            # 얼굴 파싱(정면·똑바른 얼굴로 학습)은 크게 기운 머리에서 머리카락을 놓친다 → 그런 프레임은 정답으로 쓰지 않는다
+            lm = res.face_landmarks[0]
+            tilt = abs(np.degrees(np.arctan2((lm[263].y - lm[33].y) * img.height, (lm[263].x - lm[33].x) * img.width)))
+            if tilt > 25:
+                print("머리가 많이 기욺(정답 신뢰 낮음):", name, round(tilt))
+                continue
             coarse = (hp > 0.5).astype(np.uint8)
             if coarse.sum() < 1024 * 1024 * 0.01:
                 print("머리카락 거의 없음:", name)

@@ -119,7 +119,10 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--workers", type=int, default=0)
     ap.add_argument("--init", default=None, help="이어서 학습할 가중치(best.pt)")
+    ap.add_argument("--size", type=int, default=384, help="학습 입력 크기(CPU 에서는 256 권장, 브라우저 기본 모델도 256)")
+    ap.add_argument("--limit", type=int, default=0, help="폴더마다 최대 장수(0 = 전부, CPU 학습 시간 줄이기)")
     a = ap.parse_args()
+    globals()["SIZE"] = a.size  # 자료 클래스가 쓰는 입력 크기
     random.seed(0)
     torch.manual_seed(0)
     tr: list[tuple[Path, str]] = []
@@ -129,6 +132,8 @@ def main() -> None:
         root = Path(d)
         names = sorted(p.stem for p in (root / "alphas").glob("*.png") if (root / "images" / f"{p.stem}.jpg").exists())
         random.shuffle(names)
+        if a.limit:
+            names = names[: a.limit]
         nval = max(4, len(names) // 20)
         val += [(root, n) for n in names[:nval]]
         tr += [(root, n) for n in names[nval:]] * max(1, int(mult or 1))

@@ -12,6 +12,13 @@ interface Program {
 /** 가이디드 필터 저해상도 배율(1/2)과 그에 맞는 카메라 밉맵 단계. 1/4에서는 앞머리 올이 뭉개져 1/2로 올림 */
 const GF_DOWN = 2;
 const GF_LOD = 1;
+/** 가이디드 필터 반경(저해상도 px)·정규화. 평가 도구(tools/eval/hair.mjs)로 맞춘 값, ?gfr= ?gfeps= 로 시험 */
+const urlNum = (k: string, d: number): number => {
+  const v = typeof location !== 'undefined' ? Number(new URLSearchParams(location.search).get(k)) : NaN;
+  return v > 0 ? v : d;
+};
+const GF_R = Math.round(urlNum('gfr', 4));
+const GF_EPS = urlNum('gfeps', 0.0008);
 
 interface GuidedFilter {
   statsProg: Program;
@@ -84,8 +91,9 @@ export class Renderer {
   private createGuidedFilter(): GuidedFilter | null {
     const gl = this.gl;
     if (!gl.getExtension('EXT_color_buffer_float')) return null;
-    const statsProg = this.program(FULLSCREEN_VS, GF_STATS_FS, ['uCam', 'uSeg', 'uLow', 'uLod']);
-    const meanProg = this.program(FULLSCREEN_VS, GF_MEAN_FS, ['uS0', 'uS1', 'uLow', 'uEps']);
+    const withR = (src: string): string => src.replace('const int R = 6;', `const int R = ${GF_R};`);
+    const statsProg = this.program(FULLSCREEN_VS, withR(GF_STATS_FS), ['uCam', 'uSeg', 'uLow', 'uLod']);
+    const meanProg = this.program(FULLSCREEN_VS, withR(GF_MEAN_FS), ['uS0', 'uS1', 'uLow', 'uEps']);
     return {
       statsProg,
       meanProg,
@@ -152,7 +160,7 @@ export class Renderer {
     this.bindTex(1, g.s1, g.meanProg.u.uS1);
     gl.uniform2f(g.meanProg.u.uLow, g.w, g.h);
     // 작을수록 밝기 경계에 더 민감(머리카락 올이 살아남), 너무 작으면 잡음이 마스크에 섞인다.
-    gl.uniform1f(g.meanProg.u.uEps, 0.0008);
+    gl.uniform1f(g.meanProg.u.uEps, GF_EPS);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
