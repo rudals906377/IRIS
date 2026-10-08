@@ -11,6 +11,7 @@ import { chroma, measureFace, type FaceMeasure } from './face-measure.ts';
 import type { RGB } from './makeup.ts';
 import type { NailStyle } from './nail.ts';
 import type { TattooDesign } from './tattoo-designs.ts';
+import { extractDesign, type InkSource, type Rect } from './tattoo-extract.ts';
 import type { StyleAIResult, StyleHints } from './style-attributes.ts';
 import { dominantColors, gam, glossFrom, hairTarget, hex, isSkin, lin, lipTarget, luma, tintTarget } from './style-math.ts';
 
@@ -18,7 +19,7 @@ const MODEL_BASE = 'https://storage.googleapis.com/mediapipe-models';
 const FACE_MODEL = `${MODEL_BASE}/face_landmarker/face_landmarker/float16/1/face_landmarker.task`;
 const SEG_MODEL = `${MODEL_BASE}/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite`;
 const HAND_MODEL = `${MODEL_BASE}/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`;
-const CLS = { background: 0, hair: 1, bodySkin: 2, faceSkin: 3 } as const;
+const CLS = { background: 0, hair: 1, bodySkin: 2, faceSkin: 3, clothes: 4 } as const;
 /** 분석용 그림 크기 상한(긴 변) */
 const MAX_SIDE = 768;
 
@@ -47,6 +48,8 @@ export interface StyleResult {
   hair?: { color: RGB; tip: RGB | null; amount: number };
   nail?: { color: RGB; style: NailStyle };
   tattoo?: TattooDesign;
+  /** 타투를 뽑은 원본(분석 해상도)과 고른 영역: 사용자가 영역을 다시 고를 때·생성 서버에 참고 마스크를 보낼 때 쓴다 */
+  tattooSrc?: { src: InkSource; rect: Rect; inkMask: Float32Array };
   /** 사용자에게 보여 줄 한 줄 설명 */
   summary: string;
   /** 분석에 쓴 축소 그림 */
@@ -76,7 +79,7 @@ export const SHADOW_AMOUNT = 0.6;
 export const SHADOW_KEFF = 0.35;
 
 type Pixels = { w: number; h: number; d: Uint8ClampedArray; img: ImageData };
-type SegMasks = { hair: Float32Array; body: Float32Array; face: Float32Array; bg: Float32Array; w: number; h: number };
+type SegMasks = { hair: Float32Array; body: Float32Array; face: Float32Array; bg: Float32Array; clothes?: Float32Array; w: number; h: number };
 
 export class PhotoAnalyzer {
   private fileset: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
@@ -177,6 +180,7 @@ export class PhotoAnalyzer {
           body: m[CLS.bodySkin].getAsFloat32Array().slice(),
           face: m[CLS.faceSkin].getAsFloat32Array().slice(),
           bg: m[CLS.background].getAsFloat32Array().slice(),
+          clothes: m.length > CLS.clothes ? m[CLS.clothes].getAsFloat32Array().slice() : undefined,
           w: m[0].width,
           h: m[0].height,
         };
@@ -233,9 +237,11 @@ export class PhotoAnalyzer {
       }
     }
     if (wantTattoo && !out.makeup && !out.nail && segMasks && (mode === 'tattoo' || !out.hair)) {
-      const t = extractTattoo(px, segMasks);
+      const src = inkSource(px, segMasks);
+      const t = tattooFromSource(src, null);
       if (t) {
-        out.tattoo = t;
+        out.tattoo = t.design;
+        out.tattooSrc = { src, rect: t.rect, inkMask: t.inkMask };
         parts.push('타투 도안');
       }
     }
@@ -495,123 +501,34 @@ function measureNail(
 
 // ---- 타투 ----
 
-function extractTattoo(px: Pixels, seg: { body: Float32Array; face: Float32Array; bg: Float32Array; w: number; h: number }): TattooDesign | null {
-  const { w, h, d } = px;
-  const n = w * h;
-  const skinP = new Float32Array(n);
-  const person = new Float32Array(n);
+/** 분석 해상도 픽셀 + 분할(저해상도) → 도안 뽑기 입력 */
+function inkSource(px: Pixels, seg: SegMasks): InkSource {
+  const { w, h } = px;
+  const skin = new Float32Array(w * h);
+  const avoid = new Float32Array(w * h);
   for (let y = 0; y < h; y++) {
     const sy = Math.floor((y * seg.h) / h);
     for (let x = 0; x < w; x++) {
       const si = sy * seg.w + Math.floor((x * seg.w) / w);
       const k = y * w + x;
-      skinP[k] = Math.max(seg.body[si], seg.face[si]);
-      person[k] = 1 - seg.bg[si];
+      skin[k] = Math.max(seg.body[si], seg.face[si]);
+      avoid[k] = Math.max(seg.hair[si], seg.clothes ? seg.clothes[si] : 0, seg.bg[si]);
     }
   }
-  // 피부 기준색: 분할이 피부라 하고 색도 피부인 곳
-  const skinPx: RGB[] = [];
-  for (let k = 0; k < n; k += 7) {
-    if (skinP[k] < 0.7) continue;
-    const c: RGB = [lin1(d[k * 4]), lin1(d[k * 4 + 1]), lin1(d[k * 4 + 2])];
-    if (isSkin(c)) skinPx.push(c);
-  }
-  if (skinPx.length < 40) return null;
-  const skin = trimmedMean(skinPx)!;
-  const Ls = luma(skin);
-  const sSum = skin[0] + skin[1] + skin[2];
-  const sr = skin[0] / sSum;
-  const sg = skin[1] / sSum;
-  // 피부 영역을 넓혀(잉크 부분은 분할이 피부로 안 볼 수 있음) 그 안에서 잉크를 찾는다
-  const region = boxBlur(skinP, w, h, Math.max(2, Math.round(Math.min(w, h) * 0.04)));
-  const alpha = new Float32Array(n);
-  let count = 0;
-  let x0 = w;
-  let y0 = h;
-  let x1 = 0;
-  let y1 = 0;
-  for (let k = 0; k < n; k++) {
-    if (region[k] < 0.35 || person[k] < 0.5) continue;
-    const c: RGB = [lin1(d[k * 4]), lin1(d[k * 4 + 1]), lin1(d[k * 4 + 2])];
-    const L = luma(c);
-    const dark = smooth(0.18, 0.55, 1 - L / Math.max(Ls, 1e-3));
-    const sum = c[0] + c[1] + c[2] + 1e-6;
-    const chroma = Math.hypot(c[0] / sum - sr, c[1] / sum - sg);
-    const colored = smooth(0.05, 0.14, chroma) * smooth(0.02, 0.08, L);
-    const a = Math.max(dark, colored);
-    if (a > 0.25) {
-      count++;
-      const x = k % w;
-      const y = (k / w) | 0;
-      if (x < x0) x0 = x;
-      if (x > x1) x1 = x;
-      if (y < y0) y0 = y;
-      if (y > y1) y1 = y;
-    }
-    alpha[k] = a;
-  }
-  if (count < n * 0.004) return null;
-  const pad = Math.round(Math.max(x1 - x0, y1 - y0) * 0.06) + 2;
-  x0 = Math.max(0, x0 - pad);
-  y0 = Math.max(0, y0 - pad);
-  x1 = Math.min(w - 1, x1 + pad);
-  y1 = Math.min(h - 1, y1 + pad);
-  const cw = x1 - x0 + 1;
-  const ch = y1 - y0 + 1;
+  return { w, h, d: px.d, skin, avoid };
+}
+
+/** 도안 뽑기 결과를 캔버스 도안으로. rect 가 없으면 자동으로 영역을 고른다 */
+export function tattooFromSource(src: InkSource, rect: Rect | null): { design: TattooDesign; rect: Rect; inkMask: Float32Array } | null {
+  const r = extractDesign(src, rect);
+  if (!r) return null;
+  let ink = 0;
+  for (let i = 3; i < r.rgba.length; i += 4) if (r.rgba[i] > 64) ink++;
+  // 고른 영역에 잉크가 거의 없으면(맨살) 도안이 아니다
+  if (!rect && ink < r.w * r.h * 0.004) return null;
   const canvas = document.createElement('canvas');
-  canvas.width = cw;
-  canvas.height = ch;
-  const ctx = canvas.getContext('2d')!;
-  const img = ctx.createImageData(cw, ch);
-  for (let y = 0; y < ch; y++)
-    for (let x = 0; x < cw; x++) {
-      const k = (y0 + y) * w + (x0 + x);
-      const o = (y * cw + x) * 4;
-      // 색은 사진의 잉크색을 조금 진하게(피부에 섞인 만큼 되돌림)
-      const a = alpha[k];
-      img.data[o] = Math.max(0, Math.min(255, d[k * 4] * (1 - 0.2 * a)));
-      img.data[o + 1] = Math.max(0, Math.min(255, d[k * 4 + 1] * (1 - 0.2 * a)));
-      img.data[o + 2] = Math.max(0, Math.min(255, d[k * 4 + 2] * (1 - 0.2 * a)));
-      img.data[o + 3] = Math.round(a * 255);
-    }
-  ctx.putImageData(img, 0, 0);
-  // 도안 크기 상한
-  const SIZE = 512;
-  const s = Math.min(1, SIZE / Math.max(cw, ch));
-  if (s < 1) {
-    const small = document.createElement('canvas');
-    small.width = Math.max(1, Math.round(cw * s));
-    small.height = Math.max(1, Math.round(ch * s));
-    small.getContext('2d')!.drawImage(canvas, 0, 0, small.width, small.height);
-    return { id: 'photo', name: '사진 도안', aspect: small.width / small.height, canvas: small };
-  }
-  return { id: 'photo', name: '사진 도안', aspect: cw / ch, canvas };
-}
-
-function smooth(e0: number, e1: number, x: number): number {
-  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
-  return t * t * (3 - 2 * t);
-}
-
-/** 상자 흐림(가로·세로 누적합) */
-function boxBlur(src: Float32Array, w: number, h: number, r: number): Float32Array {
-  const tmp = new Float32Array(src.length);
-  const out = new Float32Array(src.length);
-  for (let y = 0; y < h; y++) {
-    let s = 0;
-    for (let x = -r; x <= r; x++) s += src[y * w + Math.min(w - 1, Math.max(0, x))];
-    for (let x = 0; x < w; x++) {
-      tmp[y * w + x] = s / (2 * r + 1);
-      s += src[y * w + Math.min(w - 1, x + r + 1)] - src[y * w + Math.max(0, x - r)];
-    }
-  }
-  for (let x = 0; x < w; x++) {
-    let s = 0;
-    for (let y = -r; y <= r; y++) s += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
-    for (let y = 0; y < h; y++) {
-      out[y * w + x] = s / (2 * r + 1);
-      s += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
-    }
-  }
-  return out;
+  canvas.width = r.w;
+  canvas.height = r.h;
+  canvas.getContext('2d')!.putImageData(new ImageData(r.rgba, r.w, r.h), 0, 0);
+  return { design: { id: 'photo', name: '사진 도안', aspect: r.w / r.h, canvas, multiply: true }, rect: r.rect, inkMask: r.inkMask };
 }

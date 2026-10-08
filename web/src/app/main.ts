@@ -19,7 +19,7 @@ import type { MakeupLook, RGB } from '../beauty/makeup.ts';
 import type { LipStyle } from '../beauty/face-regions.ts';
 import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
 import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
-import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
+import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, tattooFromSource, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
 import { measureFace, type FaceMeasure } from '../beauty/face-measure.ts';
 import { matchDarkness, matchLip, matchTint } from '../beauty/style-match.ts';
 import { analyzeStyle } from '../beauty/style-ai.ts';
@@ -143,13 +143,19 @@ const tattoo = {
   place: 'forearmL' as TattooPlace,
   size: 0.5,
   amount: 0.85,
+  /** 화면을 눌러 고른 부위 안 위치(없으면 가운데) */
+  along: undefined as number | undefined,
+  across: undefined as number | undefined,
 };
+const tattooPickEl = $<HTMLButtonElement>('tattoo-pick');
+const tattooCropEl = $<HTMLButtonElement>('tattoo-crop');
+let tattooPicking = false;
 const INK: [number, number, number] = [0.16, 0.17, 0.2];
 for (const [k, label] of Object.entries(PLACE_LABELS)) placeEl.append(new Option(label, k));
 
 function applyTattooToEngine(): void {
   const d = tattoo.design;
-  engine.tattoo = d ? { design: d, place: tattoo.place, size: tattoo.size, amount: tattoo.amount, ink: INK } : null;
+  engine.tattoo = d ? { design: d, place: tattoo.place, size: tattoo.size, amount: tattoo.amount, ink: INK, along: tattoo.along, across: tattoo.across } : null;
   // 타투는 몸 관절점이 필요하다: 처음 켤 때 자세 추적을 켠다(모델을 한 번 내려받음)
   if (d && !trackerConfig.pose) {
     trackerConfig.pose = true;
@@ -247,6 +253,8 @@ function renderRail(): void {
     pearlRowEl.hidden = true;
     placeRowEl.hidden = true;
     sizeRowEl.hidden = true;
+    tattooPickEl.hidden = true;
+    tattooCropEl.hidden = true;
     nstyleRowEl.hidden = true;
     nlenRowEl.hidden = true;
     return;
@@ -259,6 +267,8 @@ function renderRail(): void {
   }
   placeRowEl.hidden = true;
   sizeRowEl.hidden = true;
+  tattooPickEl.hidden = true;
+  tattooCropEl.hidden = true;
   const part = tab;
   const c = chosen[part];
   const items = [
@@ -335,6 +345,8 @@ function renderTattooRail(): void {
   placeEl.value = tattoo.place;
   sizeRowEl.hidden = false;
   sizeEl.value = String(tattoo.size);
+  tattooPickEl.hidden = !tattoo.design;
+  tattooCropEl.hidden = !lastStyle?.tattooSrc;
 }
 
 nlenEl.addEventListener('input', () => {
@@ -572,6 +584,20 @@ async function runGen(): Promise<void> {
     const cap = await engine.captureNext();
     const image = toDataUrl(cap.image, 1024);
     const reference = genUseRefEl.checked && lastStyle ? lastStyle.thumb.toDataURL('image/jpeg', 0.9) : undefined;
+    // 타투: 사진 따라하기에서 고른(또는 자동으로 찾은) 도안 영역을 그대로 보낸다(서버의 추정이 끈·머리카락을 고르는 것 방지)
+    let reference_mask: string | undefined;
+    const ts = lastStyle?.tattooSrc;
+    if (reference && cat === 'tattoo' && ts && lastStyle) {
+      const m = document.createElement('canvas');
+      m.width = lastStyle.thumb.width;
+      m.height = lastStyle.thumb.height;
+      const mc = m.getContext('2d')!;
+      mc.fillStyle = '#000';
+      mc.fillRect(0, 0, m.width, m.height);
+      mc.fillStyle = '#fff';
+      mc.fillRect(ts.rect.x, ts.rect.y, ts.rect.w, ts.rect.h);
+      reference_mask = m.toDataURL('image/png');
+    }
     genBeforeEl.src = image;
     const working = genEngineEl.value === 'anydoor' ? '합성 중… (AnyDoor, 한 자리에 30~120초)' : '생성 중… (GPU 5~30초, CPU는 몇 분)';
     genStatusEl.textContent = working;
@@ -580,6 +606,7 @@ async function runGen(): Promise<void> {
         category: cat,
         image,
         reference,
+        reference_mask,
         desc: genDescEl.value.trim() || undefined,
         place: tattoo.place,
         grow: Number(genGrowEl.value),
@@ -626,7 +653,7 @@ async function matchToPhoto(photo: FaceMeasure): Promise<void> {
   const spot = (m: FaceMeasure): RGB | null => (blushPos < 0.35 ? m.blushApple : m.blushMid);
   const natBlush = blushPos < 0.35 ? NATURAL_APPLE : NATURAL_MID;
   const darker = (m: FaceMeasure): RGB | null => [m.shadowIn, m.shadowOut].filter((x): x is RGB => !!x).sort((a, b) => luma(a) - luma(b))[0] ?? null;
-  for (let it = 0; it < 3; it++) {
+  for (let it = 0; it < 4; it++) {
     const cap = await engine.captureNext();
     if (!cap.face) break;
     const now = measureFace(cap.image, cap.face.p);
@@ -709,8 +736,125 @@ tattooFileEl.addEventListener('change', async () => {
     setStatus(`도안을 열지 못했습니다: ${(err as Error).message}`);
   }
 });
+// ---- 타투 자리: 화면을 눌러 고르기 ----
+tattooPickEl.addEventListener('click', () => {
+  tattooPicking = !tattooPicking;
+  tattooPickEl.classList.toggle('on', tattooPicking);
+  setStatus(tattooPicking ? '타투를 넣을 곳(팔·목·가슴)을 화면에서 누르세요' : '');
+});
+viewEl.addEventListener('pointerdown', (ev) => {
+  if (!tattooPicking) return;
+  const cv = viewEl.querySelector('canvas')!;
+  const r = cv.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  // 거울 모드는 CSS로 뒤집으므로 화면 좌표를 다시 뒤집는다
+  let fx = (ev.clientX - r.left) / r.width;
+  const fy = (ev.clientY - r.top) / r.height;
+  if (viewEl.classList.contains('mirror')) fx = 1 - fx;
+  const hit = engine.tattooPlaceAt(fx * cv.width, fy * cv.height);
+  if (!hit) {
+    setStatus('팔·목·가슴 위를 눌러 주세요(어깨·팔꿈치·손목이 화면에 보여야 해요)');
+    return;
+  }
+  tattoo.place = hit.place;
+  tattoo.along = hit.along;
+  tattoo.across = hit.across;
+  placeEl.value = hit.place;
+  applyTattooToEngine();
+  tattooPicking = false;
+  tattooPickEl.classList.remove('on');
+  setStatus(`${PLACE_LABELS[hit.place]}에 옮겼어요`);
+});
+
+// ---- 타투 도안 영역: 참고 사진에서 직접 드래그해 고르기 ----
+tattooCropEl.addEventListener('click', () => {
+  const ts = lastStyle?.tattooSrc;
+  if (!ts) return;
+  const { src } = ts;
+  let rect: { x: number; y: number; w: number; h: number } | null = { ...ts.rect };
+  const ov = document.createElement('div');
+  ov.className = 'crop-overlay';
+  const hint = document.createElement('div');
+  hint.textContent = '타투 부분을 드래그해서 감싸 주세요';
+  const cv = document.createElement('canvas');
+  cv.width = src.w;
+  cv.height = src.h;
+  const ctx = cv.getContext('2d')!;
+  const photo = new ImageData(new Uint8ClampedArray(src.d), src.w, src.h);
+  const paint = (): void => {
+    ctx.putImageData(photo, 0, 0);
+    if (!rect) return;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, src.w, rect.y);
+    ctx.fillRect(0, rect.y + rect.h, src.w, src.h - rect.y - rect.h);
+    ctx.fillRect(0, rect.y, rect.x, rect.h);
+    ctx.fillRect(rect.x + rect.w, rect.y, src.w - rect.x - rect.w, rect.h);
+    ctx.strokeStyle = '#ffd34d';
+    ctx.lineWidth = Math.max(2, src.w / 300);
+    ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+  };
+  const toImg = (e: PointerEvent): { x: number; y: number } => {
+    const r = cv.getBoundingClientRect();
+    return { x: Math.min(src.w - 1, Math.max(0, ((e.clientX - r.left) / r.width) * src.w)), y: Math.min(src.h - 1, Math.max(0, ((e.clientY - r.top) / r.height) * src.h)) };
+  };
+  let start: { x: number; y: number } | null = null;
+  cv.addEventListener('pointerdown', (e) => {
+    cv.setPointerCapture(e.pointerId);
+    start = toImg(e);
+    rect = null;
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!start) return;
+    const p = toImg(e);
+    rect = { x: Math.round(Math.min(start.x, p.x)), y: Math.round(Math.min(start.y, p.y)), w: Math.round(Math.abs(p.x - start.x)), h: Math.round(Math.abs(p.y - start.y)) };
+    paint();
+  });
+  cv.addEventListener('pointerup', () => {
+    start = null;
+  });
+  const row = document.createElement('div');
+  row.className = 'row';
+  const btn = (label: string, cls: string, fn: () => void): void => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    if (cls) b.className = cls;
+    b.addEventListener('click', fn);
+    row.append(b);
+  };
+  const close = (): void => ov.remove();
+  const use = (r: { x: number; y: number; w: number; h: number } | null): void => {
+    const t = tattooFromSource(src, r);
+    if (!t) {
+      hint.textContent = '이 영역에서 타투 선을 찾지 못했어요. 조금 넓게 다시 감싸 주세요';
+      return;
+    }
+    tattoo.design = t.design;
+    if (lastStyle) {
+      lastStyle.tattoo = t.design;
+      lastStyle.tattooSrc = { src, rect: t.rect, inkMask: t.inkMask };
+    }
+    applyTattooToEngine();
+    renderRail();
+    close();
+    setStatus('고른 영역으로 도안을 바꿨어요');
+  };
+  btn('자동으로 찾기', '', () => use(null));
+  btn('취소', 'ghost', close);
+  btn('이 영역으로', 'primary', () => {
+    if (!rect || rect.w < 8 || rect.h < 8) {
+      hint.textContent = '먼저 타투 부분을 드래그해서 감싸 주세요';
+      return;
+    }
+    use(rect);
+  });
+  ov.append(hint, cv, row);
+  document.body.append(ov);
+  paint();
+});
+
 placeEl.addEventListener('change', () => {
   tattoo.place = placeEl.value as TattooPlace;
+  tattoo.along = tattoo.across = undefined;
   applyTattooToEngine();
 });
 sizeEl.addEventListener('input', () => {

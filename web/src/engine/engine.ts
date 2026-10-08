@@ -9,7 +9,7 @@ import { NailRenderer, type NailLook } from '../beauty/nail.ts';
 import { nailQuads, type HandPoints, type NailQuad } from '../beauty/nail-place.ts';
 import { HairNet } from './hairnet.ts';
 import { TattooRenderer } from '../beauty/tattoo.ts';
-import { FACE_FOR_POSE, measureLimbWidth, placeAxis, tattooMesh, type PosePoints, type TattooPlace } from '../beauty/tattoo-place.ts';
+import { FACE_FOR_POSE, measureLimbWidth, placeAxis, placeFromPoint, tattooMesh, type PosePoints, type TattooPlace } from '../beauty/tattoo-place.ts';
 import { PointFilter, RigidShapeFilter, type RigidShapeParams } from './filters.ts';
 import { FaceTracker, type FaceFrame } from './face.ts';
 import { LoopbackTest } from './loopback.ts';
@@ -34,7 +34,8 @@ export interface EngineSettings {
   useSeg: boolean;
   /** 머리카락·피부 경계를 원본 해상도로 정밀화 */
   refine: boolean;
-  debugSeg: boolean;
+  /** 개발용: true = 분할 결과를 색으로 덧칠, 'prob' = 확률 그대로(R 머리카락, G 몸 피부, B 얼굴 피부; 평가 도구가 읽는다) */
+  debugSeg: boolean | 'prob';
   /** 개발용: 얼굴 점 표시 */
   debugLandmarks: boolean;
 }
@@ -47,7 +48,7 @@ export const DEFAULT_SETTINGS: EngineSettings = {
 };
 
 export interface TattooSettings {
-  design: { canvas: TexImageSource; aspect: number };
+  design: { canvas: TexImageSource; aspect: number; multiply?: boolean };
   place: TattooPlace;
   /** 0~1 */
   size: number;
@@ -55,6 +56,9 @@ export interface TattooSettings {
   amount: number;
   /** 검은 도안의 잉크 색 */
   ink: [number, number, number];
+  /** 부위 안 위치(사용자가 화면을 눌러 고른 자리). 없으면 가운데 */
+  along?: number;
+  across?: number;
 }
 
 export class BeautyEngine {
@@ -169,10 +173,10 @@ export class BeautyEngine {
     const tat = this.tattoo;
     if (tat && pose) {
       const width = this.updateLimbWidth(tat.place, pose, track, w, h);
-      const mesh = tattooMesh(tat.place, pose, { size: tat.size, aspect: tat.design.aspect, width });
+      const mesh = tattooMesh(tat.place, pose, { size: tat.size, aspect: tat.design.aspect, width, along: tat.along, across: tat.across });
       if (mesh) {
         this.tattooFx.setDesign(tat.design.canvas);
-        effects.push((t) => this.tattooFx.draw(mesh, t, tat.amount, tat.ink));
+        effects.push((t) => this.tattooFx.draw(mesh, t, tat.amount, tat.ink, tat.design.multiply));
       }
     }
     const hair = this.hair;
@@ -303,6 +307,13 @@ export class BeautyEngine {
       }
     }
     return this.limbWidth?.w ?? null;
+  }
+
+  /** 화면(영상 px)에서 누른 점 → 타투 부위와 그 안의 위치. 몸 관절이 안 보이거나 부위 밖이면 null */
+  tattooPlaceAt(x: number, y: number): { place: TattooPlace; along: number; across: number } | null {
+    const pose = this.lastPose;
+    if (!pose) return null;
+    return placeFromPoint(pose, { x, y }, (place) => (this.limbWidth?.place === place ? this.limbWidth.w : null));
   }
 
   /** 자체 손톱 모델 켜기/끄기(주소가 비면 끈다). 두 손 분량의 실행기를 만든다 */

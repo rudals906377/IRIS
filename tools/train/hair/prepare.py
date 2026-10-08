@@ -169,7 +169,10 @@ def do_celeba(a, t: Teachers, out: Path) -> int:
                 if img.size != (1024, 1024):
                     img = img.resize((1024, 1024), Image.LANCZOS)
                     coarse = cv2.resize(coarse, (1024, 1024), interpolation=cv2.INTER_NEAREST)
-                alpha = refine(t, img, coarse)
+                if a.raw:
+                    alpha = cv2.GaussianBlur(coarse.astype(np.float32), (0, 0), 1.5)
+                else:
+                    alpha = refine(t, img, coarse)
                 save_pair(out, name, img, alpha)
                 done += 1
                 if done % 50 == 0:
@@ -232,13 +235,14 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0, help="시험용: 이 수만큼만")
     ap.add_argument("--no-person", action="store_true", help="BiRefNet(사람 알파) 생략(빠르지만 배경 쪽 경계가 덜 깨끗)")
     ap.add_argument("--hair-class", type=int, default=HAIR_CLASS)
+    ap.add_argument("--raw", action="store_true", help="CelebA 라벨을 정밀화 없이 그대로(살짝 흐려서) 쓴다: 빠름(CPU 학습용)")
     a = ap.parse_args()
     out = Path(a.out)
     (out / "images").mkdir(parents=True, exist_ok=True)
     (out / "alphas").mkdir(parents=True, exist_ok=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     log("장치:", dev)
-    t = Teachers(dev, not a.no_person)
+    t = None if (a.raw and not a.webcam) else Teachers(dev, not a.no_person)
     n = 0
     if a.shards > 0 or a.test:
         n += do_celeba(a, t, out)

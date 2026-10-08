@@ -39,7 +39,7 @@ export interface FrameTextures {
 
 export interface DrawOptions {
   useSeg: boolean;
-  debugSeg: boolean;
+  debugSeg: boolean | 'prob';
   /** 머리카락·피부 경계를 원본 해상도로 정밀화(가이디드 필터) */
   refine?: boolean;
   /** 카메라를 그린 뒤 화면에 덧그리는 효과들 */
@@ -190,7 +190,7 @@ export class Renderer {
     gl.useProgram(cp.prog);
     this.bindTex(0, this.camTex, cp.u.uCam);
     this.bindTex(1, this.segTex, cp.u.uSeg);
-    gl.uniform1f(cp.u.uDebugSeg, opts.debugSeg && this.hasSeg ? 1 : 0);
+    gl.uniform1f(cp.u.uDebugSeg, opts.debugSeg === 'prob' ? 2 : opts.debugSeg && this.hasSeg ? 1 : 0);
     gl.uniform1f(cp.u.uUseGF, useGF ? 1 : 0);
     if (this.gf) this.bindTex(5, this.gf.mean, cp.u.uGF);
     gl.bindVertexArray(this.emptyVao);
@@ -207,7 +207,7 @@ export class Renderer {
       width: W,
       height: H,
     };
-    for (const fx of opts.effects ?? []) {
+    for (const fx of opts.debugSeg === 'prob' ? [] : (opts.effects ?? [])) {
       fx(tex);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, W, H);

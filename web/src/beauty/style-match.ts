@@ -5,6 +5,8 @@
 import type { RGB } from './makeup.ts';
 import { REF, gam, lin } from './style-math.ts';
 
+const WL: RGB = [0.2126, 0.7152, 0.0722];
+
 const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, x));
 
 export interface TintSetting {
@@ -44,12 +46,31 @@ export function matchTint(cur: TintSetting, want: RGB, got: RGB, natural: RGB, m
   // 색 편차 상한: 블러셔·섀도가 형광처럼 튀지 않게(초록·파랑은 기준의 40% 이상, 빨강은 120% 이하)
   const lo: RGB = [0.7, 0.4, 0.4];
   const hi: RGB = [1.2, 1.3, 1.3];
-  const color = cl.map((v, i) => {
-    const chanW = 1 - w[i];
-    const chanG = 1 - g[i];
-    // 채널별 비율(초록 기준 보정에 더해, 채널마다 남은 차이를 맞춘다)
-    const rel = Math.abs(chanG) > 0.01 && Math.abs(gotDev) > 0.015 && Math.sign(gotDev) === Math.sign(wantDev) ? (chanW / wantDev) / (chanG / gotDev) : 1;
-    const dev = (v / REF[i] - 1) * boost * clamp(rel, 0.6, 1.6);
+  // 채널별로 따로 맞춘다: 결과 색조 편차 ≈ r × (색 편차 − 그 밝기 성분)(r = 진하기·덮임에 따른 반응, 모든 채널 공통).
+  // r 을 지금 색과 결과로 추정하고(최소제곱), 채널마다 사진 편차가 나오는 색 편차로 옮긴다.
+  // (예전에는 기준 채널 한 개의 비율로 모두 늘였기 때문에, 결과에서 거의 안 움직인 파랑 같은 채널은 고쳐지지 않았다)
+  const devC = cl.map((v, i) => v / REF[i] - 1) as RGB;
+  const lumC = WL[0] * devC[0] + WL[1] * devC[1] + WL[2] * devC[2];
+  const chrC = devC.map((v) => v - lumC);
+  const devW = w.map((v) => v - 1);
+  const devG = g.map((v) => v - 1);
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < 3; i++) {
+    num += devG[i] * chrC[i];
+    den += chrC[i] * chrC[i];
+  }
+  const r = den > 1e-4 ? num / den : 0;
+  const responsive = r > 0.03 && Math.abs(gotDev) >= 0.015 && Math.sign(gotDev) === Math.sign(wantDev);
+  const color = cl.map((_, i) => {
+    let dev: number;
+    if (responsive) {
+      // 목표 색조 편차(밝기 성분은 지금 값 유지). r 을 매번 다시 재므로 한 번에 다 옮겨도 수렴한다(21장 평가로 확인)
+      dev = devC[i] + (devW[i] / r - chrC[i]);
+    } else {
+      // 결과가 거의 없거나 반대 방향: 지금 색 편차를 키운다
+      dev = devC[i] * boost;
+    }
     return clamp(REF[i] * clamp(1 + dev, lo[i], hi[i]), 0.02, 1);
   }) as RGB;
   return { color: gam(color), amount };

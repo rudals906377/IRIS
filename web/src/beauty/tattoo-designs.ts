@@ -7,6 +7,8 @@ export interface TattooDesign {
   /** 가로 / 세로 */
   aspect: number;
   canvas: HTMLCanvasElement;
+  /** 사진에서 뽑은 도안: RGB 가 '피부에 곱할 잉크 투과율'이라 그대로 곱한다(색 잉크·명암 보존) */
+  multiply?: boolean;
 }
 
 const SIZE = 512;

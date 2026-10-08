@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from masks import Masker
 import anydoor_client
+from blend import harmonize
 from pipelines import Generator, GenRequest, lock_hair_color
 
 app = FastAPI(title="IRIS 생성 서버")
@@ -227,7 +228,11 @@ def generate_anydoor(body: GenerateBody, img: Image.Image, ref: Image.Image | No
     log(f"AnyDoor {body.category}: 자리 {len(targets)}곳, {steps}단계")
     for i, tm in enumerate(targets):
         try:
-            out = anydoor_client.compose(ref, ref_mask, out, tm, steps=steps, guidance=guidance, seed=body.seed)
+            before = out
+            comp = anydoor_client.compose(ref, ref_mask, out, tm, steps=steps, guidance=guidance, seed=body.seed)
+            # AnyDoor 는 정사각형으로 자른 영역 전체를 다시 그려 5px 여백으로 붙인다 → 자리 주변만 남기고 색감·결을 맞춰 섞는다
+            grow = cv2_dilate(tm, max(3, int(min(img.width, img.height) * 0.03)))
+            out = harmonize(before, comp, grow, seed=body.seed or 0)
         except RuntimeError as e:
             log(str(e))
             raise HTTPException(500, str(e)) from e
@@ -240,6 +245,13 @@ def generate_anydoor(body: GenerateBody, img: Image.Image, ref: Image.Image | No
     ms = int((time.time() - t0) * 1000)
     log(f"완료 {ms}ms (AnyDoor)")
     return {"image": encode(out), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": ms, "prompt": "", "model": "anydoor", "found": found, "targets": len(targets)}
+
+
+def cv2_dilate(m, r: int):
+    import cv2
+
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    return cv2.dilate((m > 0).astype(np.uint8), k)
 
 
 def cv2_resize_nearest(m, size):

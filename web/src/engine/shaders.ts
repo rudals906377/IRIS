@@ -21,6 +21,18 @@ in vec2 vUv;
 out vec4 o;
 void main() {
   vec3 c = textureLod(uCam, vUv, 0.0).rgb;
+  if (uDebugSeg > 1.5) {
+    // 평가용: 염색 효과가 보는 머리카락 확률(정밀화 + 얼굴·몸 피부 위 억제)을 그대로 출력
+    vec4 s = texture(uSeg, vUv);
+    float h = s.r;
+    if (uUseGF > 0.5) {
+      vec4 gf = textureLod(uGF, vec2(vUv.x, 1.0 - vUv.y), 0.0);
+      h = clamp(gf.x * dot(c, vec3(0.299, 0.587, 0.114)) + gf.y, 0.0, 1.0);
+    }
+    h *= 1.0 - smoothstep(0.5, 0.9, max(s.b, s.g));
+    o = vec4(h, s.g, s.b, 1.0);
+    return;
+  }
   if (uDebugSeg > 0.5) {
     vec4 s = texture(uSeg, vUv);
     if (uUseGF > 0.5) {

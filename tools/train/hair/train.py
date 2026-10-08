@@ -22,18 +22,18 @@ SIZE = 384
 
 
 class HairData(torch.utils.data.Dataset):
-    def __init__(self, names: list[str], root: Path, train: bool) -> None:
-        self.names = names
-        self.root = root
+    def __init__(self, items: list[tuple[Path, str]], train: bool) -> None:
+        # items: (자료 폴더, 이름). 여러 폴더(CelebA·웹캠 자동 라벨)를 섞어 쓴다
+        self.items = items
         self.train = train
 
     def __len__(self) -> int:
-        return len(self.names)
+        return len(self.items)
 
     def __getitem__(self, i: int):
-        n = self.names[i]
-        img = Image.open(self.root / "images" / f"{n}.jpg").convert("RGB")
-        alpha = Image.open(self.root / "alphas" / f"{n}.png").convert("L")
+        root, n = self.items[i]
+        img = Image.open(root / "images" / f"{n}.jpg").convert("RGB")
+        alpha = Image.open(root / "alphas" / f"{n}.png").convert("L")
         if self.train:
             # 웹캠처럼: 무작위 확대·이동·회전·좌우반전·색·흐림
             s = random.uniform(0.6, 1.0)
@@ -112,7 +112,7 @@ def grad_loss(p: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="data")
+    ap.add_argument("--data", default="data", help="자료 폴더. 여러 개는 쉼표로, 폴더:배수 로 더 자주 뽑기(예: data/celeba,data/webcam:4)")
     ap.add_argument("--out", default="out")
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch", type=int, default=16)
@@ -122,17 +122,23 @@ def main() -> None:
     a = ap.parse_args()
     random.seed(0)
     torch.manual_seed(0)
-    root = Path(a.data)
-    names = sorted(p.stem for p in (root / "alphas").glob("*.png") if (root / "images" / f"{p.stem}.jpg").exists())
-    if len(names) < 20:
-        raise SystemExit(f"데이터가 {len(names)}장뿐입니다. 먼저 prepare.py")
-    random.shuffle(names)
-    nval = max(8, len(names) // 20)
-    val, tr = names[:nval], names[nval:]
-    print(f"학습 {len(tr)}장, 검증 {len(val)}장")
+    tr: list[tuple[Path, str]] = []
+    val: list[tuple[Path, str]] = []
+    for spec in a.data.split(","):
+        d, _, mult = spec.partition(":")
+        root = Path(d)
+        names = sorted(p.stem for p in (root / "alphas").glob("*.png") if (root / "images" / f"{p.stem}.jpg").exists())
+        random.shuffle(names)
+        nval = max(4, len(names) // 20)
+        val += [(root, n) for n in names[:nval]]
+        tr += [(root, n) for n in names[nval:]] * max(1, int(mult or 1))
+        print(f"{root}: {len(names)}장(학습 배수 {mult or 1})")
+    if len(tr) < 20:
+        raise SystemExit(f"데이터가 {len(tr)}장뿐입니다. 먼저 prepare.py")
+    print(f"학습 {len(tr)}개(배수 포함), 검증 {len(val)}장")
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    dl = torch.utils.data.DataLoader(HairData(tr, root, True), batch_size=a.batch, shuffle=True, num_workers=a.workers, drop_last=True, pin_memory=dev == "cuda")
-    dv = torch.utils.data.DataLoader(HairData(val, root, False), batch_size=a.batch, shuffle=False, num_workers=a.workers)
+    dl = torch.utils.data.DataLoader(HairData(tr, True), batch_size=a.batch, shuffle=True, num_workers=a.workers, drop_last=True, pin_memory=dev == "cuda")
+    dv = torch.utils.data.DataLoader(HairData(val, False), batch_size=a.batch, shuffle=False, num_workers=a.workers)
     model = HairNet().to(dev)
     if a.init:
         model.load_state_dict(torch.load(a.init, map_location=dev))

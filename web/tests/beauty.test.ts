@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { bandMesh, faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 import { LOOKS, PALETTES } from '../src/beauty/palettes.ts';
-import { measureLimbWidth, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
+import { measureLimbWidth, placeFromPoint, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
+import { extractDesign } from '../src/beauty/tattoo-extract.ts';
 
 type P = { x: number; y: number };
 const area = (pts: P[], tris: number[]): number => {
@@ -224,6 +225,18 @@ test('되먹임: 내 결과가 사진보다 옅으면 진하기를 올리고, �
   assert.equal(none.amount, 0);
 });
 
+test('되먹임: 결과에서 거의 안 움직인 채널(섀도 파랑)도 사진 쪽으로 고친다', () => {
+  const natural: [number, number, number] = [1, 1, 1];
+  // 사진: 빨강 ↑, 초록·파랑 ↓(갈색 섀도). 지금 결과: 빨강·초록은 맞지만 파랑이 그대로
+  const want: [number, number, number] = [1.3, 0.92, 0.8];
+  const got: [number, number, number] = [1.28, 0.92, 1.0];
+  const cur = { color: gam([0.8, 0.31, 0.25]) as [number, number, number], amount: 0.85 };
+  const m = matchTint(cur, want, got, natural, natural);
+  assert.ok(lin(m.color)[2] < lin(cur.color)[2] * 0.95, `파랑 ${lin(cur.color)[2]} → ${lin(m.color)[2]}`);
+  // 이미 맞는 빨강은 크게 바뀌지 않는다
+  assert.ok(Math.abs(lin(m.color)[0] - lin(cur.color)[0]) < 0.1);
+});
+
 test('되먹임: 립은 결과/목표 비율로 색을 고친다', () => {
   const cur = { color: gam([0.5, 0.2, 0.2]) as [number, number, number], amount: 0.85 };
   const m = matchLip(cur, [0.5, 0.2, 0.2], [0.4, 0.25, 0.2]);
@@ -285,4 +298,38 @@ test('생성 모드 글 설명: 분야에 맞는 속성의 영어 설명만 이�
   assert.ok(p.includes('long hair') && p.includes('golden') && !p.includes('innocent') && !p.includes('bangs'));
   assert.equal(promptFromStyleAI(r, 'nail'), '');
   assert.equal(promptFromStyleAI(undefined, 'hair'), '');
+});
+
+test('타투 자리 탭: 누른 점에 가장 가까운 부위와 위치, 그 자리에 도안 가운데가 온다', () => {
+  const pose = armPose();
+  // 아래팔(팔꿈치 200 → 손목 300)의 3/4 지점, 축에서 오른쪽으로 10px
+  const r = placeFromPoint(pose, { x: 310, y: 275 }, () => 40)!;
+  assert.equal(r.place, 'forearmL');
+  assert.ok(Math.abs(r.along - 0.75) < 0.01);
+  const m = tattooMesh(r.place, pose, { size: 0.2, aspect: 1, width: 40, along: r.along, across: r.across })!;
+  const c = (3 * 13 + 6) * 5; // 가운데 정점(7행 중 4번째, 13열 중 7번째)
+  assert.ok(Math.abs(m.data[c] - 310) < 0.5 && Math.abs(m.data[c + 1] - 275) < 0.5);
+  // 팔에서 먼 곳은 자리가 아니다
+  assert.equal(placeFromPoint(pose, { x: 500, y: 250 }, () => 40), null);
+});
+
+test('타투 도안 뽑기: 피부 위 선은 잡고, 피부 위 새까만 큰 띠(끈)는 버린다', () => {
+  const w = 200;
+  const h = 200;
+  const d = new Uint8ClampedArray(w * h * 4);
+  const skin = new Float32Array(w * h).fill(1);
+  for (let i = 0; i < w * h; i++) d.set([220, 170, 150, 255], i * 4);
+  // 도안: (60~100, 60~100) 안의 가는 십자선(회색빛 잉크)
+  for (let k = 60; k <= 100; k++) {
+    for (const [x, y] of [[80, k], [k, 80], [81, k], [k, 81]]) d.set([90, 70, 70, 255], (y * w + x) * 4);
+  }
+  // 끈: x 150~165 세로 띠, 새까맣다
+  for (let y = 0; y < h; y++) for (let x = 150; x < 166; x++) d.set([10, 10, 12, 255], (y * w + x) * 4);
+  const r = extractDesign({ w, h, d, skin })!;
+  assert.ok(r);
+  assert.ok(r.rect.x < 80 && r.rect.x + r.rect.w > 80 && r.rect.x + r.rect.w < 140, `영역 ${JSON.stringify(r.rect)}`);
+  // 잉크 픽셀은 진하고 색(투과율)은 피부보다 어둡다
+  const i = (81 - r.rect.y) * r.w + (80 - r.rect.x);
+  assert.ok(r.rgba[i * 4 + 3] > 200);
+  assert.ok(r.rgba[i * 4] < 140);
 });

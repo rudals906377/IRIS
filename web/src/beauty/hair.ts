@@ -16,6 +16,12 @@ export interface HairLook {
 
 const W = 'const vec3 W = vec3(0.299, 0.587, 0.114);';
 
+/** 원래 머리 밝기 변동 중 명암 계수(shade)에 남는 비율. 평가 도구(tools/eval/haircolor.mjs)로 맞춘 값, ?covgain= 으로 시험 */
+const COV_GAIN = (() => {
+  const q = typeof location !== 'undefined' ? Number(new URLSearchParams(location.search).get('covgain')) : NaN;
+  return q > 0 ? q : 0.6;
+})();
+
 /** 머리카락 확률: 가이디드 필터가 있으면 원본 해상도로 정밀화한 값 */
 const HAIR_PROB = /* glsl */ `
 float hairProb(vec2 uv, vec3 c) {
@@ -48,7 +54,9 @@ void main() {
   float p = hairProb(vUv, c);
   p = smoothstep(0.5, 0.9, p);
   float L = dot(c, W);
-  o = vec4(L * p, p, vUv.y * p, L * L * p);
+  // 밝기 분산은 원본 해상도 점 표본으로(흐린 밉맵이면 올 단위 명암이 빠져 과소 추정된다)
+  float L0 = dot(textureLod(uCam, vUv, 0.0).rgb, W);
+  o = vec4(L * p, p, vUv.y * p, L0 * L0 * p);
   o1 = vec4(c * p, p);
 }`;
 
@@ -66,6 +74,7 @@ uniform vec3 uTip;
 uniform float uTipOn;
 uniform float uAmount;
 uniform vec2 uSpan;   // 머리카락 세로 범위(uv): 뿌리, 끝
+uniform float uCovGain; // 원래 밝기 변동 중 '명암 계수'에 남는 비율(실측으로 맞춤)
 in vec2 vUv;
 out vec4 o;
 ${W}
@@ -110,6 +119,15 @@ void main() {
   float strandR = clamp((L + e) / (Lsm + e), 0.45, 2.2);
   float regionR = pow(clamp((Lrg + e) / (mean + e), 0.25, 4.0), 0.6);
   float shade = mix(1.0, regionR * mix(1.0, strandR, 0.85), edge);
+  // 밝기 분포 맞추기: 실제 머리카락은 밝을수록 결의 상대 명암이 작다(사진 32장: 밝기 0.6 → 변동 0.2, 0.12 → 0.75).
+  // 원래 머리의 변동을 목표 색 밝기에 맞는 변동으로 늘이거나 줄인다(검은 머리를 금발로 → 얼룩 줄이기, 금발을 검게 → 결 살리기)
+  float Lt = max(dot(uColor, W), 0.02);
+  float covT = clamp(0.13 * pow(Lt, -0.82), 0.14, 0.9);
+  float covS = sqrt(max(st.a / max(st.g, 1e-4) - mean * mean, 1e-6)) / max(mean, 0.02);
+  float kc = clamp(covT / max(covS * uCovGain, 0.05), 0.35, 2.6);
+  // 명암을 늘이면(로그 정규 가정) 평균 밝기가 exp(σ²·k(k−1)/2) 배로 뜨므로 되돌려 색(평균)이 목표에서 벗어나지 않게 한다
+  float sg = min(covS * uCovGain, 0.8);
+  shade = exp(log(max(shade, 0.05)) * kc - 0.5 * sg * sg * kc * (kc - 1.0));
 
   vec3 target = uColor;
   if (uTipOn > 0.5) {
@@ -149,7 +167,7 @@ export class HairColorRenderer {
     this.gl = gl;
     this.stats = compileProgram(gl, FULLSCREEN_VS, STATS_FS, ['uCam', 'uSeg', 'uGF', 'uUseGF']);
     this.comp = compileProgram(gl, FULLSCREEN_VS, COMPOSITE_FS, [
-      'uCam', 'uSeg', 'uGF', 'uStats', 'uStatsC', 'uUseGF', 'uColor', 'uTip', 'uTipOn', 'uAmount', 'uSpan',
+      'uCam', 'uSeg', 'uGF', 'uStats', 'uStatsC', 'uUseGF', 'uColor', 'uTip', 'uTipOn', 'uAmount', 'uSpan', 'uCovGain',
     ]);
     const N = HairColorRenderer.N;
     this.tex = gl.createTexture()!;
@@ -220,6 +238,7 @@ export class HairColorRenderer {
     gl.uniform1f(u.uTipOn, look.tip ? 1 : 0);
     gl.uniform1f(u.uAmount, look.amount * alpha);
     gl.uniform2f(u.uSpan, span[0], span[1]);
+    gl.uniform1f(u.uCovGain, COV_GAIN);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
   }

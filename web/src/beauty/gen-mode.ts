@@ -9,6 +9,8 @@ export interface GenOptions {
   image: string;
   /** 참고 사진(dataURL) */
   reference?: string;
+  /** 참고 사진에서 합성할 물체 영역(dataURL, 흰색 = 물체, 참고 사진과 같은 크기). 없으면 서버가 추정 */
+  reference_mask?: string;
   /** 영어 설명(스타일 AI 속성이나 사용자가 적은 것) */
   desc?: string;
   place?: string;

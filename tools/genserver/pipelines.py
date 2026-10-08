@@ -17,7 +17,7 @@ from typing import Callable
 import numpy as np
 from PIL import Image
 
-from masks import feather
+from blend import harmonize
 
 # 모델 묶음: 이름 → (인페인팅 모델, IP-Adapter 폴더, 가중치, 이미지 인코더 폴더, 기본 생성 크기)
 #  sd15: 가볍고 빠름(GPU 4GB~). sdxl: 더 크고 세밀함(GPU 10GB~, 메모리가 모자라면 자동으로 일부를 CPU에 둔다)
@@ -199,10 +199,8 @@ class Generator:
         gen_crop = self.pipe(**kwargs).images[0].resize((cw, ch), Image.LANCZOS)
         result = img.copy()
         result.paste(gen_crop, (x0, y0))
-        # 마스크 밖은 원본 그대로(가장자리는 부드럽게)
-        a = feather(mask, max(3, int(min(W, H) * 0.01)))[..., None]
-        merged = (np.asarray(result).astype(np.float32) * a + np.asarray(img).astype(np.float32) * (1 - a)).clip(0, 255).astype(np.uint8)
-        out_img = Image.fromarray(merged)
+        # 마스크 밖은 원본 그대로. 생성이 바꾼 전체 색감·매끈함을 원본에 맞추고 경계를 부드럽게 섞는다(blend.harmonize)
+        out_img = harmonize(img, result, mask, max(3, int(min(W, H) * 0.01)), seed=req.seed or 0)
         if req.category == "hair" and req.color_lock and req.reference is not None and req.color_fn is not None:
             try:
                 out_img = req.color_fn(out_img, mask, req.reference, log)

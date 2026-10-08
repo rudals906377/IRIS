@@ -1,3 +1,7 @@
 node_modules/
 __pycache__/
 *.pyc
+
+# 학습·평가용 자동 라벨 자료(용량 큼, 커밋 안 함)
+/data/
+tools/eval/results/*.jpg

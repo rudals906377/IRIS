@@ -48,6 +48,10 @@ export interface PlaceParams {
   aspect: number;
   /** 부위 굵기(px, 지름). 모르면 null → 길이 비율로 추정 */
   width: number | null;
+  /** 부위 축을 따라 도안 가운데 위치(0 = 몸 쪽 끝, 1 = 먼 쪽 끝). 기본 0.5 */
+  along?: number;
+  /** 축에서 옆으로 벗어난 정도(-1~1, 부위 반폭 기준. 팔은 둘레 방향으로 돌아간다). 기본 0 */
+  across?: number;
 }
 
 /** 부위의 축(시작 = 몸 쪽, 끝 = 먼 쪽)과 기준 굵기 비율. 도안의 위쪽은 몸 쪽을 향한다. */
@@ -130,7 +134,12 @@ export function tattooMesh(place: TattooPlace, pose: PosePoints, prm: PlaceParam
     h *= maxW / w;
     w = maxW;
   }
-  const center = lerp(ax.a, ax.b, 0.5);
+  const along = Math.min(0.92, Math.max(0.08, prm.along ?? 0.5));
+  const across = Math.min(0.95, Math.max(-0.95, prm.across ?? 0));
+  const center = lerp(ax.a, ax.b, along);
+  // 팔: 둘레 각도로 돌린다(정면에서 벗어날수록 옆으로 감기며 흐려짐). 평면: 옆으로 민다
+  const th0 = ax.cylinder ? Math.asin(across) : 0;
+  const off0 = ax.cylinder ? 0 : across * (limbW / 2);
   const data = new Float32Array((COLS + 1) * (ROWS + 1) * 5);
   let k = 0;
   for (let j = 0; j <= ROWS; j++) {
@@ -142,11 +151,11 @@ export function tattooMesh(place: TattooPlace, pose: PosePoints, prm: PlaceParam
       let off: number;
       let vis = 1;
       if (ax.cylinder) {
-        const th = arc / R;
+        const th = arc / R + th0;
         off = R * Math.sin(th);
         vis = Math.max(0, Math.cos(th));
       } else {
-        off = arc;
+        off = arc + off0;
       }
       // 도안 오른쪽(u=1)이 화면에서 축의 어느 쪽으로 가는지: 도안 위(v=0)가 몸 쪽(a)이므로
       // 아래 방향 d 기준으로 오른쪽 = -perp(d)
@@ -213,4 +222,34 @@ export function measureLimbWidth(
   if (widths.length === 0) return null;
   widths.sort((x, y) => x - y);
   return widths[Math.floor(widths.length / 2)];
+}
+
+export const ALL_PLACES: TattooPlace[] = ['forearmL', 'forearmR', 'upperArmL', 'upperArmR', 'neckL', 'neckR', 'chest'];
+
+/**
+ * 화면에서 누른 점(px) → 가장 가까운 부위와 그 안의 위치. 부위 굵기 안쪽(여유 30%)을 누른 경우만.
+ * widthOf: 부위별 실제 굵기(px, 모르면 null)
+ */
+export function placeFromPoint(pose: PosePoints, pt: Vec2, widthOf: (place: TattooPlace) => number | null = () => null): { place: TattooPlace; along: number; across: number } | null {
+  let best: { place: TattooPlace; along: number; across: number; score: number } | null = null;
+  for (const place of ALL_PLACES) {
+    const ax = placeAxis(place, pose);
+    if (!ax) continue;
+    const len = dist(ax.a, ax.b);
+    if (len < 8) continue;
+    const d = norm(sub(ax.b, ax.a));
+    const n = perp(d);
+    const rel = sub(pt, ax.a);
+    const t = (rel.x * d.x + rel.y * d.y) / len;
+    const sgn = rel.x * n.x + rel.y * n.y;
+    const halfW = (widthOf(place) ?? len * ax.widthRatio) / 2;
+    // 축 밖(앞뒤)으로 조금 벗어난 것도 받아 준다
+    if (t < -0.15 || t > 1.15) continue;
+    const across = -sgn / halfW;
+    if (Math.abs(across) > 1.3) continue;
+    // 점수: 축에서 떨어진 정도(반폭 기준) + 축 끝 밖으로 나간 정도
+    const score = Math.abs(across) + Math.max(0, -t, t - 1) * 3;
+    if (!best || score < best.score) best = { place, along: Math.min(0.92, Math.max(0.08, t)), across: Math.min(0.95, Math.max(-0.95, across)), score };
+  }
+  return best && { place: best.place, along: best.along, across: best.across };
 }

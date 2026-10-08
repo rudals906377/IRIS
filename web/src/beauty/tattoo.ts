@@ -28,6 +28,7 @@ uniform float uUseGF;
 uniform vec2 uSize;
 uniform float uAmount;
 uniform vec3 uInk;      // 도안이 검은색일 때 쓰는 잉크 색
+uniform float uMultiply; // 1: 사진에서 뽑은 도안(RGB = 피부에 곱할 투과율)
 in vec2 vUv;
 in float vVis;
 out vec4 o;
@@ -51,7 +52,7 @@ void main() {
   vec3 col = d.a > 0.0 ? d.rgb / max(d.a, 1e-3) : vec3(0.0);
   vec3 inkCol = mix(uInk, col * 0.85, step(0.08, max(max(col.r, col.g), col.b)));
   // 피부 아래 색소: 곱하기(명암·결 유지) + 아주 조금 바로 덮기
-  vec3 tinted = mix(c * inkCol * 1.15, inkCol, 0.15);
+  vec3 tinted = uMultiply > 0.5 ? c * col : mix(c * inkCol * 1.15, inkCol, 0.15);
   o = vec4(tinted, ink);
 }`;
 
@@ -66,7 +67,7 @@ export class TattooRenderer {
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
-    this.prog = compileProgram(gl, VS, FS, ['uDesign', 'uCam', 'uSeg', 'uGF', 'uUseGF', 'uSize', 'uAmount', 'uInk']);
+    this.prog = compileProgram(gl, VS, FS, ['uDesign', 'uCam', 'uSeg', 'uGF', 'uUseGF', 'uSize', 'uAmount', 'uInk', 'uMultiply']);
     this.vao = gl.createVertexArray()!;
     this.vbo = gl.createBuffer()!;
     this.ibo = gl.createBuffer()!;
@@ -102,7 +103,7 @@ export class TattooRenderer {
     gl.generateMipmap(gl.TEXTURE_2D);
   }
 
-  draw(mesh: TattooMesh, t: FrameTextures, amount: number, ink: [number, number, number]): void {
+  draw(mesh: TattooMesh, t: FrameTextures, amount: number, ink: [number, number, number], multiply = false): void {
     if (!this.designSource) return;
     const gl = this.gl;
     const u = this.prog.u;
@@ -121,6 +122,7 @@ export class TattooRenderer {
     // 분할이 없으면 피부 판정을 할 수 없으므로 그대로 그린다(분할 텍스처가 비어 있으면 안 보임)
     gl.uniform1f(u.uAmount, amount * mesh.confidence);
     gl.uniform3f(u.uInk, ...ink);
+    gl.uniform1f(u.uMultiply, multiply ? 1 : 0);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
     gl.bufferData(gl.ARRAY_BUFFER, mesh.data, gl.DYNAMIC_DRAW);

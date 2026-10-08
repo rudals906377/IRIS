@@ -9,7 +9,7 @@ import urllib.request
 
 BRANCH = os.environ.get("IRIS_BRANCH", "claude/virtual-try-on-realtime-7uwjlm")
 RAW = f"https://raw.githubusercontent.com/rudals906377/iris/{BRANCH}/tools/"
-FILES = ["server.py", "pipelines.py", "masks.py", "anydoor_client.py", "check.py", "setup.py", "tunnel.py", "update.py", "requirements.txt", "README.md", "run.bat", "setup.bat", "tunnel.bat", "run.sh", "setup.sh"]
+FILES = ["server.py", "pipelines.py", "masks.py", "blend.py", "anydoor_client.py", "check.py", "setup.py", "tunnel.py", "update.py", "requirements.txt", "README.md", "run.bat", "setup.bat", "tunnel.bat", "run.sh", "setup.sh"]
 ANYDOOR_FILES = ["anydoor_server.py", "setup.py", "run.py", "setup.bat", "setup_paths.py", "requirements-anydoor.txt", "run.bat", "README.md"]
 
 

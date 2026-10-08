@@ -19,7 +19,7 @@ for (let i = 0; i < refs.length; i++) {
   try {
     await waitReady(page, 60000);
     // 되먹임(두 번)이 끝날 때까지
-    await page.waitForFunction(() => window.irisPhoto && window.irisPhoto.last && window.irisPhoto.match.length >= 3, null, { timeout: 120000 });
+    await page.waitForFunction(() => window.irisPhoto && window.irisPhoto.last && window.irisPhoto.match.length >= 4, null, { timeout: 120000 });
   } catch {
     console.log(JSON.stringify({ ref, error: '시간 초과' }));
     continue;
