@@ -17,6 +17,8 @@ export interface CameraRequest {
   width: number;
   height: number;
   fps: number;
+  /** 'user' 앞(셀피) 카메라, 'environment' 뒤 카메라(휴대폰) */
+  facing?: 'user' | 'environment';
 }
 
 export class VideoSource {
@@ -53,7 +55,7 @@ export class VideoSource {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
-        facingMode: 'user',
+        facingMode: req.facing ?? 'user',
         width: { ideal: req.width },
         height: { ideal: req.height },
         frameRate: { ideal: req.fps },

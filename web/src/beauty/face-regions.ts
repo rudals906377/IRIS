@@ -69,6 +69,8 @@ export interface FaceRegions {
   skinPts: Vec2[];
   /** 아이섀도: 속눈썹 쪽 1 → 위로 갈수록 0 */
   shadow: MVert[];
+  /** 아이섀도 두 색용 가중치: 눈꼬리(바깥) 1 → 눈 앞머리(안쪽) 0. 같은 망 모양 */
+  shadowOuter: MVert[];
   /** 아이라이너: 눈꼬리로 갈수록 두꺼워지고 날개로 이어지는 띠 */
   liner: MVert[];
   /** 눈을 뜬 부분(흰자·눈동자): 아이섀도가 번져 들어가지 않게 빼는 영역 */
@@ -135,7 +137,7 @@ function ellipseMesh(c: Vec2, rx: number, ry: number, dir: Vec2, peak: number): 
 }
 
 /** 눈꺼풀 선(바깥 → 안쪽)과 눈썹 아랫선 사이를 여러 줄로 나눈 아이섀도 망. height 0~1: 눈썹까지 얼마나 올릴지 */
-function shadowMesh(p: Vec2[], upper: number[], browLower: number[], height: number, faceW: number, vis: number): MVert[] {
+function shadowMesh(p: Vec2[], upper: number[], browLower: number[], height: number, faceW: number, vis: number, outer = false): MVert[] {
   const lid = upper.map((i) => p[i]);
   const brow = browLower.map((i) => p[i]);
   const browAt = (k: number): Vec2 => {
@@ -150,6 +152,8 @@ function shadowMesh(p: Vec2[], upper: number[], browLower: number[], height: num
   const rows = hs.map((h) => lid.map((q, k) => lerp(q, browAt(k), height * h)));
   // 눈 앞머리(안쪽 끝)는 옅게: 콧대 쪽으로 번지지 않게
   const n = lid.length;
+  // outer: 진하기 대신 "바깥쪽 정도"(눈꼬리 1 → 앞머리 0)를 쓴다(두 색 섀도의 섞는 비율)
+  if (outer) return bandMesh(rows, (_r, c) => 1 - c / (n - 1), faceW);
   return bandMesh(rows, (r, c) => vals[r] * vis * (0.55 + 0.45 * smooth(n - 1, n - 4, c)), faceW);
 }
 
@@ -184,7 +188,7 @@ function inwardBand(pts: Vec2[], center: Vec2, depth: number, val: (t: number) =
 }
 
 /** 아래 속눈썹 선 아래 음영(눈꼬리 쪽이 진하고 앞쪽은 옅게). lower: 안쪽 → 바깥 */
-function underMesh(p: Vec2[], lower: number[], upper: number[], faceW: number, vis: number): MVert[] {
+function underMesh(p: Vec2[], lower: number[], upper: number[], faceW: number, vis: number, outer = false): MVert[] {
   const lid = lower.map((i) => p[i]);
   const eye = [...upper, ...lower].map((i) => p[i]);
   const ctr = eye.reduce((a, q) => ({ x: a.x + q.x / eye.length, y: a.y + q.y / eye.length }), { x: 0, y: 0 });
@@ -198,6 +202,7 @@ function underMesh(p: Vec2[], lower: number[], upper: number[], faceW: number, v
       return { x: q.x + (dx / l) * h * k, y: q.y + (dy / l) * h * k };
     });
   const n = lid.length;
+  if (outer) return bandMesh([off(-0.25), lid, off(0.45)], (_r, c) => c / (n - 1), faceW);
   // 첫 줄은 눈 안쪽(합성 때 빠짐)으로 조금 들여 흐림 뒤에도 속눈썹 선에서 진하기 유지
   return bandMesh([off(-0.25), lid, off(0.45)], (r, c) => [0.5, 0.5, 0][r] * vis * (0.3 + 0.7 * smooth(0, n - 3, c)), faceW);
 }
@@ -385,6 +390,12 @@ export function faceRegions(p: Vec2[], opts: { shadowHeight?: number; linerWing?
       ...shadowMesh(p, EYE_L_UPPER, BROW_L_LOWER, sh, faceW, visL),
       ...underMesh(p, EYE_R_LOWER, EYE_R_UPPER, faceW, visR),
       ...underMesh(p, EYE_L_LOWER, EYE_L_UPPER, faceW, visL),
+    ],
+    shadowOuter: [
+      ...shadowMesh(p, EYE_R_UPPER, BROW_R_LOWER, sh, faceW, visR, true),
+      ...shadowMesh(p, EYE_L_UPPER, BROW_L_LOWER, sh, faceW, visL, true),
+      ...underMesh(p, EYE_R_LOWER, EYE_R_UPPER, faceW, visR, true),
+      ...underMesh(p, EYE_L_LOWER, EYE_L_UPPER, faceW, visL, true),
     ],
     liner: [...linerMesh(p, EYE_R_UPPER, EYE_R_LOWER, wing, faceW, visR), ...linerMesh(p, EYE_L_UPPER, EYE_L_LOWER, wing, faceW, visL)],
     eyeR,

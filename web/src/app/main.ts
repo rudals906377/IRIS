@@ -20,7 +20,7 @@ import type { MakeupLook, RGB } from '../beauty/makeup.ts';
 import type { LipStyle } from '../beauty/face-regions.ts';
 import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
 import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
-import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, tattooFromSource, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
+import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, SKIN_REF, tattooFromSource, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
 import { measureFace, type FaceMeasure } from '../beauty/face-measure.ts';
 import { matchDarkness, matchLip, matchTint } from '../beauty/style-match.ts';
 import { analyzeStyle } from '../beauty/style-ai.ts';
@@ -118,6 +118,8 @@ let hairTip: RGB | null = null;
 let blushPos = 0.5;
 let blushSize = 1;
 let gloss = 0.3;
+/** 아이섀도 눈꼬리 쪽 색(두 색 그라데이션; 없으면 한 색) */
+let shadowOut: RGB | null = null;
 /** 입술 라인(-1~1)과 아이섀도 펄(0~1) */
 let overlip = 0;
 let lipStyle: LipStyle = 'full';
@@ -165,7 +167,7 @@ function applyLookToEngine(): void {
     if (!c.color || off.has(part) || part === 'hair' || part === 'nail') continue;
     if (part === 'lip') look.lip = { color: c.color, amount: amt(c.amount), gloss, over: overlip, style: lipStyle };
     else if (part === 'blush') look.blush = { color: c.color, amount: amt(c.amount), pos: blushPos, size: blushSize };
-    else if (part === 'shadow') look.shadow = { color: c.color, amount: amt(c.amount), pearl };
+    else if (part === 'shadow') look.shadow = { color: c.color, amount: amt(c.amount), pearl, colorOut: shadowOut ?? undefined };
     else look[part] = { color: c.color, amount: amt(c.amount) };
   }
   engine.look = look;
@@ -196,6 +198,7 @@ function selectLook(name: LookName): void {
   }
   gloss = l.gloss ?? gloss;
   pearl = l.pearl ?? 0;
+  shadowOut = null;
   lipStyle = l.lipStyle ?? 'full';
   blushPos = 0.5;
   blushSize = 1;
@@ -245,12 +248,14 @@ function renderChips(): void {
 function clearAll(): void {
   for (const part of Object.keys(chosen) as PartName[]) chosen[part].color = null;
   hairTip = null;
+  shadowOut = null;
   tattoo.design = null;
   tattoo.along = tattoo.across = undefined;
   off.clear();
   strength = 1;
   amountEl.value = '1';
   lastStyle = null;
+  lastSource = null;
   refEl.hidden = true;
   applyAll();
   renderChips();
@@ -260,6 +265,8 @@ function clearAll(): void {
 let photoAnalyzer: PhotoAnalyzer | null = null;
 /** 마지막 분석 결과(개발 도구·자동 시험용) */
 let lastStyle: StyleResult | null = null;
+/** 마지막으로 고른 사진 원본(영역 고르기용) */
+let lastSource: ImageBitmap | null = null;
 
 /** 사진 속에 사람이 없고 바탕이 희거나 투명하면(도안 그림) 그대로 타투 도안으로 쓴다 */
 function looksLikeDesign(thumb: HTMLCanvasElement): boolean {
@@ -278,8 +285,9 @@ type Group = (typeof GROUPS)[number];
 const MAKEUP_PARTS = ['lip', 'blush', 'shadow', 'liner', 'brow', 'contour', 'base'] as const;
 const isGroup = (x: unknown): x is Group => (GROUPS as readonly string[]).includes(x as string);
 
-async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMode, file?: File): Promise<StyleResult> {
+async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMode, file?: File, original?: ImageBitmap): Promise<StyleResult> {
   photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+  if (source instanceof ImageBitmap) lastSource = original ?? source;
   setStatus('사진 보는 중…');
   let r = await photoAnalyzer.analyze(source, mode, setStatus);
   // 스타일 AI: 사진이 무엇에 관한 것인지(메이크업·헤어·네일·타투)와 무늬·모양·기법. 색은 위에서 잰 값을 쓴다.
@@ -331,6 +339,7 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
       chosen[part].color = v ? v.color : null;
       if (v) chosen[part].amount = v.amount;
     }
+    shadowOut = m.shadow?.colorOut ?? null;
     blushPos = m.blush?.pos ?? 0.5;
     blushSize = m.blush?.size ?? 1;
     chosen.base.color = c('#d1a38a');
@@ -363,7 +372,7 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   lastMatch = [];
   renderChips();
   refImgEl.src = r.thumb.toDataURL('image/jpeg', 0.8);
-  refTextEl.textContent = r.ai?.headline ? `${r.summary} · ${r.ai.headline}` : r.summary;
+  refTextEl.textContent = (r.ai?.headline ? `${r.summary} · ${r.ai.headline}` : r.summary) + (r.faces && r.faces > 1 ? ` · 얼굴 ${r.faces}명 중 큰 얼굴(다른 사람은 ✂️ 영역)` : '');
   refEl.hidden = false;
   setStatus(running ? '' : '카메라를 시작하면 바로 입혀져요');
   if (r.makeup && r.measure && !off.has('lip')) {
@@ -553,30 +562,84 @@ $('gen-close').addEventListener('click', () => {
   genEl.hidden = true;
 });
 
-// ---- 지금 화면을 사진으로 저장 ----
-btnSnapEl.addEventListener('click', async () => {
-  if (!running) return;
-  const cap = await engine.captureNext();
+// ---- 지금 화면을 사진으로 저장: 사진을 골랐으면 [고른 사진 | 원래 나 | 적용된 나] 비교 한 장 ----
+/** 효과를 잠시 모두 끄고 한 장 찍는다(원래 모습) */
+async function captureNatural(): Promise<ImageData> {
+  const saved = { look: engine.look, hair: engine.hair, nail: engine.nail, tattoo: engine.tattoo };
+  engine.look = {};
+  engine.hair = null;
+  engine.nail = null;
+  engine.tattoo = null;
+  try {
+    return (await engine.captureNext()).image;
+  } finally {
+    Object.assign(engine, saved);
+  }
+}
+function frameCanvas(img: ImageData): HTMLCanvasElement {
   const cv = document.createElement('canvas');
-  cv.width = cap.image.width;
-  cv.height = cap.image.height;
+  cv.width = img.width;
+  cv.height = img.height;
   const ctx = cv.getContext('2d')!;
+  const tmp = document.createElement('canvas');
+  tmp.width = img.width;
+  tmp.height = img.height;
+  tmp.getContext('2d')!.putImageData(img, 0, 0);
   if (viewEl.classList.contains('mirror')) {
     ctx.translate(cv.width, 0);
     ctx.scale(-1, 1);
   }
-  const tmp = document.createElement('canvas');
-  tmp.width = cv.width;
-  tmp.height = cv.height;
-  tmp.getContext('2d')!.putImageData(cap.image, 0, 0);
   ctx.drawImage(tmp, 0, 0);
+  return cv;
+}
+function download(cv: HTMLCanvasElement, name: string): void {
   const a = document.createElement('a');
   a.href = cv.toDataURL('image/jpeg', 0.92);
-  a.download = `iris-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jpg`;
+  a.download = `${name}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jpg`;
   a.click();
-  setStatus('사진을 저장했어요');
+}
+btnSnapEl.addEventListener('click', async () => {
+  if (!running) return;
+  btnSnapEl.disabled = true;
+  try {
+    const after = frameCanvas((await engine.captureNext()).image);
+    if (!lastStyle) {
+      download(after, 'iris');
+      setStatus('사진을 저장했어요');
+    } else {
+      const before = frameCanvas(await captureNatural());
+      const ref = lastStyle.thumb;
+      const H = after.height;
+      const refW = Math.round((ref.width / ref.height) * H);
+      const gap = Math.round(H * 0.015);
+      const label = Math.round(H * 0.07);
+      const out = document.createElement('canvas');
+      out.width = refW + after.width * 2 + gap * 2;
+      out.height = H + label;
+      const ctx = out.getContext('2d')!;
+      ctx.fillStyle = '#101216';
+      ctx.fillRect(0, 0, out.width, out.height);
+      const panels: [CanvasImageSource, number, number, string][] = [
+        [ref, 0, refW, '고른 사진'],
+        [before, refW + gap, after.width, '원래 모습'],
+        [after, refW + gap + after.width + gap, after.width, 'IRIS 적용'],
+      ];
+      ctx.font = `600 ${Math.round(label * 0.5)}px -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const [img, x, w, text] of panels) {
+        ctx.drawImage(img, x, 0, w, H);
+        ctx.fillStyle = '#e9ecf1';
+        ctx.fillText(text, x + w / 2, H + label / 2);
+      }
+      download(out, 'iris-비교');
+      setStatus('전후 비교 사진을 저장했어요');
+    }
+  } finally {
+    btnSnapEl.disabled = false;
+  }
   setTimeout(() => {
-    if (statusEl.textContent === '사진을 저장했어요') setStatus('');
+    if (statusEl.textContent?.endsWith('저장했어요')) setStatus('');
   }, 2500);
 });
 genSliderEl.addEventListener('input', () => {
@@ -679,7 +742,17 @@ async function matchToPhoto(photo: FaceMeasure): Promise<void> {
       chosen.blush.amount = m.amount > 0 ? m.amount : 0.35;
       log.blush = { want: spot(photo), got: spot(now), amount: m.amount };
     }
-    if (chosen.shadow.color && darker(photo) && darker(now) && darker(my)) {
+    const two = shadowOut && photo.shadowIn && now.shadowIn && my.shadowIn && photo.shadowOut && now.shadowOut && my.shadowOut;
+    if (chosen.shadow.color && two) {
+      // 두 색 섀도: 앞머리 쪽과 눈꼬리 쪽을 따로 맞춘다. 사진에 그쪽 섀도가 없으면 피부색(안 칠함)
+      const mi = matchTint({ color: chosen.shadow.color, amount: chosen.shadow.amount }, photo.shadowIn!, now.shadowIn!, NATURAL_SHADOW, my.shadowIn!);
+      const mo = matchTint({ color: shadowOut!, amount: chosen.shadow.amount }, photo.shadowOut!, now.shadowOut!, NATURAL_SHADOW, my.shadowOut!);
+      chosen.shadow.color = mi.amount > 0 ? mi.color : SKIN_REF;
+      shadowOut = mo.amount > 0 ? mo.color : SKIN_REF;
+      chosen.shadow.amount = Math.max(mi.amount, mo.amount) || 0.45;
+      if (mi.amount === 0 && mo.amount === 0) chosen.shadow.color = null;
+      log.shadow = { wantIn: photo.shadowIn, gotIn: now.shadowIn, wantOut: photo.shadowOut, gotOut: now.shadowOut, amount: chosen.shadow.amount, color: chosen.shadow.color, colorOut: shadowOut };
+    } else if (chosen.shadow.color && darker(photo) && darker(now) && darker(my)) {
       const m = matchTint({ color: chosen.shadow.color, amount: chosen.shadow.amount }, darker(photo)!, darker(now)!, NATURAL_SHADOW, darker(my)!);
       chosen.shadow.color = m.amount > 0 ? m.color : null;
       chosen.shadow.amount = m.amount > 0 ? m.amount : 0.45;
@@ -718,7 +791,7 @@ async function checkPhoto(): Promise<Record<string, unknown> | null> {
     apple: m.blushApple, mid: m.blushMid, bone: m.blushBone, shadowIn: m.shadowIn, shadowOut: m.shadowOut,
     lip: m.lip ? lin(lipTarget(m.lip, m.skin)) : null, linerL: m.linerL, browL: m.brow ? luma(m.brow) : null,
   });
-  return { photo: pick(lastStyle.measure), result: pick(now), match: lastMatch, settings: { blush: chosen.blush, shadow: chosen.shadow, lip: chosen.lip, brow: chosen.brow, liner: chosen.liner, blushPos } };
+  return { photo: pick(lastStyle.measure), result: pick(now), match: lastMatch, settings: { blush: chosen.blush, shadow: { ...chosen.shadow, colorOut: shadowOut }, lip: chosen.lip, brow: chosen.brow, liner: chosen.liner, blushPos } };
 }
 (window as unknown as { irisPhoto: unknown }).irisPhoto = { apply: applyPhoto, get last() { return lastStyle; }, get match() { return lastMatch; }, measure: measureFace, check: checkPhoto };
 
@@ -751,36 +824,40 @@ viewEl.addEventListener('pointerdown', (ev) => {
   setStatus(`${PLACE_LABELS[hit.place]}에 옮겼어요`);
 });
 
-// ---- 타투 도안 영역: 고른 사진에서 직접 드래그해 고르기 ----
-tattooCropEl.addEventListener('click', () => {
-  const ts = lastStyle?.tattooSrc;
-  if (!ts) return;
-  const { src } = ts;
-  let rect: { x: number; y: number; w: number; h: number } | null = { ...ts.rect };
+// ---- 사진 위에서 영역 드래그해 고르기(타투 도안 영역, 사진 속 한 사람·한 부분) ----
+type Rect = { x: number; y: number; w: number; h: number };
+function openCrop(
+  image: CanvasImageSource,
+  w: number,
+  h: number,
+  init: Rect | null,
+  hintText: string,
+  buttons: { label: string; cls: string; run: (rect: Rect | null) => string | void }[],
+): void {
+  let rect: Rect | null = init;
   const ov = document.createElement('div');
   ov.className = 'crop-overlay';
   const hint = document.createElement('div');
-  hint.textContent = '타투 부분을 드래그해서 감싸 주세요';
+  hint.textContent = hintText;
   const cv = document.createElement('canvas');
-  cv.width = src.w;
-  cv.height = src.h;
+  cv.width = w;
+  cv.height = h;
   const ctx = cv.getContext('2d')!;
-  const photo = new ImageData(new Uint8ClampedArray(src.d), src.w, src.h);
   const paint = (): void => {
-    ctx.putImageData(photo, 0, 0);
+    ctx.drawImage(image, 0, 0, w, h);
     if (!rect) return;
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.fillRect(0, 0, src.w, rect.y);
-    ctx.fillRect(0, rect.y + rect.h, src.w, src.h - rect.y - rect.h);
+    ctx.fillRect(0, 0, w, rect.y);
+    ctx.fillRect(0, rect.y + rect.h, w, h - rect.y - rect.h);
     ctx.fillRect(0, rect.y, rect.x, rect.h);
-    ctx.fillRect(rect.x + rect.w, rect.y, src.w - rect.x - rect.w, rect.h);
+    ctx.fillRect(rect.x + rect.w, rect.y, w - rect.x - rect.w, rect.h);
     ctx.strokeStyle = '#ffd34d';
-    ctx.lineWidth = Math.max(2, src.w / 300);
+    ctx.lineWidth = Math.max(2, w / 300);
     ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
   };
   const toImg = (e: PointerEvent): { x: number; y: number } => {
     const r = cv.getBoundingClientRect();
-    return { x: Math.min(src.w - 1, Math.max(0, ((e.clientX - r.left) / r.width) * src.w)), y: Math.min(src.h - 1, Math.max(0, ((e.clientY - r.top) / r.height) * src.h)) };
+    return { x: Math.min(w - 1, Math.max(0, ((e.clientX - r.left) / r.width) * w)), y: Math.min(h - 1, Math.max(0, ((e.clientY - r.top) / r.height) * h)) };
   };
   let start: { x: number; y: number } | null = null;
   cv.addEventListener('pointerdown', (e) => {
@@ -799,20 +876,35 @@ tattooCropEl.addEventListener('click', () => {
   });
   const row = document.createElement('div');
   row.className = 'row';
-  const btn = (label: string, cls: string, fn: () => void): void => {
-    const b = document.createElement('button');
-    b.textContent = label;
-    if (cls) b.className = cls;
-    b.addEventListener('click', fn);
-    row.append(b);
-  };
   const close = (): void => ov.remove();
-  const use = (r: { x: number; y: number; w: number; h: number } | null): void => {
+  for (const b of buttons) {
+    const el = document.createElement('button');
+    el.textContent = b.label;
+    if (b.cls) el.className = b.cls;
+    el.addEventListener('click', () => {
+      if (b.cls === 'ghost') return close();
+      const msg = b.run(rect);
+      if (msg) hint.textContent = msg;
+      else close();
+    });
+    row.append(el);
+  }
+  ov.append(hint, cv, row);
+  document.body.append(ov);
+  paint();
+}
+
+tattooCropEl.addEventListener('click', () => {
+  const ts = lastStyle?.tattooSrc;
+  if (!ts) return;
+  const { src } = ts;
+  const photo = document.createElement('canvas');
+  photo.width = src.w;
+  photo.height = src.h;
+  photo.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(src.d), src.w, src.h), 0, 0);
+  const use = (r: Rect | null): string | void => {
     const t = tattooFromSource(src, r);
-    if (!t) {
-      hint.textContent = '이 영역에서 타투 선을 찾지 못했어요. 조금 넓게 다시 감싸 주세요';
-      return;
-    }
+    if (!t) return '이 영역에서 타투 선을 찾지 못했어요. 조금 넓게 다시 감싸 주세요';
     tattoo.design = t.design;
     if (lastStyle) {
       lastStyle.tattoo = t.design;
@@ -821,21 +913,38 @@ tattooCropEl.addEventListener('click', () => {
     off.delete('tattoo');
     applyTattooToEngine();
     renderChips();
-    close();
     setStatus('고른 영역으로 도안을 바꿨어요');
   };
-  btn('자동으로 찾기', '', () => use(null));
-  btn('취소', 'ghost', close);
-  btn('이 영역으로', 'primary', () => {
-    if (!rect || rect.w < 8 || rect.h < 8) {
-      hint.textContent = '먼저 타투 부분을 드래그해서 감싸 주세요';
-      return;
-    }
-    use(rect);
-  });
-  ov.append(hint, cv, row);
-  document.body.append(ov);
-  paint();
+  openCrop(photo, src.w, src.h, { ...ts.rect }, '타투 부분을 드래그해서 감싸 주세요', [
+    { label: '자동으로 찾기', cls: '', run: () => use(null) },
+    { label: '취소', cls: 'ghost', run: () => undefined },
+    { label: '이 영역으로', cls: 'primary', run: (r) => (!r || r.w < 8 || r.h < 8 ? '먼저 타투 부분을 드래그해서 감싸 주세요' : use(r)) },
+  ]);
+});
+
+// 사진 속 한 사람·한 부분만 골라 다시 읽기(여러 명, 메이크업과 헤어가 따로 있는 사진)
+$('ref-crop').addEventListener('click', () => {
+  const src = lastSource;
+  const st = lastStyle;
+  if (!src || !st) return;
+  const t = st.thumb;
+  openCrop(t, t.width, t.height, null, st.faces && st.faces > 1 ? `얼굴이 ${st.faces}명이에요. 원하는 사람을 드래그해서 감싸 주세요` : '원하는 사람이나 부분을 드래그해서 감싸 주세요', [
+    { label: '취소', cls: 'ghost', run: () => undefined },
+    {
+      label: '이 부분만 읽기',
+      cls: 'primary',
+      run: (r) => {
+        if (!r || r.w < 16 || r.h < 16) return '먼저 원하는 부분을 드래그해서 감싸 주세요';
+        // 썸네일 좌표 → 원본 좌표로 키워 잘라 낸다(작은 영역도 원본 해상도로 분석)
+        const k = src.width / t.width;
+        const cut = document.createElement('canvas');
+        cut.width = Math.max(2, Math.round(r.w * k));
+        cut.height = Math.max(2, Math.round(r.h * k));
+        cut.getContext('2d')!.drawImage(src, r.x * k, r.y * k, r.w * k, r.h * k, 0, 0, cut.width, cut.height);
+        void createImageBitmap(cut).then((bmp) => applyPhoto(bmp, 'auto', undefined, src));
+      },
+    },
+  ]);
 });
 
 sizeEl.addEventListener('input', () => {
@@ -867,12 +976,46 @@ async function begin(open: () => Promise<void>): Promise<void> {
   }
 }
 
-function cameraRequest(): { width: number; height: number; fps: number } {
+/** 앞(셀피)·뒤 카메라 */
+let facing: 'user' | 'environment' = 'user';
+const btnFlipEl = $<HTMLButtonElement>('btn-flip');
+function cameraRequest(): { width: number; height: number; fps: number; facing: 'user' | 'environment' } {
   const [w, h] = $<HTMLSelectElement>('opt-res').value.split('x').map(Number);
-  return { width: w, height: h, fps: 30 };
+  return { width: w, height: h, fps: 30, facing };
 }
+async function openCameraAndStart(): Promise<void> {
+  await begin(() => engine.source.openCamera(cameraRequest()));
+  // 카메라가 둘 이상인 기기(휴대폰)에서만 전환 단추
+  try {
+    const n = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput').length;
+    btnFlipEl.hidden = !(running && engine.source.kind === 'camera' && n >= 2);
+  } catch {
+    btnFlipEl.hidden = true;
+  }
+}
+btnFlipEl.addEventListener('click', () => {
+  facing = facing === 'user' ? 'environment' : 'user';
+  // 뒤 카메라는 거울이 아니다
+  $<HTMLInputElement>('opt-mirror').checked = facing === 'user';
+  applyView();
+  void openCameraAndStart();
+});
+/** 느린 기기: 처리 시간이 계속 길면 한 번만 화질을 한 단계 낮춘다 */
+let autoLowered = false;
+setInterval(() => {
+  if (autoLowered || !running || engine.source.kind !== 'camera' || engine.metrics.proc.count < 60) return;
+  const res = $<HTMLSelectElement>('opt-res');
+  if (engine.metrics.proc.quantile(0.5) < 110 || res.value === '640x480') return;
+  autoLowered = true;
+  res.value = res.value === '1920x1080' ? '1280x720' : '640x480';
+  if (trackerConfig.segEvery < 2) {
+    trackerConfig.segEvery = 2;
+    $<HTMLSelectElement>('opt-seg-every').value = '2';
+  }
+  void openCameraAndStart().then(() => setStatus('이 기기에 맞춰 화질을 조금 낮췄어요(설정에서 바꿀 수 있어요)'));
+}, 5000);
 
-$('btn-camera').addEventListener('click', () => void begin(() => engine.source.openCamera(cameraRequest())));
+$('btn-camera').addEventListener('click', () => void openCameraAndStart());
 $('btn-sample').addEventListener('click', () => {
   $<HTMLInputElement>('opt-mirror').checked = false;
   applyView();
@@ -923,7 +1066,7 @@ for (const id of ['opt-delegate', 'opt-seg-every', 'opt-hair-model']) {
   $(id).addEventListener('change', () => void applyTracker());
 }
 $('opt-res').addEventListener('change', () => {
-  if (running && engine.source.kind === 'camera') void begin(() => engine.source.openCamera(cameraRequest()));
+  if (running && engine.source.kind === 'camera') void openCameraAndStart();
 });
 
 $('btn-settings').addEventListener('click', () => {

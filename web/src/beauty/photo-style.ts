@@ -13,7 +13,7 @@ import type { NailStyle } from './nail.ts';
 import type { TattooDesign } from './tattoo-designs.ts';
 import { extractDesign, type InkSource, type Rect } from './tattoo-extract.ts';
 import type { StyleAIResult, StyleHints } from './style-attributes.ts';
-import { dominantColors, gam, glossFrom, hairTarget, hex, isSkin, lin, lipTarget, luma, tintTarget } from './style-math.ts';
+import { colorDiff, dominantColors, gam, glossFrom, hairTarget, hex, isSkin, lin, lipTarget, luma, tintTarget } from './style-math.ts';
 
 const MODEL_BASE = 'https://storage.googleapis.com/mediapipe-models';
 const FACE_MODEL = `${MODEL_BASE}/face_landmarker/face_landmarker/float16/1/face_landmarker.task`;
@@ -30,7 +30,8 @@ export interface MakeupStyle {
   /** pos: 0 눈 밑 사과존 ~ 1 광대 */
   /** redness: 사진에서 잰 붉은 기(0.08 이상이면 블러셔로 봄). 스타일 AI의 '블러셔 없음' 힌트가 측정을 덮어쓸지 정할 때 쓴다 */
   blush?: { color: RGB; amount: number; pos: number; size: number; redness?: number };
-  shadow?: { color: RGB; amount: number };
+  /** colorOut: 눈꼬리 쪽 색(안쪽과 뚜렷이 다를 때만) */
+  shadow?: { color: RGB; amount: number; colorOut?: RGB };
   brow?: { color: RGB; amount: number };
   liner?: { color: RGB; amount: number };
   /** 쉐딩·하이라이터 */
@@ -52,6 +53,8 @@ export interface StyleResult {
   tattooSrc?: { src: InkSource; rect: Rect; inkMask: Float32Array };
   /** 사용자에게 보여 줄 한 줄 설명 */
   summary: string;
+  /** 사진에서 찾은 얼굴 수(2명 이상이면 영역 고르기 안내) */
+  faces?: number;
   /** 분석에 쓴 축소 그림 */
   thumb: HTMLCanvasElement;
 }
@@ -76,6 +79,8 @@ export const NATURAL_BRIDGE_L = 1.1;
 export const BLUSH_AMOUNT = 0.9;
 export const BLUSH_KEFF = 0.28;
 export const SHADOW_AMOUNT = 0.6;
+/** 기준 피부색(#d1a38a): 섀도 색으로 주면 비율 1 = 칠하지 않은 것과 같다 */
+export const SKIN_REF: RGB = [0xd1 / 255, 0xa3 / 255, 0x8a / 255];
 export const SHADOW_KEFF = 0.35;
 
 type Pixels = { w: number; h: number; d: Uint8ClampedArray; img: ImageData };
@@ -110,7 +115,7 @@ export class PhotoAnalyzer {
     if (!this.face) {
       const fs = await this.fs();
       this.face = await this.make((delegate) =>
-        FaceLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: FACE_MODEL, delegate }, runningMode: 'IMAGE', numFaces: 1 }),
+        FaceLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: FACE_MODEL, delegate }, runningMode: 'IMAGE', numFaces: 4 }),
       );
     }
     return this.face;
@@ -166,7 +171,12 @@ export class PhotoAnalyzer {
       onStatus?.('얼굴 찾는 중…');
       const fm = await this.faceModel();
       const r = fm.detect(canvas);
-      if (r.faceLandmarks.length > 0) facePts = toPx(r.faceLandmarks[0], px.w, px.h);
+      // 여러 명이면 가장 큰 얼굴(가까운 사람). 다른 사람을 원하면 화면에서 영역을 골라 다시 분석한다
+      const all = r.faceLandmarks.map((lm) => toPx(lm, px.w, px.h));
+      const widthOf = (q: Vec2[]): number => Math.hypot(q[234].x - q[454].x, q[234].y - q[454].y);
+      all.sort((a, b) => widthOf(b) - widthOf(a));
+      facePts = all[0] ?? null;
+      out.faces = all.length;
     }
     let segMasks: SegMasks | null = null;
     if (wantHair || wantTattoo || wantNail || wantFace) {
@@ -354,19 +364,32 @@ export function makeupFromMeasure(m: FaceMeasure): MakeupStyle {
     res.blush = { ...best.t, pos: best.pos, size: reds >= 3 ? 1.5 : reds === 2 ? 1.25 : 1, redness: best.dev };
   }
 
-  // 아이섀도: 안쪽·바깥쪽 중 더 진한 쪽 기준(그라데이션은 합성 쪽에서 만든다)
+  // 아이섀도: 안쪽·바깥쪽을 따로 재서, 둘이 뚜렷이 다르면 두 색(앞머리 → 눈꼬리 그라데이션), 비슷하면 더 진한 쪽 한 색
   debug.shadow = `${fmt(m.shadowIn)} | ${fmt(m.shadowOut)} | 밑 ${fmt(m.underEye)}`;
-  const sh = [m.shadowIn, m.shadowOut].filter((x): x is RGB => !!x).sort((a, b) => luma(a) - luma(b))[0];
-  if (sh) {
+  const shadowOf = (sh: RGB): { color: RGB; amount: number } | null => {
     // 자연 눈꺼풀보다 어둡거나(음영) 색조가 다르면(컬러 섀도) 섀도로 본다
     const dark = Math.max(0, 1 - luma(sh) / NATURAL_SHADOW_L);
     const t = tintTarget(chroma(sh), NATURAL_SHADOW, SHADOW_AMOUNT, SHADOW_KEFF, 0.1);
-    if (dark > 0.15 || t) {
-      const base = t?.color ?? gam([0.637 * 0.6, 0.366 * 0.55, 0.254 * 0.5] as RGB);
-      // 어두울수록 색을 더 진하게
-      const col = gam(lin(base).map((v) => v * (1 - dark * 0.5)) as RGB);
-      res.shadow = { color: col, amount: Math.min(1, SHADOW_AMOUNT + dark * 0.6) };
-    }
+    if (dark <= 0.15 && !t) return null;
+    const base = t?.color ?? gam([0.637 * 0.6, 0.366 * 0.55, 0.254 * 0.5] as RGB);
+    // 어두울수록 색을 더 진하게
+    const col = gam(lin(base).map((v) => v * (1 - dark * 0.5)) as RGB);
+    return { color: col, amount: Math.min(1, SHADOW_AMOUNT + dark * 0.6) };
+  };
+  // 섀도가 있는지는 더 진한 쪽으로 판단한다(밝은 쪽만 보면 피부 톤 차이를 컬러 섀도로 오해: 11·12번).
+  // 있으면 반대쪽을 따로 재서, 색이 뚜렷이 다르면 두 색, 반대쪽이 자연 눈꺼풀이면 그쪽은 안 칠한다
+  const sides = [m.shadowIn, m.shadowOut].filter((x): x is RGB => !!x);
+  const dark = sides.length ? sides.sort((a, b) => luma(a) - luma(b))[0] : null;
+  const tDark = dark ? shadowOf(dark) : null;
+  if (tDark && dark) {
+    const other = dark === m.shadowIn ? m.shadowOut : m.shadowIn;
+    const tOther = other ? shadowOf(other) : null;
+    const darkIsIn = dark === m.shadowIn;
+    // 두 색은 양쪽 다 섀도로 읽히고 색이 뚜렷이 다를 때만(0.05 에서는 09번처럼 측정 흔들림까지 두 색이 되어 더 나빠졌다)
+    if (other && tOther && colorDiff(tDark.color, tOther.color) > 0.09) {
+      res.shadow = darkIsIn ? { color: tDark.color, colorOut: tOther.color, amount: Math.max(tDark.amount, tOther.amount) } : { color: tOther.color, colorOut: tDark.color, amount: Math.max(tDark.amount, tOther.amount) };
+      debug.shadowDiff = +colorDiff(tDark.color, tOther.color).toFixed(3);
+    } else res.shadow = tDark;
   }
 
   // 아이라인: 속눈썹 선 위 띠가 눈꺼풀보다 훨씬 어두우면

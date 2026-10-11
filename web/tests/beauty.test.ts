@@ -333,3 +333,16 @@ test('타투 도안 뽑기: 피부 위 선은 잡고, 피부 위 새까만 큰 �
   assert.ok(r.rgba[i * 4 + 3] > 200);
   assert.ok(r.rgba[i * 4] < 140);
 });
+
+test('두 색 아이섀도: 바깥 가중치 망은 눈꼬리 1 → 앞머리 0, 섀도 망과 같은 크기', () => {
+  const p = Array.from({ length: 478 }, (_, i) => ({ x: 200 + 80 * Math.cos(i), y: 200 + 100 * Math.sin(i * 1.3) }));
+  p[234] = { x: 100, y: 200 };
+  p[454] = { x: 300, y: 200 };
+  p[1] = { x: 200, y: 210 };
+  const r = faceRegions(p);
+  assert.equal(r.shadowOuter.length, r.shadow.length);
+  assert.ok(r.shadowOuter.every((q) => q.v >= 0 && q.v <= 1));
+  assert.ok(r.shadowOuter.some((q) => q.v === 1) && r.shadowOuter.some((q) => q.v === 0));
+  // 같은 자리의 정점: 섀도 망과 좌표가 같다
+  for (let i = 0; i < r.shadow.length; i += 97) assert.deepEqual([r.shadow[i].x, r.shadow[i].y], [r.shadowOuter[i].x, r.shadowOuter[i].y]);
+});
