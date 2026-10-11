@@ -37,6 +37,8 @@ input,
   display: grid;
   grid-template-rows: auto 1fr auto;
   height: 100dvh;
+  width: 100%;
+  overflow: hidden;
 }
 
 .topbar {
@@ -97,6 +99,11 @@ button.primary {
   color: var(--accent-ink);
   border-color: var(--accent);
   font-weight: 700;
+}
+
+button.big {
+  font-size: 17px;
+  padding: 13px 26px;
 }
 
 button.ghost {
@@ -228,6 +235,7 @@ button.on {
   max-width: 560px;
   margin: 6px 0;
   line-height: 1.6;
+  text-wrap: balance;
 }
 
 .start-buttons {
@@ -242,10 +250,6 @@ button.on {
   font-size: 13px;
 }
 
-.tips {
-  font-size: 12px;
-}
-
 .ext-link {
   font-size: 13px;
 }
@@ -256,14 +260,16 @@ button.on {
 
 .start .credit {
   font-size: 11px;
-  opacity: 0.7;
-  margin-top: 18px;
+  opacity: 0.55;
+  margin-top: 22px;
 }
 
 .rail {
   border-top: 1px solid var(--line);
   background: var(--panel);
   padding: 8px 16px 12px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .tabs {
@@ -271,6 +277,29 @@ button.on {
   gap: 6px;
   overflow-x: auto;
   padding-bottom: 8px;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* 2단계 탭: 위 줄은 큰 갈래(메이크업·헤어·네일·타투), 아래 줄은 메이크업 부위 */
+.tabs.sub {
+  padding: 0 0 8px;
+  gap: 4px;
+}
+
+.tabs.sub .tab {
+  font-size: 12px;
+  padding: 4px 11px;
+  background: transparent;
+}
+
+.tabs.sub .tab.on {
+  background: rgba(240, 169, 60, 0.18);
+  color: var(--accent);
+  border-color: transparent;
 }
 
 .tab {
@@ -346,6 +375,14 @@ button.on {
   color: var(--muted, #aab);
 }
 
+.ref span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+
 .ref img {
   width: 36px;
   height: 36px;
@@ -378,15 +415,28 @@ button.on {
 
 .amount-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 14px;
   font-size: 13px;
   padding-top: 4px;
 }
 
+.amount-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.amount-row button {
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+}
+
 .amount-row input[type='range'] {
-  flex: 1;
-  max-width: 320px;
+  width: clamp(90px, 22vw, 220px);
 }
 
 .panel {
@@ -423,10 +473,14 @@ button.on {
 .row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   padding: 6px 0;
   font-size: 14px;
+}
+
+.row > select,
+.row > input[type='text'] {
+  margin-left: auto;
 }
 
 .row input[type='range'] {
@@ -434,7 +488,6 @@ button.on {
 }
 
 .row input[type='checkbox'] {
-  margin-right: auto;
   order: -1;
 }
 
@@ -456,17 +509,56 @@ button.on {
   margin: 4px 0;
 }
 
+.panel-head button {
+  width: auto;
+  margin: 0;
+}
+
 @media (max-width: 640px) {
-  .brand small {
-    display: none;
+  .topbar {
+    padding: 8px 12px;
   }
-  .product {
-    width: 80px;
+  .rail {
+    padding: 6px 12px 10px;
   }
-  .product img {
-    width: 64px;
-    height: 64px;
+  .swatch {
+    width: 66px;
   }
+}
+
+/* 설정의 고급 영역·생성 고급 */
+details.adv {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+details.adv > summary,
+details.gen-adv > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 6px 0;
+}
+
+details.adv .row input[type='text'] {
+  width: 180px;
+}
+
+details.gen-adv {
+  flex: 1 1 100%;
+}
+
+details.gen-adv[open] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+}
+
+details.gen-adv > summary {
+  flex: 1 1 100%;
+  padding: 2px 0;
 }
 
 /* 생성 모드(사진 한 장) */

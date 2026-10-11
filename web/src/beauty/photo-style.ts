@@ -245,7 +245,7 @@ export class PhotoAnalyzer {
         parts.push('타투 도안');
       }
     }
-    out.summary = parts.length ? `사진에서 ${parts.join(', ')}을(를) 가져왔어요` : '사진에서 가져올 수 있는 스타일을 찾지 못했어요';
+    out.summary = parts.length ? `사진에서 가져왔어요: ${parts.join(' · ')}` : '사진에서 가져올 만한 스타일을 찾지 못했어요';
     return out;
   }
 }

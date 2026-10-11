@@ -47,6 +47,10 @@ const panelEl = $<HTMLElement>('panel');
 const tabsEl = $<HTMLElement>('tabs');
 const btnPhotoEl = $<HTMLButtonElement>('btn-photo');
 const btnGenEl = $<HTMLButtonElement>('btn-gen');
+const subtabsEl = $<HTMLElement>('subtabs');
+const btnSnapEl = $<HTMLButtonElement>('btn-snap');
+/** ?dev=1 이면 실험용 조절(손톱 길이 등)을 보인다 */
+const DEV = new URLSearchParams(location.search).get('dev') === '1';
 const swatchesEl = $<HTMLElement>('swatches');
 const amountEl = $<HTMLInputElement>('amount');
 const amountRowEl = $<HTMLElement>('amount-row');
@@ -159,7 +163,7 @@ function applyTattooToEngine(): void {
   // 타투는 몸 관절점이 필요하다: 처음 켤 때 자세 추적을 켠다(모델을 한 번 내려받음)
   if (d && !trackerConfig.pose) {
     trackerConfig.pose = true;
-    if (running) void engine.tracker.configure(trackerConfig, setStatus).then(() => setStatus(`처리 장치 ${engine.tracker.delegate}`));
+    if (running) void engine.tracker.configure(trackerConfig, setStatus).then(() => setStatus(''));
   }
 }
 let currentLook: LookName | null = null;
@@ -182,7 +186,7 @@ function applyLookToEngine(): void {
   // 네일은 손 점이 필요하다: 처음 켤 때 손 추적을 켠다
   if (n.color && !trackerConfig.hands) {
     trackerConfig.hands = true;
-    if (running) void engine.tracker.configure(trackerConfig, setStatus).then(() => setStatus(`처리 장치 ${engine.tracker.delegate}`));
+    if (running) void engine.tracker.configure(trackerConfig, setStatus).then(() => setStatus(''));
   }
 }
 
@@ -224,21 +228,48 @@ function swatch(label: string, color: RGB | null, selected: boolean, onClick: ()
   return b;
 }
 
+type Tab = 'look' | PartName | 'tattoo';
+/** 위 줄: 큰 갈래. 메이크업 안의 부위는 아래 줄에 따로(한 줄에 13개가 늘어서지 않게) */
+const MAKEUP_TABS: Tab[] = ['look', 'lip', 'blush', 'shadow', 'liner', 'brow', 'contour', 'base'];
+const CATEGORIES: { key: 'makeup' | 'hair' | 'nail' | 'tattoo'; label: string; first: Tab }[] = [
+  { key: 'makeup', label: '메이크업', first: 'look' },
+  { key: 'hair', label: '헤어', first: 'hair' },
+  { key: 'nail', label: '네일', first: 'nail' },
+  { key: 'tattoo', label: '타투', first: 'tattoo' },
+];
+const categoryOf = (t: Tab): 'makeup' | 'hair' | 'nail' | 'tattoo' => (t === 'hair' || t === 'nail' || t === 'tattoo' ? t : 'makeup');
+const tabLabel = (t: Tab): string => (t === 'look' ? '추천 룩' : t === 'tattoo' ? '타투' : PART_LABELS[t]);
+const mkTab = (label: string, on: boolean, go: () => void): HTMLButtonElement => {
+  const b = document.createElement('button');
+  b.className = 'tab' + (on ? ' on' : '');
+  b.textContent = label;
+  b.addEventListener('click', go);
+  return b;
+};
+
 function renderRail(): void {
+  const cat = categoryOf(tab);
   tabsEl.replaceChildren(
-    ...(['look', 'base', 'lip', 'shadow', 'blush', 'contour', 'liner', 'brow', 'hair', 'nail', 'tattoo'] as const).map((t) => {
-      const b = document.createElement('button');
-      b.className = 'tab' + (tab === t ? ' on' : '');
-      b.textContent = t === 'look' ? '룩' : t === 'tattoo' ? '타투' : PART_LABELS[t];
-      b.addEventListener('click', () => {
-        tab = t;
+    btnPhotoEl,
+    btnGenEl,
+    ...CATEGORIES.map((c) =>
+      mkTab(c.label, cat === c.key, () => {
+        tab = c.first;
         renderRail();
-      });
-      return b;
-    }),
+      }),
+    ),
   );
-  // 사진 따라하기가 첫 번째 동작이 되도록 고정 버튼(사진 따라하기·생성)을 탭 앞에 둔다(탭을 다시 그려도 사라지지 않게)
-  tabsEl.prepend(btnPhotoEl, btnGenEl);
+  subtabsEl.hidden = cat !== 'makeup';
+  if (cat === 'makeup') {
+    subtabsEl.replaceChildren(
+      ...MAKEUP_TABS.map((t) =>
+        mkTab(tabLabel(t), tab === t, () => {
+          tab = t;
+          renderRail();
+        }),
+      ),
+    );
+  }
   if (tab === 'look') {
     swatchesEl.replaceChildren(
       ...(Object.keys(LOOKS) as LookName[]).map((name) => {
@@ -260,7 +291,7 @@ function renderRail(): void {
     return;
   }
   nstyleRowEl.hidden = tab !== 'nail';
-  nlenRowEl.hidden = tab !== 'nail';
+  nlenRowEl.hidden = tab !== 'nail' || !DEV;
   if (tab === 'tattoo') {
     renderTattooRail();
     return;
@@ -429,9 +460,9 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   }
   renderRail();
   refImgEl.src = r.thumb.toDataURL('image/jpeg', 0.8);
-  refTextEl.textContent = r.ai?.headline ? `${r.summary} · AI: ${r.ai.headline}` : r.summary;
+  refTextEl.textContent = r.ai?.headline ? `${r.summary} · ${r.ai.headline}` : r.summary;
   refEl.hidden = false;
-  setStatus(r.summary);
+  setStatus('');
   if (r.makeup && r.measure) {
     // 영상이 아직 시작 전이면(사진 분석이 먼저 끝난 경우) 잠시 기다린다
     for (let i = 0; i < 100 && !running; i++) await new Promise((res) => setTimeout(res, 100));
@@ -521,17 +552,18 @@ genUrlEl.addEventListener('change', () => {
 });
 
 async function refreshGenStatus(): Promise<boolean> {
-  genStatusEl.textContent = '서버 확인 중…';
+  genStatusEl.textContent = '확인 중…';
+  $('gen-use-ref-row').hidden = !lastStyle;
   const h = await checkGenServer();
   if (!h) {
-    genStatusEl.textContent = `생성 서버가 꺼져 있어요 (${genServerUrl()}) — tools/genserver/README.md 참고`;
+    genStatusEl.textContent = '지금은 쓸 수 없어요(AI 생성 서버가 꺼져 있음)';
     genRunEl.disabled = true;
     return false;
   }
-  genStatusEl.textContent = h.dry_run ? '연결됨 (시험 모드: 영역만 표시)' : `연결됨 · ${h.device === 'cuda' ? 'GPU' : h.device.toUpperCase()}${h.model_loaded ? '' : ' · 첫 생성 때 모델을 불러와요'}${h.anydoor ? ' · AnyDoor 준비' : ''}`;
+  genStatusEl.textContent = h.dry_run ? '시험 모드' : h.model_loaded ? '준비됨' : '준비됨 · 첫 생성은 조금 더 걸려요';
   // AnyDoor 서버가 꺼져 있으면 엔진 선택을 기본으로 되돌린다
   if (!h.anydoor && genEngineEl.value === 'anydoor') genEngineEl.value = 'default';
-  genEngineEl.title = h.anydoor ? 'AnyDoor 서버 연결됨' : 'AnyDoor 서버(8766)가 꺼져 있어요 — tools/anydoor/run.bat';
+  genEngineEl.title = h.anydoor ? 'AnyDoor 연결됨' : 'AnyDoor 는 지금 꺼져 있어요';
   genRunEl.disabled = false;
   return true;
 }
@@ -564,6 +596,33 @@ btnGenEl.addEventListener('click', () => {
 $('gen-close').addEventListener('click', () => {
   genEl.hidden = true;
 });
+
+// ---- 지금 화면을 사진으로 저장 ----
+btnSnapEl.addEventListener('click', async () => {
+  if (!running) return;
+  const cap = await engine.captureNext();
+  const c = document.createElement('canvas');
+  c.width = cap.image.width;
+  c.height = cap.image.height;
+  const ctx = c.getContext('2d')!;
+  if (viewEl.classList.contains('mirror')) {
+    ctx.translate(c.width, 0);
+    ctx.scale(-1, 1);
+  }
+  const tmp = document.createElement('canvas');
+  tmp.width = c.width;
+  tmp.height = c.height;
+  tmp.getContext('2d')!.putImageData(cap.image, 0, 0);
+  ctx.drawImage(tmp, 0, 0);
+  const a = document.createElement('a');
+  a.href = c.toDataURL('image/jpeg', 0.92);
+  a.download = `iris-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jpg`;
+  a.click();
+  setStatus('사진을 저장했어요');
+  setTimeout(() => {
+    if (statusEl.textContent === '사진을 저장했어요') setStatus('');
+  }, 2500);
+});
 genSliderEl.addEventListener('input', () => {
   genAfterEl.style.clipPath = `inset(0 0 0 ${genSliderEl.value}%)`;
 });
@@ -573,7 +632,7 @@ let lastGen: { elapsed_ms: number; prompt: string; model: string } | null = null
 
 async function runGen(): Promise<void> {
   if (!running) {
-    setStatus('먼저 카메라나 영상을 시작하세요');
+    setStatus('먼저 카메라를 시작해 주세요');
     return;
   }
   const cat = genCatEl.value as GenCategory;
@@ -599,7 +658,7 @@ async function runGen(): Promise<void> {
       reference_mask = m.toDataURL('image/png');
     }
     genBeforeEl.src = image;
-    const working = genEngineEl.value === 'anydoor' ? '합성 중… (AnyDoor, 한 자리에 30~120초)' : '생성 중… (GPU 5~30초, CPU는 몇 분)';
+    const working = genEngineEl.value === 'anydoor' ? '만드는 중… (1~2분)' : '만드는 중… (10~30초)';
     genStatusEl.textContent = working;
     const r = await genGenerate(
       {
@@ -623,10 +682,10 @@ async function runGen(): Promise<void> {
     genSaveEl.href = r.image;
     genInfoEl.textContent = `${(r.elapsed_ms / 1000).toFixed(1)}초 · ${r.model === 'dry-run' ? '시험 모드' : r.model === 'anydoor' ? 'AnyDoor 합성' : r.model}`;
     genResultEl.hidden = false;
-    genStatusEl.textContent = '완료 — 가운데 막대를 움직여 전후를 비교하세요';
+    genStatusEl.textContent = '완성! 막대를 움직여 전후를 비교해 보세요';
     lastGen = { elapsed_ms: r.elapsed_ms, prompt: r.prompt, model: r.model };
   } catch (err) {
-    genStatusEl.textContent = `생성 실패: ${(err as Error).message}`;
+    genStatusEl.textContent = `만들지 못했어요: ${(err as Error).message}`;
   } finally {
     genRunEl.disabled = false;
   }
@@ -740,7 +799,7 @@ tattooFileEl.addEventListener('change', async () => {
 tattooPickEl.addEventListener('click', () => {
   tattooPicking = !tattooPicking;
   tattooPickEl.classList.toggle('on', tattooPicking);
-  setStatus(tattooPicking ? '타투를 넣을 곳(팔·목·가슴)을 화면에서 누르세요' : '');
+  setStatus(tattooPicking ? '화면에서 타투를 넣을 곳을 눌러 주세요' : '');
 });
 viewEl.addEventListener('pointerdown', (ev) => {
   if (!tattooPicking) return;
@@ -753,7 +812,7 @@ viewEl.addEventListener('pointerdown', (ev) => {
   if (viewEl.classList.contains('mirror')) fx = 1 - fx;
   const hit = engine.tattooPlaceAt(fx * cv.width, fy * cv.height);
   if (!hit) {
-    setStatus('팔·목·가슴 위를 눌러 주세요(어깨·팔꿈치·손목이 화면에 보여야 해요)');
+    setStatus('팔·목·가슴 위를 눌러 주세요. 몸이 화면에 보여야 해요');
     return;
   }
   tattoo.place = hit.place;
@@ -898,9 +957,10 @@ async function begin(open: () => Promise<void>): Promise<void> {
     startEl.hidden = true;
     await engine.tracker.configure(trackerConfig, setStatus);
     if (NAIL_MODEL_PARAM) await engine.setNailModel(NAIL_MODEL_PARAM, setStatus);
-    setStatus(`처리 장치 ${engine.tracker.delegate}`);
+    setStatus('');
     engine.start();
     running = true;
+    btnSnapEl.hidden = false;
   } catch (err) {
     const msg = err instanceof DOMException && err.name === 'NotAllowedError' ? '카메라 권한이 거부되었습니다. 브라우저 주소창에서 권한을 허용해 주세요.' : String(err);
     setStatus(msg);
@@ -954,7 +1014,7 @@ async function applyTracker(): Promise<void> {
   if (!running) return;
   await engine.tracker.configure(trackerConfig, setStatus);
   engine.metrics.reset();
-  setStatus(`처리 장치 ${engine.tracker.delegate}`);
+  setStatus('');
 }
 
 for (const id of ['opt-mirror', 'opt-seg', 'opt-refine', 'opt-dbg-lm', 'opt-dbg-seg']) {
