@@ -26,8 +26,13 @@ interface GuidedFilter {
   s0: WebGLTexture;
   s1: WebGLTexture;
   mean: WebGLTexture;
+  /** 앞 프레임 계수(핑퐁). 머리가 가만히 있으면 섞어 쓴다 */
+  prev: WebGLTexture;
   statsFbo: WebGLFramebuffer;
   meanFbo: WebGLFramebuffer;
+  prevFbo: WebGLFramebuffer;
+  /** prev 에 쓸 만한 앞 프레임이 들어 있는지 */
+  prevValid: boolean;
   w: number;
   h: number;
 }
@@ -51,6 +56,8 @@ export interface DrawOptions {
   refine?: boolean;
   /** 카메라를 그린 뒤 화면에 덧그리는 효과들 */
   effects?: ((t: FrameTextures) => void)[];
+  /** 경계 정밀화 결과를 앞 프레임과 섞는 비율(0~0.7)과 그동안 머리가 움직인 거리(화면 px). 많이 움직이면 0 */
+  temporal?: { blend: number; dx: number; dy: number };
 }
 
 export class Renderer {
@@ -93,15 +100,18 @@ export class Renderer {
     if (!gl.getExtension('EXT_color_buffer_float')) return null;
     const withR = (src: string): string => src.replace('const int R = 6;', `const int R = ${GF_R};`);
     const statsProg = this.program(FULLSCREEN_VS, withR(GF_STATS_FS), ['uCam', 'uSeg', 'uLow', 'uLod']);
-    const meanProg = this.program(FULLSCREEN_VS, withR(GF_MEAN_FS), ['uS0', 'uS1', 'uLow', 'uEps']);
+    const meanProg = this.program(FULLSCREEN_VS, withR(GF_MEAN_FS), ['uS0', 'uS1', 'uLow', 'uEps', 'uPrev', 'uBlend', 'uShift']);
     return {
       statsProg,
       meanProg,
       s0: this.texture(gl.LINEAR, gl.LINEAR),
       s1: this.texture(gl.LINEAR, gl.LINEAR),
       mean: this.texture(gl.LINEAR, gl.LINEAR),
+      prev: this.texture(gl.LINEAR, gl.LINEAR),
       statsFbo: gl.createFramebuffer()!,
       meanFbo: gl.createFramebuffer()!,
+      prevFbo: gl.createFramebuffer()!,
+      prevValid: false,
       w: 0,
       h: 0,
     };
@@ -126,7 +136,8 @@ export class Renderer {
       const g = this.gf;
       g.w = Math.max(1, Math.ceil(width / GF_DOWN));
       g.h = Math.max(1, Math.ceil(height / GF_DOWN));
-      for (const t of [g.s0, g.s1, g.mean]) {
+      g.prevValid = false;
+      for (const t of [g.s0, g.s1, g.mean, g.prev]) {
         gl.bindTexture(gl.TEXTURE_2D, t);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, g.w, g.h, 0, gl.RGBA, gl.HALF_FLOAT, null);
       }
@@ -136,13 +147,18 @@ export class Renderer {
       gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
       gl.bindFramebuffer(gl.FRAMEBUFFER, g.meanFbo);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, g.mean, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, g.prevFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, g.prev, 0);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  private runGuidedFilter(): void {
+  private runGuidedFilter(temporal?: { blend: number; dx: number; dy: number }): void {
     const gl = this.gl;
     const g = this.gf!;
+    // 핑퐁: 지난번 결과(mean)를 prev 로 두고 새 결과를 다른 텍스처에 쓴다
+    [g.mean, g.prev] = [g.prev, g.mean];
+    [g.meanFbo, g.prevFbo] = [g.prevFbo, g.meanFbo];
     gl.disable(gl.BLEND);
     gl.bindVertexArray(this.emptyVao);
     gl.bindFramebuffer(gl.FRAMEBUFFER, g.statsFbo);
@@ -161,8 +177,12 @@ export class Renderer {
     gl.uniform2f(g.meanProg.u.uLow, g.w, g.h);
     // 작을수록 밝기 경계에 더 민감(머리카락 올이 살아남), 너무 작으면 잡음이 마스크에 섞인다.
     gl.uniform1f(g.meanProg.u.uEps, GF_EPS);
+    this.bindTex(2, g.prev, g.meanProg.u.uPrev);
+    gl.uniform1f(g.meanProg.u.uBlend, g.prevValid && temporal ? Math.min(0.7, Math.max(0, temporal.blend)) : 0);
+    gl.uniform2f(g.meanProg.u.uShift, (temporal?.dx ?? 0) / GF_DOWN, (temporal?.dy ?? 0) / GF_DOWN);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    g.prevValid = true;
   }
 
   uploadCamera(source: TexImageSource): void {
@@ -188,7 +208,8 @@ export class Renderer {
     const W = this.width;
     const H = this.height;
     const useGF = this.gf !== null && (opts.refine ?? true) && opts.useSeg && this.hasSeg;
-    if (useGF) this.runGuidedFilter();
+    if (useGF) this.runGuidedFilter(opts.temporal);
+    else if (this.gf) this.gf.prevValid = false;
 
     // 카메라
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);

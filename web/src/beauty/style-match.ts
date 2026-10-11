@@ -62,11 +62,17 @@ export function matchTint(cur: TintSetting, want: RGB, got: RGB, natural: RGB, m
   }
   const r = den > 1e-4 ? num / den : 0;
   const responsive = r > 0.03 && Math.abs(gotDev) >= 0.015 && Math.sign(gotDev) === Math.sign(wantDev);
+  // 채널마다 반응이 다르다(섀도의 파랑은 빨강보다 3배쯤 세게 반응: 16번 사진에서 공통 r 로는 파랑이 안 내려갔다)
+  // → 편차가 잴 만큼 큰 채널은 그 채널의 반응을 쓰고, 작은 채널은 공통 r 로
+  const rOf = (i: number): number => {
+    if (Math.abs(chrC[i]) < 0.04 || Math.sign(devG[i]) !== Math.sign(chrC[i])) return r;
+    return clamp(devG[i] / chrC[i], r * 0.4, r * 3);
+  };
   const color = cl.map((_, i) => {
     let dev: number;
     if (responsive) {
-      // 목표 색조 편차(밝기 성분은 지금 값 유지). r 을 매번 다시 재므로 한 번에 다 옮겨도 수렴한다(21장 평가로 확인)
-      dev = devC[i] + (devW[i] / r - chrC[i]);
+      // 목표 색조 편차(밝기 성분은 지금 값 유지). 반응을 매번 다시 재므로 한 번에 다 옮겨도 수렴한다(21장 평가로 확인)
+      dev = devC[i] + (devW[i] / rOf(i) - chrC[i]);
     } else {
       // 결과가 거의 없거나 반대 방향: 지금 색 편차를 키운다
       dev = devC[i] * boost;

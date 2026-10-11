@@ -135,10 +135,13 @@ void main() {
     target = mix(uColor, uTip, t);
   }
   vec3 dyed = target * shade;
-  // 실제 머리카락처럼: 밝은 결은 채도가 빠져 흰빛에 가까워지고(클리핑 대신), 그늘은 원래 색이 조금 비친다
+  // 실제 머리카락처럼: 밝은 결은 채도가 빠져 흰빛에 가까워지고(클리핑 대신), 그늘은 원래 색이 조금 비친다.
+  // 단, 선명한 색(빨강·주황)은 그만큼 채도·밝기가 깎여 목표색에서 멀어지므로(평가: 빨강 ΔE 10) 목표 채도만큼 덜 적용한다
+  float tsat = (max(max(target.r, target.g), target.b) - min(min(target.r, target.g), target.b)) / max(max(max(target.r, target.g), target.b), 0.02);
+  float keep = 1.0 - 0.7 * smoothstep(0.35, 0.9, tsat);
   float dl = dot(dyed, W);
-  dyed = mix(dyed, vec3(dl), smoothstep(1.15, 2.2, shade) * 0.6);
-  dyed = mix(dyed, c * (dot(target, W) / max(mean, 0.03)), (1.0 - smoothstep(0.45, 0.9, shade)) * 0.35);
+  dyed = mix(dyed, vec3(dl), smoothstep(1.15, 2.2, shade) * 0.6 * keep);
+  dyed = mix(dyed, c * (dot(target, W) / max(mean, 0.03)), (1.0 - smoothstep(0.45, 0.9, shade)) * 0.35 * keep);
   dyed = clamp(dyed, 0.0, 1.0);
   // 윤기(주변보다 밝은 결)는 흰 빛으로 조금 더해 광택을 유지(경계는 제외)
   float Lblur = dot(textureLod(uCam, vUv, 3.0).rgb, W);

@@ -80,6 +80,8 @@ export class BeautyEngine {
   lastHands: HandPoints[] = [];
   loopback: LoopbackTest | null = null;
   lastFace: FaceFrame | null = null;
+  /** 앞 프레임 얼굴 중심·크기(경계 정밀화의 프레임 간 섞기 판단용) */
+  private prevHead: { x: number; y: number; w: number } | null = null;
   lastRegions: FaceRegions | null = null;
   lastTrack: TrackResult | null = null;
   private readonly makeup: MakeupRenderer;
@@ -187,7 +189,7 @@ export class BeautyEngine {
       effects.push((t) => this.makeup.draw(regions, this.look, t.cam, t.seg, t, face.confidence));
     }
     const t2 = performance.now();
-    this.renderer.draw({ useSeg: this.settings.useSeg, refine: this.settings.refine, debugSeg: this.settings.debugSeg, effects });
+    this.renderer.draw({ useSeg: this.settings.useSeg, refine: this.settings.refine, debugSeg: this.settings.debugSeg, effects, temporal: this.temporalBlend(face, w) });
     if (this.captureWaiters.length > 0) {
       // 합성 결과를 읽어 달라는 요청(사진 따라하기의 되먹임 측정용)
       const image = this.renderer.readFrame();
@@ -211,6 +213,40 @@ export class BeautyEngine {
       skipped,
       person: face !== null,
     });
+  }
+
+  /**
+   * 경계 정밀화 결과를 앞 프레임과 섞어 떨림을 줄인다. 앞 프레임은 머리가 움직인 만큼 옮겨서 섞으므로
+   * 가만히 말하는 정도(프레임당 얼굴 폭의 1~2%)까지는 섞고, 그보다 크게 움직이거나 크기가 변하면 0(잔상 방지).
+   */
+  private temporalBlend(face: FaceFrame | null, frameW: number): { blend: number; dx: number; dy: number } | undefined {
+    if (!face) {
+      this.prevHead = null;
+      return undefined;
+    }
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let cx = 0;
+    let cy = 0;
+    for (const q of face.p) {
+      if (q.x < x0) x0 = q.x;
+      if (q.x > x1) x1 = q.x;
+      cx += q.x;
+      cy += q.y;
+    }
+    const n = face.p.length;
+    const head = { x: cx / n, y: cy / n, w: Math.max(1, x1 - x0) };
+    const prev = this.prevHead;
+    this.prevHead = head;
+    if (!prev) return undefined;
+    const dx = head.x - prev.x;
+    const dy = head.y - prev.y;
+    const move = Math.hypot(dx, dy) / head.w;
+    const grow = Math.abs(head.w - prev.w) / head.w;
+    const k = Math.max(move / 0.02, grow / 0.02);
+    void frameW;
+    const blend = k <= 1 ? 0.5 : k >= 2.5 ? 0 : 0.5 * ((2.5 - k) / 1.5);
+    return { blend, dx, dy };
   }
 
   /** 다음에 그리는 합성 화면과 그때의 얼굴 점을 받는다. */

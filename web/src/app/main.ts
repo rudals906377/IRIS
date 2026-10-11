@@ -499,7 +499,8 @@ function applyHints(r: StyleResult, h: StyleHints): void {
     if (k.liner === 'cat') m.liner = { color: [0.1, 0.08, 0.08], amount: 0.9 };
     else if (k.liner === 'soft' && !m.liner) m.liner = { color: [0.23, 0.16, 0.13], amount: 0.45 };
     // 스타일 AI의 '블러셔 없음'은 측정이 약할 때만 따른다(사진에 붉은 기가 뚜렷하면 측정을 믿는다)
-    if (k.blush === 'none' && (m.blush?.redness ?? 0) < 0.15) m.blush = undefined;
+    // (0.15 는 옅은 분홍 블러셔(10·20번, 붉은 기 0.10~0.13)까지 지워 버렸다 → 0.09)
+    if (k.blush === 'none' && (m.blush?.redness ?? 0) < 0.09) m.blush = undefined;
     else if (k.blush && !m.blush) m.blush = { color: k.blush === 'coral' ? c('#cb795e') : c('#cb7979'), amount: 0.9, pos: 0.15, size: 1.25 };
     if (k.contour === 'shading') m.contour = { color: c('#8c7a70'), amount: Math.max(m.contour?.amount ?? 0, 0.5) };
     else if (k.contour === 'highlight') m.contour = { color: c('#9a7862'), amount: Math.max(m.contour?.amount ?? 0, 0.35) };
@@ -727,7 +728,7 @@ async function matchToPhoto(photo: FaceMeasure): Promise<void> {
       const m = matchTint({ color: chosen.shadow.color, amount: chosen.shadow.amount }, darker(photo)!, darker(now)!, NATURAL_SHADOW, darker(my)!);
       chosen.shadow.color = m.amount > 0 ? m.color : null;
       chosen.shadow.amount = m.amount > 0 ? m.amount : 0.45;
-      log.shadow = { want: darker(photo), got: darker(now), amount: m.amount };
+      log.shadow = { want: darker(photo), got: darker(now), my: darker(my), natural: NATURAL_SHADOW, amount: m.amount, color: chosen.shadow.color };
     }
     if (chosen.lip.color && photo.lip && now.lip) {
       const want = lin(lipTarget(photo.lip, photo.skin));

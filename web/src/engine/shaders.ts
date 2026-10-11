@@ -85,6 +85,9 @@ export const GF_MEAN_FS = /* glsl */ `#version 300 es
 precision highp float;
 uniform sampler2D uS0;
 uniform sampler2D uS1;
+uniform sampler2D uPrev;   // 앞 프레임 계수(머리가 거의 안 움직일 때 섞어 경계 떨림을 줄인다)
+uniform float uBlend;      // 0 = 안 섞음
+uniform vec2 uShift;       // 앞 프레임 → 이번 프레임 머리 이동(저해상도 px, 화면 좌표: 아래가 +y)
 uniform vec2 uLow;
 uniform float uEps;
 out vec4 o;
@@ -105,4 +108,6 @@ void main() {
     }
   }
   o = acc / float((2 * R + 1) * (2 * R + 1));
+  // 머리가 움직인 만큼 앞 프레임을 옮겨서 섞는다(잔상 방지). GL 의 y 는 화면과 반대
+  if (uBlend > 0.0) o = mix(o, textureLod(uPrev, fc - vec2(uShift.x, -uShift.y) * texel, 0.0), uBlend);
 }`;

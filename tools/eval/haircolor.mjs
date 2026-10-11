@@ -12,16 +12,21 @@ import { BASE, launch, query, waitReady } from '../harness/common.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const args = process.argv.slice(2);
-const si = args.indexOf('--save');
-const saveDir = si >= 0 ? args.splice(si, 2)[1] : null;
+const flag = (k) => {
+  const i = args.indexOf(k);
+  return i >= 0 ? args.splice(i, 2)[1] : null;
+};
+const saveDir = flag('--save');
+const onlyRefs = flag('--refs')?.split(',');
+const onlyFrames = flag('--frames')?.split(',');
 const [label = '기본', paramsJson = '{}'] = args;
 const extra = JSON.parse(paramsJson);
 const refs = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/eval/results/hair_refs.json'), 'utf8'));
 const index = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/public/testdata/eval/hair/index.json'), 'utf8'));
 // 색이 고루 섞이게: 밝은 금발·회색·주황·빨강·갈색·검정
-const REFS = ['01', '22', '29', '07', '27', '20', '13', '06', '24', '12', '15'].filter((k) => refs[k]);
+const REFS = (onlyRefs ?? ['01', '22', '29', '07', '27', '20', '13', '06', '24', '12', '15']).filter((k) => refs[k]);
 // 원래 머리색이 다른 사람들(검정·갈색·금발)
-const FRAMES = ['webcam_10443_0122', 'webcam_4863_0213', 'webcam_11589_0573', 'webcam_15909_0203', 'webcam_6083_0154'].filter((n) => index[n]);
+const FRAMES = (onlyFrames ?? ['webcam_10443_0122', 'webcam_4863_0213', 'webcam_11589_0573', 'webcam_15909_0203', 'webcam_6083_0154']).filter((n) => index[n]);
 
 const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
@@ -132,8 +137,8 @@ for (const fr of FRAMES) {
       fs.mkdirSync(saveDir, { recursive: true });
       fs.writeFileSync(path.join(saveDir, `${fr}_${k}.jpg`), Buffer.from(r.png));
     }
-    rows.push({ frame: fr, ref: k, dE, covErr, spanErr, cov: r.cov, refCov: ref.cov });
-    console.error(fr, k, `ΔE ${dE.toFixed(1)}  결 ${r.cov.toFixed(2)}/${ref.cov.toFixed(2)}  폭 ${(r.p90 - r.p10).toFixed(2)}/${(ref.p90 - ref.p10).toFixed(2)}`);
+    rows.push({ frame: fr, ref: k, dE, covErr, spanErr, cov: r.cov, refCov: ref.cov, lab: r.lab.map((v) => +v.toFixed(1)), refLab: r.refLab.map((v) => +v.toFixed(1)) });
+    console.error(fr, k, `ΔE ${dE.toFixed(1)}  결 ${r.cov.toFixed(2)}/${ref.cov.toFixed(2)}  폭 ${(r.p90 - r.p10).toFixed(2)}/${(ref.p90 - ref.p10).toFixed(2)}  Lab ${r.lab.map((v) => v.toFixed(0)).join(',')} / ${r.refLab.map((v) => v.toFixed(0)).join(',')}`);
   }
 }
 await browser.close();
