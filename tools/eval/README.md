@@ -9,8 +9,11 @@ bash tools/harness/fetch-testdata.sh          # 기본 시험 자료
 # 웹캠 같은 영상(무료 Mixkit, 커밋 안 함) → web/public/testdata/webcam/  (받는 방법은 2026-10-08 개발일지)
 python tools/eval/make_hair_gt.py --split eval --out web/public/testdata/eval/hair   # 머리카락 평가 정답 26장
 python tools/eval/hair_refs.py                # 실제 머리카락 사진 32장의 색·명암 분포
-cd web && npm run build && npx vite preview --port 4173 &
+cd web && npm run build
 ```
+
+미리보기 서버는 평가 명령 앞에 `tools/eval/with-preview.sh` 를 붙이면 같은 셸에서 띄웠다가 끝나면 끈다(따로 띄우면 셸이 끝날 때 죽는다):
+`tools/eval/with-preview.sh node tools/eval/makeup.mjs 기준 testdata/face/00055_00.webm 21`
 
 정답은 앱과 무관한 강한 오프라인 모델로 만든다(얼굴 파싱 SegFormer → ViTMatte 경계 정밀화 → BiRefNet 배경 제거).
 평가에 쓴 사람은 학습 자료에서 뺀다(`make_hair_gt.py` 의 EVAL·EXCLUDE).
