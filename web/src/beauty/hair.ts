@@ -118,7 +118,6 @@ void main() {
   float Lrg = dot(textureLod(uCam, vUv, 3.5).rgb, W);
   float strandR = clamp((L + e) / (Lsm + e), 0.45, 2.2);
   float regionR = pow(clamp((Lrg + e) / (mean + e), 0.25, 4.0), 0.6);
-  float shade = mix(1.0, regionR * mix(1.0, strandR, 0.85), edge);
   // 밝기 분포 맞추기: 실제 머리카락은 밝을수록 결의 상대 명암이 작다(사진 32장: 밝기 0.6 → 변동 0.2, 0.12 → 0.75).
   // 원래 머리의 변동을 목표 색 밝기에 맞는 변동으로 늘이거나 줄인다(검은 머리를 금발로 → 얼룩 줄이기, 금발을 검게 → 결 살리기)
   float Lt = max(dot(uColor, W), 0.02);
@@ -127,7 +126,12 @@ void main() {
   float kc = clamp(covT / max(covS * uCovGain, 0.05), 0.35, 2.6);
   // 명암을 늘이면(로그 정규 가정) 평균 밝기가 exp(σ²·k(k−1)/2) 배로 뜨므로 되돌려 색(평균)이 목표에서 벗어나지 않게 한다
   float sg = min(covS * uCovGain, 0.8);
-  shade = exp(log(max(shade, 0.05)) * kc - 0.5 * sg * sg * kc * (kc - 1.0));
+  // 압축(kc<1)은 큰 명암(정수리·옆머리의 밝고 어두움)에만 온전히 적용하고, 가는 올 결은 덜 누른다:
+  // 검은 머리를 금발로 할 때 올까지 눌러 버리면 결 없는 페인트처럼 보였다(통계는 맞아도 머리카락으로 안 보임)
+  float kStrand = max(kc, 0.8);
+  float regionS = exp(log(max(regionR, 0.05)) * kc - 0.5 * sg * sg * kc * (kc - 1.0));
+  float strandS = exp(log(max(strandR, 0.05)) * kStrand);
+  float shade = mix(1.0, regionS * mix(1.0, strandS, 0.85), edge);
 
   vec3 target = uColor;
   if (uTipOn > 0.5) {
@@ -139,6 +143,9 @@ void main() {
   // 단, 선명한 색(빨강·주황)은 그만큼 채도·밝기가 깎여 목표색에서 멀어지므로(평가: 빨강 ΔE 10) 목표 채도만큼 덜 적용한다
   float tsat = (max(max(target.r, target.g), target.b) - min(min(target.r, target.g), target.b)) / max(max(max(target.r, target.g), target.b), 0.02);
   float keep = 1.0 - 0.7 * smoothstep(0.35, 0.9, tsat);
+  // 검은 머리를 밝게(탈색처럼) 올릴수록 밝은 결은 선명한 색이어도 흰빛으로 빠진다(실제 탈색 머리의 윤기) → 노란 페인트처럼 보이는 것 줄임
+  float lift = smoothstep(2.0, 5.0, Lt / max(mean, 0.02));
+  keep = mix(keep, 1.0, lift * 0.6);
   float dl = dot(dyed, W);
   dyed = mix(dyed, vec3(dl), smoothstep(1.15, 2.2, shade) * 0.6 * keep);
   dyed = mix(dyed, c * (dot(target, W) / max(mean, 0.03)), (1.0 - smoothstep(0.45, 0.9, shade)) * 0.35 * keep);

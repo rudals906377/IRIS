@@ -76,8 +76,9 @@ const trackerConfig: TrackerConfig = {
   delegate: (params.get('delegate') as Delegate) ?? 'GPU',
   segEvery: coarse ? 2 : 1,
   headSeg: params.get('headseg') !== '0',
-  // 자체 머리카락 모델: ?hairmodel=models/hair-matte-256.onnx (또는 설정 체크박스)
-  hairModel: params.get('hairmodel') ?? (localStorage.getItem('iris.hairModel') || ''),
+  // 자체 머리카락 모델(실험): ?hairmodel=models/hair-matte-256.onnx 또는 설정 체크박스로 그 자리에서만 켠다.
+  // 예전에는 체크를 저장해 두어, 한 번 켜 본 뒤로 계속 얼룩진 분할로 염색되는 일이 있었다 → 저장하지 않는다
+  hairModel: params.get('hairmodel') ?? '',
 };
 // 자체 손톱 모델(실험): ?nailmodel=models/nail-seg.onnx
 const NAIL_MODEL_PARAM = params.get('nailmodel') ?? '';
@@ -1196,11 +1197,6 @@ async function applyTracker(): Promise<void> {
   trackerConfig.delegate = $<HTMLSelectElement>('opt-delegate').value as Delegate;
   trackerConfig.segEvery = Number($<HTMLSelectElement>('opt-seg-every').value);
   trackerConfig.hairModel = $<HTMLInputElement>('opt-hair-model').checked ? HAIR_MODEL_URL : '';
-  try {
-    localStorage.setItem('iris.hairModel', trackerConfig.hairModel);
-  } catch {
-    /* 저장 못 해도 동작 */
-  }
   if (!running) return;
   await engine.tracker.configure(trackerConfig, setStatus);
   engine.metrics.reset();
@@ -1363,6 +1359,11 @@ function applyParams(): void {
 }
 
 applyParams();
+try {
+  localStorage.removeItem('iris.hairModel');
+} catch {
+  /* 무시 */
+}
 void refreshGenStatus();
 {
   const src = params.get('src');
