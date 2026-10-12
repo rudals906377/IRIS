@@ -230,12 +230,16 @@ def generate_realistic(body: GenerateBody, img: Image.Image, ref: Image.Image | 
     try:
         if body.category == "hair":
             out, valid = realistic_client.hair(img, ref, seed=body.seed)
-            # 섞을 자리: 원래 머리카락과 결과 머리카락을 합친 곳(머리가 길어지거나 짧아진 곳 모두)
-            before_hair = masker.segment(img)["hair"] > 0.5
-            after_hair = masker.segment(out)["hair"] > 0.5
-            region = ((before_hair | after_hair).astype(np.uint8) & valid)
+            # 섞을 자리: 원래 머리카락과 결과 머리카락을 합친 곳(머리가 길어지거나 짧아진 곳 모두).
+            # 결과 쪽 머리카락은 원래 머리와 이어진 덩어리만(다시 그려져 흐려진 배경이 머리카락으로 읽히는 것 제외)
+            before_hair = (masker.segment(img)["hair"] > 0.5).astype(np.uint8)
+            after_hair = (masker.segment(out)["hair"] > 0.5).astype(np.uint8) & valid
+            head = max(8, int(np.sqrt(max(int(before_hair.sum()), 1))))
+            after_hair = realistic_client.attached_to(after_hair, before_hair, int(head * 0.6))
+            region = ((before_hair | after_hair) & valid).astype(np.uint8)
             px = max(4, int(min(img.width, img.height) * 0.02))
             region = cv2_dilate(region, px)
+            log(f"  섞는 자리 {int(region.sum() * 100 / max(1, valid.sum()))}% (원래 머리 {int(before_hair.sum())}px, 결과 머리 {int(after_hair.sum())}px)")
             soft = realistic_client.feather(region, px)
             mixed = realistic_client.blend(img, out, soft)
             # 색감·결(잡음)을 주변에 맞춘다. 색은 고른 사진을 따라야 하므로 harmonize 의 색 보정은 약하게

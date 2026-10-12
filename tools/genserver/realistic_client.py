@@ -58,7 +58,31 @@ def _post(path: str, body: dict, url: str = REALISTIC_URL) -> dict:
 
 def hair(face: Image.Image, ref: Image.Image, seed: int | None = None) -> tuple[Image.Image, np.ndarray]:
     out = _post("/hair", {"face": _durl(face), "shape": _durl(ref), "seed": seed})
-    return _img(out["image"]).convert("RGB"), (np.asarray(_img(out["valid"]).convert("L")) > 127).astype(np.uint8)
+    res = _img(out["image"]).convert("RGB")
+    valid = (np.asarray(_img(out["valid"]).convert("L")) > 127).astype(np.uint8)
+    if res.size != face.size:
+        res = res.resize(face.size, Image.LANCZOS)
+        valid = cv2.resize(valid, face.size, interpolation=cv2.INTER_NEAREST)
+    # 정렬 사각형 밖은 검게 비어 있다 → 원래 사진으로 채워 둔다(분할 모델이 검은 곳을 머리카락으로 읽지 않게)
+    merged = np.where(valid[..., None] > 0, np.asarray(res), np.asarray(face.convert("RGB")))
+    return Image.fromarray(merged.astype(np.uint8)), valid
+
+
+def attached_to(mask: np.ndarray, anchor: np.ndarray, reach_px: int) -> np.ndarray:
+    """mask 의 덩어리 중 anchor(원래 머리카락)에 reach_px 안에서 닿는 것만 남긴다.
+    생성 모델은 정렬 사각형 전체를 다시 그리므로 배경(천장·벽)이 흐려지며 '머리카락'으로 읽히는 조각이 생긴다 → 머리와 이어진 것만."""
+    m = (mask > 0).astype(np.uint8)
+    n, lab = cv2.connectedComponents(m, connectivity=8)
+    if n <= 1:
+        return m
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach_px + 1, 2 * reach_px + 1))
+    near = cv2.dilate((anchor > 0).astype(np.uint8), k) > 0
+    keep = np.zeros_like(m)
+    for i in range(1, n):
+        comp = lab == i
+        if (comp & near).any():
+            keep[comp] = 1
+    return keep
 
 
 def makeup(face: Image.Image, ref: Image.Image, steps: int = 30, guidance: float = 1.6, seed: int | None = None) -> tuple[Image.Image, np.ndarray]:

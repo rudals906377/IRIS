@@ -103,8 +103,9 @@ void main() {
   // 반쯤 섞인 픽셀을 반만 염색해야 어두운 테두리가 남지 않는다
   // 단, 확률이 아주 낮은 곳(분할이 이마·배경으로 살짝 번진 곳)까지 칠하면 밝은 색일 때 계단 모양 밝은 띠가 생기므로
   // 0.12 아래는 손대지 않고 0.12~0.65 사이에서 비율을 올린다
-  float m = smoothstep(0.25, 0.9, p) * uAmount;
-  float mo = smoothstep(0.12, 0.65, p) * uAmount;
+  // (0.12~0.65 는 경계를 다시 딱딱하게 만들어 오려 붙인 듯 보였다 → 더 넓게 부드럽게)
+  float m = smoothstep(0.2, 0.85, p) * uAmount;
+  float mo = smoothstep(0.08, 0.75, p) * uAmount;
   if (mo < 0.003) discard;
 
   float L = dot(c, W);
