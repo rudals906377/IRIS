@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import urllib.request
 
 BRANCH = os.environ.get("IRIS_BRANCH", "claude/virtual-try-on-realtime-7uwjlm")
@@ -24,7 +25,9 @@ def main() -> int:
     for sub, folder, names in (("genserver/", here, FILES), ("anydoor/", anydoor, ANYDOOR_FILES), ("realistic/", realistic, REALISTIC_FILES)):
         for name in names:
             try:
-                with urllib.request.urlopen(RAW + sub + name, timeout=30) as r:
+                # 깃허브가 같은 주소를 몇 분 캐시한다 → 매번 다른 꼬리표를 붙여 새 파일을 받는다
+                req = urllib.request.Request(f"{RAW}{sub}{name}?t={int(time.time())}", headers={"Cache-Control": "no-cache", "Pragma": "no-cache"})
+                with urllib.request.urlopen(req, timeout=30) as r:
                     data = r.read()
                 with open(os.path.join(folder, name.replace("/", os.sep)), "wb") as f:
                     f.write(data)
