@@ -80,6 +80,8 @@ export class BeautyEngine {
   lastHands: HandPoints[] = [];
   loopback: LoopbackTest | null = null;
   lastFace: FaceFrame | null = null;
+  /** 앱이 화면 위(2D 오버레이)에 덧그리는 함수: 생성된 머리 스티커 등. 매 프레임 지운 뒤 부른다 */
+  overlayDraw: ((ctx: CanvasRenderingContext2D, face: FaceFrame | null, w: number, h: number) => void) | null = null;
   /** 앞 프레임 얼굴 중심·크기(경계 정밀화의 프레임 간 섞기 판단용) */
   private prevHead: { x: number; y: number; w: number } | null = null;
   lastRegions: FaceRegions | null = null;
@@ -418,6 +420,14 @@ export class BeautyEngine {
       ctx.canvas.height = h;
     }
     ctx.clearRect(0, 0, w, h);
+    if (this.overlayDraw) {
+      ctx.save();
+      try {
+        this.overlayDraw(ctx, face, w, h);
+      } finally {
+        ctx.restore();
+      }
+    }
     if (!this.settings.debugLandmarks) return;
     const r = Math.max(1, w / 900);
     if (face) {

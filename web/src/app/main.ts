@@ -21,7 +21,7 @@ import type { LipStyle } from '../beauty/face-regions.ts';
 import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
 import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
 import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, SKIN_REF, tattooFromSource, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
-import { measureFace, type FaceMeasure } from '../beauty/face-measure.ts';
+import { FACE_OVAL, measureFace, type FaceMeasure } from '../beauty/face-measure.ts';
 import { matchDarkness, matchLip, matchTint } from '../beauty/style-match.ts';
 import { analyzeStyle } from '../beauty/style-ai.ts';
 import { hintsFromStyleAI, promptFromStyleAI, type StyleHints } from '../beauty/style-attributes.ts';
@@ -127,11 +127,11 @@ let pearl = 0;
 /** 사진보다 옅게·진하게: 모든 부위의 진하기에 곱한다(새 사진을 고르면 1) */
 let strength = 1;
 
-type Chip = PartName | 'tattoo';
+type Chip = PartName | 'tattoo' | 'hairgen';
 /** 사용자가 칩으로 끈 부위 */
 const off = new Set<Chip>();
-const CHIP_ORDER: Chip[] = ['lip', 'blush', 'shadow', 'liner', 'brow', 'contour', 'base', 'hair', 'nail', 'tattoo'];
-const CHIP_LABELS: Record<Chip, string> = { ...PART_LABELS, tattoo: '타투' };
+const CHIP_ORDER: Chip[] = ['lip', 'blush', 'shadow', 'liner', 'brow', 'contour', 'base', 'hair', 'hairgen', 'nail', 'tattoo'];
+const CHIP_LABELS: Record<Chip, string> = { ...PART_LABELS, tattoo: '타투', hairgen: '헤어(생성)' };
 
 // ---- 타투 ----
 const tattoo = {
@@ -211,7 +211,7 @@ const c = (h: string): RGB => fromHex(h);
 
 /** 지금 입혀진 부위를 칩으로 보인다. 누르면 그 부위만 끄고 켠다 */
 function renderChips(): void {
-  const items = CHIP_ORDER.filter((k) => (k === 'tattoo' ? !!tattoo.design : !!chosen[k].color));
+  const items = CHIP_ORDER.filter((k) => (k === 'tattoo' ? !!tattoo.design : k === 'hairgen' ? !!hairSticker : !!chosen[k].color));
   chipsEl.replaceChildren(
     ...items.map((k) => {
       const b = document.createElement('button');
@@ -251,6 +251,8 @@ function clearAll(): void {
   shadowOut = null;
   tattoo.design = null;
   tattoo.along = tattoo.across = undefined;
+  hairSticker = null;
+  engine.overlayDraw = null;
   off.clear();
   strength = 1;
   amountEl.value = '1';
@@ -608,6 +610,9 @@ function frameCanvas(img: ImageData): HTMLCanvasElement {
     ctx.scale(-1, 1);
   }
   ctx.drawImage(tmp, 0, 0);
+  // 생성된 머리 스티커(2D 오버레이)도 함께
+  const ov = $<HTMLCanvasElement>('overlay');
+  if (hairSticker && !off.has('hairgen') && ov.width === cv.width && ov.height === cv.height) ctx.drawImage(ov, 0, 0);
   return cv;
 }
 function download(cv: HTMLCanvasElement, name: string): void {
@@ -676,6 +681,94 @@ function bitmapToImageData(bmp: ImageBitmap): ImageData {
 
 /** 마지막 생성 결과(자동 시험용) */
 let lastGen: { elapsed_ms: number; prompt: string; model: string } | null = null;
+/** 실시간에 입히기용: 생성에 쓴 캡처의 얼굴 점(생성 사진 좌표)과 결과 */
+let lastGenLive: { category: GenCategory; image: string; mask: string; facePts: { x: number; y: number }[] | null } | null = null;
+const genLiveEl = $<HTMLButtonElement>('gen-live');
+
+// ---- 생성된 머리 스티커: 생성 결과의 머리카락 부분을 얼굴 점에 붙여 두고, 고개 움직임을 따라 같이 움직인다 ----
+/** 얼굴에서 잘 안 움직이는 점들(윤곽·콧대)로 닮음 변환(크기·회전·이동)을 구한다 */
+const STICKER_PTS = [...FACE_OVAL, 1, 4, 6, 168, 197, 5, 195];
+let hairSticker: { img: ImageBitmap; p0: { x: number; y: number }[] } | null = null;
+
+function similarity(from: { x: number; y: number }[], to: { x: number; y: number }[]): { a: number; b: number; tx: number; ty: number } | null {
+  const n = Math.min(from.length, to.length);
+  if (n < 3) return null;
+  let cx0 = 0, cy0 = 0, cx1 = 0, cy1 = 0;
+  for (let i = 0; i < n; i++) {
+    cx0 += from[i].x; cy0 += from[i].y; cx1 += to[i].x; cy1 += to[i].y;
+  }
+  cx0 /= n; cy0 /= n; cx1 /= n; cy1 /= n;
+  let num = 0, cross = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = from[i].x - cx0, dy = from[i].y - cy0, ex = to[i].x - cx1, ey = to[i].y - cy1;
+    num += dx * ex + dy * ey;
+    cross += dx * ey - dy * ex;
+    den += dx * dx + dy * dy;
+  }
+  if (den < 1e-6) return null;
+  const a = num / den, b = cross / den;
+  return { a, b, tx: cx1 - (a * cx0 - b * cy0), ty: cy1 - (b * cx0 + a * cy0) };
+}
+
+async function buildSticker(image: string, mask: string): Promise<ImageBitmap> {
+  const load = (src: string): Promise<HTMLImageElement> => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
+  const [img, m] = await Promise.all([load(image), load(mask)]);
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const mc = document.createElement('canvas');
+  mc.width = w; mc.height = h;
+  const mctx = mc.getContext('2d')!;
+  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(w, h) * 0.012))}px)`;
+  mctx.drawImage(m, 0, 0, w, h);
+  const alpha = mctx.getImageData(0, 0, w, h).data;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d')!;
+  ctx.drawImage(img, 0, 0);
+  const d = ctx.getImageData(0, 0, w, h);
+  for (let i = 0; i < alpha.length; i += 4) d.data[i + 3] = alpha[i];
+  ctx.putImageData(d, 0, 0);
+  return createImageBitmap(c);
+}
+
+engine.overlayDraw = (ctx, face) => {
+  if (!hairSticker || off.has('hairgen') || !face) return;
+  const t = similarity(hairSticker.p0, STICKER_PTS.map((i) => face.p[i]));
+  if (!t) return;
+  ctx.setTransform(t.a, t.b, -t.b, t.a, t.tx, t.ty);
+  ctx.drawImage(hairSticker.img, 0, 0);
+};
+
+/** 생성 결과를 웹캠 화면에서 계속 따라오게: 메이크업은 사진 따라하기(내 얼굴 기준이라 정확), 헤어는 머리 스티커 */
+async function applyGenLive(): Promise<void> {
+  const g = lastGenLive;
+  if (!g) return;
+  genLiveEl.disabled = true;
+  try {
+    if (g.category === 'hair') {
+      if (!g.facePts) {
+        setStatus('생성할 때 얼굴 점이 없어 따라오게 할 수 없어요. 얼굴이 보이는 상태에서 다시 생성해 주세요');
+        return;
+      }
+      hairSticker = { img: await buildSticker(g.image, g.mask), p0: STICKER_PTS.map((i) => g.facePts![i]) };
+      off.delete('hairgen');
+      // 생성된 머리가 덮으므로 실시간 염색은 끈다
+      off.add('hair');
+      applyAll();
+      renderChips();
+      setStatus('생성된 머리가 화면을 따라옵니다(정면에서 조금 움직일 때 자연스러워요)');
+    } else {
+      const blob = await (await fetch(g.image)).blob();
+      await applyPhoto(await createImageBitmap(blob), g.category === 'makeup' ? 'makeup' : 'auto');
+      setStatus('생성 결과의 화장을 실시간으로 입혔어요');
+    }
+    genEl.hidden = true;
+  } catch (err) {
+    setStatus(`실시간에 입히지 못했어요: ${(err as Error).message}`);
+  } finally {
+    genLiveEl.disabled = false;
+  }
+}
+genLiveEl.addEventListener('click', () => void applyGenLive());
 
 async function runGen(): Promise<void> {
   if (!running) {
@@ -689,6 +782,9 @@ async function runGen(): Promise<void> {
     // 합성된 화면(실시간 메이크업 포함)을 한 장 찍는다
     const cap = await engine.captureNext();
     const image = toDataUrl(cap.image, 1024);
+    // 실시간에 입히기용: 캡처의 얼굴 점을 생성 사진 좌표(최대 1024)로
+    const capScale = Math.min(1, 1024 / Math.max(cap.image.width, cap.image.height));
+    const capFace = cap.face ? cap.face.p.map((q) => ({ x: q.x * capScale, y: q.y * capScale })) : null;
     const realistic = genEngineEl.value === 'realistic' || cat === 'makeup';
     if (realistic && !lastStyle) {
       genStatusEl.textContent = '먼저 📷 사진 고르기로 옮길 사진을 골라 주세요';
@@ -738,6 +834,8 @@ async function runGen(): Promise<void> {
     genResultEl.hidden = false;
     genStatusEl.textContent = '완성! 막대를 움직여 전후를 비교해 보세요';
     lastGen = { elapsed_ms: r.elapsed_ms, prompt: r.prompt, model: r.model };
+    lastGenLive = { category: cat, image: r.image, mask: r.mask, facePts: capFace };
+    genLiveEl.hidden = !(cat === 'hair' || cat === 'makeup');
   } catch (err) {
     genStatusEl.textContent = `만들지 못했어요: ${(err as Error).message}`;
   } finally {
@@ -745,7 +843,11 @@ async function runGen(): Promise<void> {
   }
 }
 genRunEl.addEventListener('click', () => void runGen());
-(window as unknown as { irisGen: unknown }).irisGen = { run: runGen, get last() { return lastGen; }, status: refreshGenStatus };
+(window as unknown as { irisGen: unknown }).irisGen = {
+  run: runGen, get last() { return lastGen; }, status: refreshGenStatus,
+  // 자동 시험용: 생성 결과를 흉내 내어 실시간에 입히기
+  setLive(v: typeof lastGenLive) { lastGenLive = v; }, live: applyGenLive, get sticker() { return hairSticker; },
+};
 
 /** 되먹임 기록(자동 시험·디버그용) */
 let lastMatch: Record<string, unknown>[] = [];
