@@ -12,7 +12,7 @@ addict
 dill
 joblib
 gdown>=5.1
-huggingface_hub>=0.23
+huggingface_hub
 requests
 tqdm
 pyyaml
