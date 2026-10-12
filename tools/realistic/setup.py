@@ -52,7 +52,9 @@ MAKEUP_DRIVE = [
 
 def run(args: list[str], cwd: str = HERE) -> int:
     print("  $", " ".join(args), flush=True)
-    return subprocess.call(args, cwd=cwd)
+    # 한글 윈도우(cp949)에서 일부 패키지(FaceLib)의 설치 파일이 UTF-8 README 를 읽다 깨진다 → 파이썬을 UTF-8 모드로
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    return subprocess.call(args, cwd=cwd, env=env)
 
 
 def fail(msg: str) -> None:

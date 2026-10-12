@@ -10,4 +10,4 @@ VPY = os.path.join(HERE, "venv_realistic", "Scripts" if WIN else "bin", "python.
 if not os.path.exists(VPY):
     print("[문제] 아직 설치 전입니다. 먼저  python setup.py")
     sys.exit(1)
-sys.exit(subprocess.call([VPY, os.path.join(HERE, "realistic_server.py"), "--port", "8767", *sys.argv[1:]], cwd=HERE))
+sys.exit(subprocess.call([VPY, os.path.join(HERE, "realistic_server.py"), "--port", "8767", *sys.argv[1:]], cwd=HERE, env=dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")))
