@@ -72,6 +72,7 @@ class HairModel:
         args = get_parser().parse_args(["--device", device, "--batch_size", "1"])  # 메모리 절약(3장을 한 번에 넣으면 14GB 를 넘겼다)
         self.model = HairFast(args)
         self.device = device
+        self.repo = repo
         self.predictor = dlib.shape_predictor(os.path.join(repo, "pretrained_models", "ShapeAdaptor", "shape_predictor_68_face_landmarks.dat"))
         self._align_face = align_face
 
@@ -95,7 +96,13 @@ class HairModel:
         except (ValueError, IndexError) as e:
             raise ValueError(f"고른 사진에서 얼굴을 찾지 못했습니다: {e}") from e
         face_t = TF.to_tensor(face_al)
-        out = self.model.swap(face_t, shape_t, color_t, align=False, seed=seed)
+        # 저장소 코드가 요청 처리 중에도 상대 경로(models/sean_codes/styles_test/... 평균 스타일 코드)를 읽는다 → 그동안 저장소 폴더에서
+        cwd = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            out = self.model.swap(face_t, shape_t, color_t, align=False, seed=seed)
+        finally:
+            os.chdir(cwd)
         out = out.squeeze(0) if out.ndim == 4 else out
         res1024 = TF.to_pil_image(out.detach().float().clamp(0, 1).cpu())
         warped, valid = face_align.paste_back(res1024, quad, face.size)
@@ -142,6 +149,7 @@ class MakeupModel:
             else:
                 self.pipe.to("cpu")
             self.drawer = StructureDrawer(device)
+            self.repo = repo
         finally:
             os.chdir(cwd)
 
@@ -178,7 +186,12 @@ class MakeupModel:
             mk = mc
         mk512 = mk.resize((512, 512), Image.LANCZOS)
         pose = self.drawer.draw(face512, 512)
-        out = self.encoder.generate(id_image=[face512, pose], makeup_image=mk512, pipe=self.pipe, guidance_scale=guidance, num_inference_steps=steps, seed=seed)
+        cwd = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            out = self.encoder.generate(id_image=[face512, pose], makeup_image=mk512, pipe=self.pipe, guidance_scale=guidance, num_inference_steps=steps, seed=seed)
+        finally:
+            os.chdir(cwd)
         out = out.resize((side, side), Image.LANCZOS)
         W, H = face.size
         full = np.asarray(face.convert("RGB")).copy()
