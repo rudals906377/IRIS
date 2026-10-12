@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from masks import Masker
 import anydoor_client
+import realistic_client
 from blend import harmonize
 from pipelines import Generator, GenRequest, lock_hair_color
 
@@ -72,7 +73,7 @@ def encode(img: Image.Image, fmt: str = "JPEG") -> str:
 
 
 class GenerateBody(BaseModel):
-    category: str  # hair | nail | tattoo
+    category: str  # hair | nail | tattoo | makeup(사진처럼 엔진만)
     image: str  # dataURL
     reference: str | None = None
     desc: str | None = None
@@ -87,7 +88,7 @@ class GenerateBody(BaseModel):
     seed: int | None = None
     mask_only: bool = False
     color_lock: bool = True  # 헤어: 생성 뒤 머리색을 참고 사진에 맞춤
-    engine: str = "default"  # default(SDXL/SD1.5 인페인팅) | anydoor(tools/anydoor 합성 서버)
+    engine: str = "default"  # default(SDXL/SD1.5 인페인팅) | anydoor(tools/anydoor 합성 서버) | realistic(tools/realistic 헤어·메이크업 옮기기)
     reference_mask: str | None = None  # 참고 사진에서 합성할 물체 마스크(dataURL, 흰색=물체). 없으면 서버가 추정
 
 
@@ -103,8 +104,15 @@ def health() -> dict:
         "model": generator.loaded_model,
         "model_choice": generator.model_name,
         "anydoor": anydoor_client.health() is not None,
+        "realistic": _realistic_health(),
         "log": LOG[-5:],
     }
+
+
+def _realistic_health() -> dict | None:
+    """사진처럼 그리기 서버(8767) 상태: {hair, makeup} 또는 None(꺼짐)."""
+    h = realistic_client.health()
+    return {"hair": bool(h.get("hair")), "makeup": bool(h.get("makeup"))} if h else None
 
 
 # 비동기 작업: 무료 터널(trycloudflare)은 응답을 100초까지만 기다리므로, 오래 걸리는 생성은
@@ -153,12 +161,14 @@ def job_status(job_id: str) -> dict:
 
 @app.post("/generate")
 def generate(body: GenerateBody) -> dict:
-    if body.category not in ("hair", "nail", "tattoo"):
-        raise HTTPException(400, "category는 hair, nail, tattoo 중 하나여야 합니다")
+    if body.category not in ("hair", "nail", "tattoo", "makeup"):
+        raise HTTPException(400, "category는 hair, nail, tattoo, makeup 중 하나여야 합니다")
     img = decode(body.image)
     ref = decode(body.reference) if body.reference else None
     t0 = time.time()
     found = None
+    if body.engine == "realistic" or body.category == "makeup":
+        return generate_realistic(body, img, ref, t0)
     if body.category == "hair":
         mask = masker.hair_mask(img, grow=body.grow)
     elif body.category == "nail":
@@ -203,6 +213,48 @@ def generate(body: GenerateBody) -> dict:
         raise HTTPException(500, f"생성 실패: {e}") from e
     log(f"완료 {out['elapsed_ms']}ms")
     return {"image": encode(out["image"]), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": out["elapsed_ms"], "prompt": out["prompt"], "model": out["model"], "found": found}
+
+
+def generate_realistic(body: GenerateBody, img: Image.Image, ref: Image.Image | None, t0: float) -> dict:
+    """사진처럼 그리기 엔진: 헤어(모양·색) 또는 메이크업을 고른 사진에서 내 사진으로 옮긴다."""
+    if body.category not in ("hair", "makeup"):
+        raise HTTPException(400, "사진처럼 그리기 엔진은 헤어와 메이크업만 됩니다(네일·타투는 기본 또는 AnyDoor 엔진)")
+    if ref is None:
+        raise HTTPException(400, "사진처럼 그리기 엔진은 고른 사진이 필요합니다(📷 사진 고르기)")
+    h = realistic_client.health()
+    if h is None:
+        raise HTTPException(503, f"사진처럼 그리기 서버가 꺼져 있습니다({realistic_client.REALISTIC_URL}) — tools/realistic/run.bat")
+    if not h.get(body.category):
+        raise HTTPException(503, f"사진처럼 그리기 서버에 {'헤어' if body.category == 'hair' else '메이크업'} 모델이 없습니다(설치: tools/realistic/setup.py)")
+    log(f"사진처럼 {body.category}")
+    try:
+        if body.category == "hair":
+            out, valid = realistic_client.hair(img, ref, seed=body.seed)
+            # 섞을 자리: 원래 머리카락과 결과 머리카락을 합친 곳(머리가 길어지거나 짧아진 곳 모두)
+            before_hair = masker.segment(img)["hair"] > 0.5
+            after_hair = masker.segment(out)["hair"] > 0.5
+            region = ((before_hair | after_hair).astype(np.uint8) & valid)
+            px = max(4, int(min(img.width, img.height) * 0.02))
+            region = cv2_dilate(region, px)
+            soft = realistic_client.feather(region, px)
+            mixed = realistic_client.blend(img, out, soft)
+            # 색감·결(잡음)을 주변에 맞춘다. 색은 고른 사진을 따라야 하므로 harmonize 의 색 보정은 약하게
+            out = harmonize(img, mixed, region, seed=body.seed or 0, color_strength=0.3)
+            mask = (region > 0).astype(np.uint8) * 255
+        else:
+            steps = max(10, min(50, body.steps))
+            out, valid = realistic_client.makeup(img, ref, steps=steps, guidance=body.guidance if body.guidance is not None else 1.6, seed=body.seed)
+            face = realistic_client.fill_holes((masker.segment(img)["face"] > 0.5).astype(np.uint8)) & valid
+            px = max(4, int(min(img.width, img.height) * 0.015))
+            soft = realistic_client.feather(face, px)
+            out = realistic_client.blend(img, out, soft)
+            mask = (face > 0).astype(np.uint8) * 255
+    except RuntimeError as e:
+        log(str(e))
+        raise HTTPException(500, str(e)) from e
+    ms = int((time.time() - t0) * 1000)
+    log(f"완료 {ms}ms (사진처럼)")
+    return {"image": encode(out), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": ms, "prompt": "", "model": "realistic", "found": None}
 
 
 def generate_anydoor(body: GenerateBody, img: Image.Image, ref: Image.Image | None, mask, found, t0: float) -> dict:

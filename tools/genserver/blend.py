@@ -25,8 +25,9 @@ def _hf_sigma(gray: np.ndarray, region: np.ndarray) -> float:
     return float(np.median(np.abs(v - np.median(v))) * 1.4826)
 
 
-def harmonize(orig: Image.Image, gen: Image.Image, mask: np.ndarray, feather_px: int | None = None, seed: int = 0) -> Image.Image:
-    """orig·gen: 같은 크기 RGB. mask: 0~255 또는 0/1(생성으로 바꿀 자리)."""
+def harmonize(orig: Image.Image, gen: Image.Image, mask: np.ndarray, feather_px: int | None = None, seed: int = 0, color_strength: float = 1.0) -> Image.Image:
+    """orig·gen: 같은 크기 RGB. mask: 0~255 또는 0/1(생성으로 바꿀 자리).
+    color_strength: 바깥 띠 기준 색감 보정을 얼마나 적용할지(1 전부, 0 안 함). 고른 사진의 색을 따라야 하는 헤어는 약하게."""
     o = np.asarray(orig.convert("RGB")).astype(np.float32)
     g = np.asarray(gen.convert("RGB").resize(orig.size, Image.LANCZOS)).astype(np.float32)
     H, W = o.shape[:2]
@@ -46,7 +47,7 @@ def harmonize(orig: Image.Image, gen: Image.Image, mask: np.ndarray, feather_px:
         gl = cv2.cvtColor(g.clip(0, 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
         d = (ol[ring] - gl[ring]).mean(0)
         # 과한 보정 방지(밝기 ±12, 색 ±8)
-        d = np.clip(d, [-12, -8, -8], [12, 8, 8])
+        d = np.clip(d, [-12, -8, -8], [12, 8, 8]) * float(color_strength)
         gl[inside] += d
         g = cv2.cvtColor(gl.clip(0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32)
 

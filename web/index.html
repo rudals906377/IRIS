@@ -74,15 +74,15 @@
           </div>
           <div class="gen-body">
             <label>무엇을 <select id="gen-cat">
-              <option value="hair">헤어 모양·길이</option><option value="nail">네일아트</option><option value="tattoo">타투</option></select></label>
+              <option value="hair">헤어 모양·길이</option><option value="makeup">메이크업(사진처럼)</option><option value="nail">네일아트</option><option value="tattoo">타투</option></select></label>
             <label id="gen-grow-row">머리 길이 <input type="range" id="gen-grow" min="0.1" max="0.6" step="0.05" value="0.25" /></label>
             <label id="gen-extend-row" hidden>손톱 길이 <input type="range" id="gen-extend" min="0" max="1" step="0.05" value="0" /></label>
             <label id="gen-use-ref-row" hidden><input type="checkbox" id="gen-use-ref" checked /> 고른 사진처럼</label>
             <button id="gen-run" class="primary">📸 지금 모습으로 생성</button>
             <details class="gen-adv">
               <summary>고급</summary>
-              <label title="기본: 다시 그리기. AnyDoor: 사진의 물체를 그대로 합성">엔진 <select id="gen-engine">
-                <option value="default">기본</option><option value="anydoor">AnyDoor</option></select></label>
+              <label title="기본: 다시 그리기. 사진처럼: 고른 사진의 머리 모양·색과 화장을 그대로 옮기는 전용 모델. AnyDoor: 사진의 물체를 그대로 합성">엔진 <select id="gen-engine">
+                <option value="default">기본</option><option value="realistic">사진처럼(헤어·메이크업)</option><option value="anydoor">AnyDoor</option></select></label>
               <label class="gen-desc">설명(영어) <input type="text" id="gen-desc" placeholder="예: long layered hair, golden blonde" /></label>
             </details>
           </div>

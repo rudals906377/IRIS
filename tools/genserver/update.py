@@ -1,4 +1,4 @@
-"""생성 서버 파일과 AnyDoor 폴더(tools/anydoor)를 깃허브의 최신 버전으로 바꾼다:  python update.py
+"""생성 서버 파일과 AnyDoor(tools/anydoor)·사진처럼 그리기(tools/realistic) 폴더를 깃허브의 최신 버전으로 바꾼다:  python update.py
 (venv·모델·cloudflared.exe·AnyDoor 저장소와 가중치는 그대로 둔다. 서버를 끈 상태에서 실행하고, 끝나면 다시 python server.py --preload)
 """
 from __future__ import annotations
@@ -9,21 +9,24 @@ import urllib.request
 
 BRANCH = os.environ.get("IRIS_BRANCH", "claude/virtual-try-on-realtime-7uwjlm")
 RAW = f"https://raw.githubusercontent.com/rudals906377/iris/{BRANCH}/tools/"
-FILES = ["server.py", "pipelines.py", "masks.py", "blend.py", "anydoor_client.py", "check.py", "setup.py", "tunnel.py", "update.py", "requirements.txt", "README.md", "run.bat", "setup.bat", "tunnel.bat", "run.sh", "setup.sh"]
+FILES = ["server.py", "pipelines.py", "masks.py", "blend.py", "anydoor_client.py", "realistic_client.py", "check.py", "setup.py", "tunnel.py", "update.py", "requirements.txt", "README.md", "run.bat", "setup.bat", "tunnel.bat", "run.sh", "setup.sh"]
 ANYDOOR_FILES = ["anydoor_server.py", "setup.py", "run.py", "setup.bat", "setup_paths.py", "requirements-anydoor.txt", "run.bat", "README.md"]
+REALISTIC_FILES = ["realistic_server.py", "face_align.py", "makeup_draw.py", "cpu_patch.py", "setup.py", "download_weights.py", "run.py", "setup.bat", "run.bat", "requirements-realistic.txt", "README.md", "patches/fused_act.py", "patches/upfirdn2d.py"]
 
 
 def main() -> int:
     here = os.path.dirname(os.path.abspath(__file__))
     anydoor = os.path.join(os.path.dirname(here), "anydoor")
+    realistic = os.path.join(os.path.dirname(here), "realistic")
     os.makedirs(anydoor, exist_ok=True)
+    os.makedirs(os.path.join(realistic, "patches"), exist_ok=True)
     bad = 0
-    for sub, folder, names in (("genserver/", here, FILES), ("anydoor/", anydoor, ANYDOOR_FILES)):
+    for sub, folder, names in (("genserver/", here, FILES), ("anydoor/", anydoor, ANYDOOR_FILES), ("realistic/", realistic, REALISTIC_FILES)):
         for name in names:
             try:
                 with urllib.request.urlopen(RAW + sub + name, timeout=30) as r:
                     data = r.read()
-                with open(os.path.join(folder, name), "wb") as f:
+                with open(os.path.join(folder, name.replace("/", os.sep)), "wb") as f:
                     f.write(data)
                 print(f"  [OK] {sub}{name} ({len(data)} bytes)")
             except Exception as e:  # noqa: BLE001

@@ -528,9 +528,18 @@ async function refreshGenStatus(): Promise<boolean> {
     return false;
   }
   genStatusEl.textContent = h.dry_run ? '시험 모드' : h.model_loaded ? '준비됨' : '준비됨 · 첫 생성은 조금 더 걸려요';
-  // AnyDoor 서버가 꺼져 있으면 엔진 선택을 기본으로 되돌린다
+  // 꺼진 엔진은 고를 수 없게. 사진처럼 서버가 켜져 있으면 헤어·메이크업은 그 엔진을 기본으로
+  const real = h.realistic ?? null;
+  const opt = (v: string): HTMLOptionElement | null => genEngineEl.querySelector(`option[value="${v}"]`);
+  const o = opt('anydoor');
+  if (o) o.disabled = !h.anydoor;
+  const r = opt('realistic');
+  if (r) r.disabled = !real;
   if (!h.anydoor && genEngineEl.value === 'anydoor') genEngineEl.value = 'default';
-  genEngineEl.title = h.anydoor ? 'AnyDoor 연결됨' : 'AnyDoor 는 지금 꺼져 있어요';
+  if (!real && genEngineEl.value === 'realistic') genEngineEl.value = 'default';
+  if (real && !genEngineEl.dataset.touched && (genCatEl.value === 'hair' || genCatEl.value === 'makeup')) genEngineEl.value = 'realistic';
+  genEngineEl.title = real ? `사진처럼 서버 연결됨(헤어 ${real.hair ? '○' : '×'} · 메이크업 ${real.makeup ? '○' : '×'})` : h.anydoor ? 'AnyDoor 연결됨' : '사진처럼·AnyDoor 서버는 지금 꺼져 있어요';
+  syncGenCategory();
   genRunEl.disabled = false;
   return true;
 }
@@ -538,14 +547,23 @@ async function refreshGenStatus(): Promise<boolean> {
 /** 생성 대상에 맞춰 설명(영어)과 옵션 줄을 채운다 */
 function syncGenCategory(): void {
   const cat = genCatEl.value as GenCategory;
-  $('gen-grow-row').hidden = cat !== 'hair';
+  // 메이크업은 사진처럼 엔진 전용, 헤어 모양은 사진처럼 엔진이면 길이 조절이 없다
+  const real = genEngineEl.value === 'realistic' || cat === 'makeup';
+  if (cat === 'makeup' && genEngineEl.value !== 'realistic') genEngineEl.value = 'realistic';
+  $('gen-grow-row').hidden = cat !== 'hair' || real;
   $('gen-extend-row').hidden = cat !== 'nail';
+  $('gen-use-ref-row').hidden = !lastStyle || real;
+  genRunEl.textContent = real ? '📸 지금 모습에 사진처럼 옮기기' : '📸 지금 모습으로 생성';
   // 스타일 AI가 읽은 속성을 영어 설명으로(사용자가 고칠 수 있다)
-  const auto = promptFromStyleAI(lastStyle?.ai?.raw, cat);
+  const auto = cat === 'makeup' ? '' : promptFromStyleAI(lastStyle?.ai?.raw, cat);
   if (auto && !genDescEl.dataset.edited) genDescEl.value = auto;
   if (cat === 'nail' && lastStyle?.nail) genExtendEl.value = String(nailLength);
 }
 genCatEl.addEventListener('change', syncGenCategory);
+genEngineEl.addEventListener('change', () => {
+  genEngineEl.dataset.touched = '1';
+  syncGenCategory();
+});
 genDescEl.addEventListener('input', () => {
   genDescEl.dataset.edited = genDescEl.value ? '1' : '';
 });
@@ -553,7 +571,7 @@ btnGenEl.addEventListener('click', () => {
   genEl.hidden = !genEl.hidden;
   if (!genEl.hidden) {
     // 고른 사진에서 찾은 것을 기본 대상으로
-    genCatEl.value = lastStyle?.tattoo ? 'tattoo' : lastStyle?.nail ? 'nail' : 'hair';
+    genCatEl.value = lastStyle?.tattoo ? 'tattoo' : lastStyle?.nail ? 'nail' : lastStyle?.makeup && !lastStyle.hair ? 'makeup' : 'hair';
     syncGenCategory();
     void refreshGenStatus();
   }
@@ -646,6 +664,16 @@ genSliderEl.addEventListener('input', () => {
   genAfterEl.style.clipPath = `inset(0 0 0 ${genSliderEl.value}%)`;
 });
 
+/** ImageBitmap → ImageData(생성 서버로 보낼 때) */
+function bitmapToImageData(bmp: ImageBitmap): ImageData {
+  const cv = document.createElement('canvas');
+  cv.width = bmp.width;
+  cv.height = bmp.height;
+  const ctx = cv.getContext('2d')!;
+  ctx.drawImage(bmp, 0, 0);
+  return ctx.getImageData(0, 0, cv.width, cv.height);
+}
+
 /** 마지막 생성 결과(자동 시험용) */
 let lastGen: { elapsed_ms: number; prompt: string; model: string } | null = null;
 
@@ -661,7 +689,14 @@ async function runGen(): Promise<void> {
     // 합성된 화면(실시간 메이크업 포함)을 한 장 찍는다
     const cap = await engine.captureNext();
     const image = toDataUrl(cap.image, 1024);
-    const reference = genUseRefEl.checked && lastStyle ? lastStyle.thumb.toDataURL('image/jpeg', 0.9) : undefined;
+    const realistic = genEngineEl.value === 'realistic' || cat === 'makeup';
+    if (realistic && !lastStyle) {
+      genStatusEl.textContent = '먼저 📷 사진 고르기로 옮길 사진을 골라 주세요';
+      genRunEl.disabled = false;
+      return;
+    }
+    // 사진처럼 엔진은 고른 사진 원본(큰 것)을 보낸다: 얼굴이 클수록 잘 옮겨진다
+    const reference = realistic && lastSource ? toDataUrl(bitmapToImageData(lastSource), 1024) : genUseRefEl.checked && lastStyle ? lastStyle.thumb.toDataURL('image/jpeg', 0.9) : undefined;
     // 타투: 사진에서 고른(또는 자동으로 찾은) 도안 영역을 그대로 보낸다(서버의 추정이 끈·머리카락을 고르는 것 방지)
     let reference_mask: string | undefined;
     const ts = lastStyle?.tattooSrc;
@@ -677,7 +712,7 @@ async function runGen(): Promise<void> {
       reference_mask = m.toDataURL('image/png');
     }
     genBeforeEl.src = image;
-    const working = genEngineEl.value === 'anydoor' ? '만드는 중… (1~2분)' : '만드는 중… (10~30초)';
+    const working = genEngineEl.value === 'anydoor' ? '만드는 중… (1~2분)' : realistic ? (cat === 'makeup' ? '화장을 옮기는 중… (10~30초)' : '머리 모양·색을 옮기는 중… (몇 초)') : '만드는 중… (10~30초)';
     genStatusEl.textContent = working;
     const r = await genGenerate(
       {
@@ -689,7 +724,7 @@ async function runGen(): Promise<void> {
         place: tattoo.place,
         grow: Number(genGrowEl.value),
         extend: Number(genExtendEl.value),
-        engine: genEngineEl.value === 'anydoor' ? 'anydoor' : 'default',
+        engine: realistic ? 'realistic' : genEngineEl.value === 'anydoor' ? 'anydoor' : 'default',
       },
       undefined,
       (ms, line) => {
@@ -699,7 +734,7 @@ async function runGen(): Promise<void> {
     genAfterEl.src = r.image;
     genAfterEl.style.clipPath = `inset(0 0 0 ${genSliderEl.value}%)`;
     genSaveEl.href = r.image;
-    genInfoEl.textContent = `${(r.elapsed_ms / 1000).toFixed(1)}초 · ${r.model === 'dry-run' ? '시험 모드' : r.model === 'anydoor' ? 'AnyDoor 합성' : r.model}`;
+    genInfoEl.textContent = `${(r.elapsed_ms / 1000).toFixed(1)}초 · ${r.model === 'dry-run' ? '시험 모드' : r.model === 'anydoor' ? 'AnyDoor 합성' : r.model === 'realistic' ? '사진처럼 옮김' : r.model}`;
     genResultEl.hidden = false;
     genStatusEl.textContent = '완성! 막대를 움직여 전후를 비교해 보세요';
     lastGen = { elapsed_ms: r.elapsed_ms, prompt: r.prompt, model: r.model };

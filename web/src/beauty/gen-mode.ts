@@ -1,7 +1,7 @@
 // 생성 모드(사진 한 장): 웹캠 한 장을 사용자 컴퓨터의 생성 서버(tools/genserver)로 보내
 // 헤어 모양·네일아트·타투를 생성형 AI로 그린 결과를 받는다. 서버는 로컬이라 사진이 인터넷으로 나가지 않는다.
 
-export type GenCategory = 'hair' | 'nail' | 'tattoo';
+export type GenCategory = 'hair' | 'nail' | 'tattoo' | 'makeup';
 
 export interface GenOptions {
   category: GenCategory;
@@ -19,8 +19,8 @@ export interface GenOptions {
   steps?: number;
   strength?: number;
   seed?: number;
-  /** 엔진: default(인페인팅) | anydoor(물체 합성) */
-  engine?: 'default' | 'anydoor';
+  /** 엔진: default(인페인팅) | anydoor(물체 합성) | realistic(사진처럼: 헤어 모양·색, 메이크업 옮기기) */
+  engine?: 'default' | 'anydoor' | 'realistic';
 }
 
 export interface GenResult {
@@ -39,6 +39,8 @@ export interface GenHealth {
   model: string | null;
   /** AnyDoor 합성 서버(8766)가 켜져 있는지 */
   anydoor?: boolean;
+  /** 사진처럼 그리기 서버(8767)가 켜져 있으면 {hair, makeup} */
+  realistic?: { hair: boolean; makeup: boolean } | null;
 }
 
 export const DEFAULT_GEN_URL = 'http://127.0.0.1:8765';
