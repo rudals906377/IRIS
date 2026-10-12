@@ -69,7 +69,7 @@ class HairModel:
         from hair_swap import HairFast, get_parser  # noqa: PLC0415
         from utils.shape_predictor import align_face  # noqa: PLC0415
 
-        args = get_parser().parse_args(["--device", device])
+        args = get_parser().parse_args(["--device", device, "--batch_size", "1"])  # 메모리 절약(3장을 한 번에 넣으면 14GB 를 넘겼다)
         self.model = HairFast(args)
         self.device = device
         self.predictor = dlib.shape_predictor(os.path.join(repo, "pretrained_models", "ShapeAdaptor", "shape_predictor_68_face_landmarks.dat"))

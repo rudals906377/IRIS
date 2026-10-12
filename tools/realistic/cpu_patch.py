@@ -78,3 +78,17 @@ if not hasattr(torch, "_iris_cpu_type_patched"):
         return _t_type(self, *a, **k)
 
     torch.Tensor.type = _tensor_type
+
+if not hasattr(torch, "_iris_cpu_interp_patched"):
+    # CPU 는 정수(Long) 텐서의 nearest 보간을 지원하지 않는다(CUDA 는 됨) → 실수로 바꿔 보간하고 되돌린다
+    torch._iris_cpu_interp_patched = True
+    import torch.nn.functional as _F
+
+    _interp = _F.interpolate
+
+    def _interpolate(x, *a, **k):
+        if torch.is_tensor(x) and not x.is_floating_point():
+            return _interp(x.float(), *a, **k).to(x.dtype)
+        return _interp(x, *a, **k)
+
+    _F.interpolate = _interpolate
