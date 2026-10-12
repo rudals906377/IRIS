@@ -513,11 +513,22 @@ const genInfoEl = $<HTMLElement>('gen-info');
 const genSaveEl = $<HTMLAnchorElement>('gen-save');
 const genUrlEl = $<HTMLInputElement>('opt-gen-url');
 genUrlEl.value = genServerUrl();
-genUrlEl.addEventListener('change', () => {
-  setGenServerUrl(genUrlEl.value.trim() || genServerUrl());
-  genUrlEl.value = genServerUrl();
+let genUrlTimer = 0;
+const applyGenUrl = (): void => {
+  const v = genUrlEl.value.trim().replace(/\/+$/, '');
+  if (v && v !== genServerUrl()) setGenServerUrl(v);
   void refreshGenStatus();
+};
+genUrlEl.addEventListener('change', applyGenUrl);
+// 붙여넣기만 하고 창을 닫아도 바로 확인되게
+genUrlEl.addEventListener('input', () => {
+  clearTimeout(genUrlTimer);
+  genUrlTimer = window.setTimeout(applyGenUrl, 800);
 });
+// 서버를 나중에 켜도 단추가 나타나게: 단추가 숨어 있는 동안 15초마다 다시 확인
+setInterval(() => {
+  if (btnGenEl.hidden && genEl.hidden) void refreshGenStatus();
+}, 15000);
 
 async function refreshGenStatus(): Promise<boolean> {
   genStatusEl.textContent = '확인 중…';
