@@ -103,6 +103,8 @@ class Generator:
         self.model_name = model_name
         self.max_side = int(MAX_SIDE_ENV) if MAX_SIDE_ENV else 768
         self.is_xl = False
+        # 다른 GPU 서버와 함께 돌 때: 모델을 CPU 에 두고 단계마다 올린다(조금 느리지만 GPU 2GB 정도로 충분)
+        self.low_vram = False
 
     def load(self, log=print) -> None:
         if self.dry_run or self.pipe is not None:
@@ -137,6 +139,8 @@ class Generator:
         if dev == "cuda" and self.is_xl:
             mem = torch.cuda.get_device_properties(0).total_memory / 2**30
             offload = mem < 12.5  # SDXL + IP-Adapter Plus 는 12GB 이하에서 다 올리면 모자란다
+        if dev == "cuda" and self.low_vram:
+            offload = True
         if offload:
             log("GPU 메모리가 넉넉하지 않아 모델 일부를 CPU에 두고 번갈아 올린다(조금 느림)")
             pipe.enable_model_cpu_offload()

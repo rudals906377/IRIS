@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from masks import Masker
 import anydoor_client
+import hair_extend
 import realistic_client
 from blend import harmonize
 from pipelines import Generator, GenRequest, lock_hair_color
@@ -90,6 +91,7 @@ class GenerateBody(BaseModel):
     color_lock: bool = True  # 헤어: 생성 뒤 머리색을 참고 사진에 맞춤
     engine: str = "default"  # default(SDXL/SD1.5 인페인팅) | anydoor(tools/anydoor 합성 서버) | realistic(tools/realistic 헤어·메이크업 옮기기)
     reference_mask: str | None = None  # 참고 사진에서 합성할 물체 마스크(dataURL, 흰색=물체). 없으면 서버가 추정
+    extend_hair: bool = True  # 사진처럼 헤어: 고른 사진이 긴 머리면 정렬 사각형 아래로 이어 그리기
     hair_model: str = "auto"  # 사진처럼 헤어: auto(HairFastGAN, 고른 사진에서 얼굴을 못 찾으면 헤어 2) | stablehair(디퓨전, 10~20초) | hairfast(빠름)
 
 
@@ -220,6 +222,60 @@ def generate(body: GenerateBody) -> dict:
     return {"image": encode(out["image"]), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": out["elapsed_ms"], "prompt": out["prompt"], "model": out["model"], "found": found}
 
 
+_extender: Generator | None = None
+
+
+def _extend_long_hair(body: "GenerateBody", img: Image.Image, out: Image.Image, raw: Image.Image, after_hair: np.ndarray, ref: Image.Image, valid: np.ndarray, mask: np.ndarray, px: int):
+    """고른 사진이 긴 머리인데 결과가 정렬 사각형 아래에서 잘렸으면, 그 아래를 인페인팅으로 이어 그린다(hair_extend.py).
+    out: 섞은 결과, raw: 모델이 그린 그대로(사각형 가장자리까지 머리가 진하다), after_hair: raw 의 머리카락(사각형 안)"""
+    global _extender
+    rs = masker.segment(ref)
+    ratio = hair_extend.hair_length_ratio(rs["hair"], rs["face"])
+    if ratio is None or ratio < 0.6:
+        log(f"  긴 머리 이어 그리기 안 함(고른 사진 머리 길이 {'모름' if ratio is None else f'턱 아래 {ratio:.2f}배'})")
+        return out, mask
+    # 섞은 결과는 사각형 가장자리에서 원래 사진으로 돌아가 머리가 옅다 → 모델이 그린 그대로에서 닿은 다발을 찾는다
+    s = masker.segment(img)
+    ext, why = hair_extend.extension_mask(after_hair, valid, s["face"], ratio, px * 2)
+    if ext is None:
+        log(f"  긴 머리 이어 그리기 안 함: {why}")
+        return out, mask
+    log(f"  긴 머리 이어 그리기: {why}")
+    if _extender is None:
+        # 사진처럼 서버들과 GPU 를 나눠 쓰므로 가벼운 SD1.5 인페인팅을 CPU 오프로드로
+        _extender = Generator(dry_run=generator.dry_run, model_name="sd15")
+        _extender.low_vram = True
+    # 위쪽 결과 머리와 이어지게 경계(사각형 안쪽 띠)도 함께 다시 그린다
+    paint = cv2_dilate(ext, max(2, px // 2))
+    # 머리 색·결을 먼저 깔아 두고(위 머리를 아래로 늘임) 인페인팅은 결·끝 모양만 다시 그리게
+    fr = hair_extend.face_rows(s["face"])
+    fh = (fr[1] - fr[0]) if fr else img.height // 3
+    base = Image.fromarray(hair_extend.prefill(np.asarray(out.convert("RGB")), paint, after_hair, max(8, int(fh * 0.25)), np.asarray(raw.convert("RGB"))))
+    try:
+        res = _extender.generate(
+            GenRequest(
+                category="hair",
+                image=base,
+                mask=(paint * 255).astype(np.uint8),
+                reference=ref,
+                desc=(body.desc or "").strip() or "long hair, same color and texture as the hair above",
+                negative="logo, emblem, badge, text, letters, watermark, print, bald, short hair, hair ends cut straight, blurry, lowres, cartoon",
+                steps=max(20, min(40, body.steps)),
+                strength=0.75,
+                ip_scale=0.5,
+                seed=body.seed,
+                color_lock=True,
+                # 색은 고른 사진이 아니라 바로 위에 그려진 머리에 맞춘다(이음매가 안 보이게)
+                color_fn=lambda res, m, r, lg: lock_hair_color(res, m, raw, lambda im: masker.segment(im)["hair"], lg),
+            ),
+            log,
+        )
+    except Exception as e:  # noqa: BLE001
+        log(f"  긴 머리 이어 그리기 실패(잘린 채로 둠): {e}")
+        return out, mask
+    return res["image"], np.maximum(mask, (paint * 255).astype(np.uint8))
+
+
 def generate_realistic(body: GenerateBody, img: Image.Image, ref: Image.Image | None, t0: float) -> dict:
     """사진처럼 그리기 엔진: 헤어(모양·색) 또는 메이크업을 고른 사진에서 내 사진으로 옮긴다."""
     if body.category not in ("hair", "makeup"):
@@ -257,10 +313,13 @@ def generate_realistic(body: GenerateBody, img: Image.Image, ref: Image.Image | 
             log(f"  섞는 자리 {int(region.sum() * 100 / max(1, valid.sum()))}% (원래 머리 {int(before_hair.sum())}px, 결과 머리 {int(after_hair.sum())}px)")
             # 정렬 사각형(valid) 가장자리에서 끊긴 직선이 보이지 않게, 사각형 안쪽으로 점점 섞는다
             soft = realistic_client.feather(region, px) * realistic_client.inner_fade(valid, px * 2)
+            raw = out
             mixed = realistic_client.blend(img, out, soft)
             # 색감·결(잡음)을 주변에 맞춘다. 색은 고른 사진을 따라야 하므로 harmonize 의 색 보정은 약하게
             out = harmonize(img, mixed, region, seed=body.seed or 0, color_strength=0.3)
             mask = (region > 0).astype(np.uint8) * 255
+            if body.extend_hair:
+                out, mask = _extend_long_hair(body, img, out, raw, after_hair, ref, valid, mask, px)
         else:
             steps = max(10, min(50, body.steps))
             out, valid = realistic_client.makeup(img, ref, steps=steps, guidance=body.guidance if body.guidance is not None else 1.6, seed=body.seed)
