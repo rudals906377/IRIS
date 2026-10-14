@@ -10,6 +10,8 @@ export interface FaceFrame {
   p: Vec2[];
   /** 0~1. 얼굴을 놓치면 줄어들고 효과의 불투명도에 곱해진다 */
   confidence: number;
+  /** 478개 점의 깊이(픽셀 단위, 카메라 쪽이 음수). 생성 머리를 고개 방향에 맞춰 휠 때 쓴다 */
+  z?: number[];
 }
 
 // 떨림 줄이기는 두 단계로 한다(RigidShapeFilter, Procrustes 분해).
@@ -39,7 +41,9 @@ export class FaceTracker {
   private lastT = -1;
   private confidence = 0;
 
-  update(landmarks: { x: number; y: number }[] | null, tMs: number, width: number, height: number): FaceFrame | null {
+  private zs: number[] | null = null;
+
+  update(landmarks: { x: number; y: number; z?: number }[] | null, tMs: number, width: number, height: number): FaceFrame | null {
     const dt = this.lastT < 0 ? 0 : tMs - this.lastT;
     this.lastT = tMs;
     if (!landmarks || landmarks.length < 468) {
@@ -56,13 +60,19 @@ export class FaceTracker {
     const raw = landmarks.map((l) => ({ x: l.x * width, y: l.y * height }));
     const faceW = Math.hypot(raw[454].x - raw[234].x, raw[454].y - raw[234].y) || 1;
     const p: Vec2[] = this.filter.filter(raw, faceW, tMs);
-    this.last = { t: tMs, p, confidence: this.confidence };
+    // 깊이는 떨림이 커서 가볍게 평균 낸다(회전 추정에만 쓰이고 화장 자리에는 안 쓰임)
+    if (landmarks[0].z !== undefined) {
+      const zr = landmarks.map((l) => (l.z ?? 0) * width);
+      this.zs = this.zs && this.zs.length === zr.length ? this.zs.map((z0, i) => z0 + (zr[i] - z0) * 0.5) : zr;
+    }
+    this.last = { t: tMs, p, confidence: this.confidence, z: this.zs ?? undefined };
     return this.last;
   }
 
   reset(): void {
     this.filter.reset();
     this.last = null;
+    this.zs = null;
     this.confidence = 0;
   }
 }

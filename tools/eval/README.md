@@ -27,6 +27,7 @@ cd web && npm run build
 | `node tools/eval/hair.mjs <이름> '<주소 매개변수>'` | 머리카락 영역 | IoU, MAE, 경계MAE, 번짐(이마·배경에 칠해짐), 빠짐 |
 | `node tools/eval/hair.mjs ... --flicker` | 프레임 간 떨림 | 연속 프레임 확률 변화 |
 | `node tools/eval/haircolor.mjs <이름> '<매개변수>'` | 염색 색·결 | 색오차(ΔE), 결오차(밝기 변동계수 로그 비), 폭오차(그늘~윤기 폭) |
+| `node tools/eval/sticker3d.mjs <저장폴더>` | 생성 머리 실시간 붙이기 | 점수 없음. 고개 돌리는 영상에서 3D 휘기와 평면 스티커를 장면마다 나란히 저장(줄무늬 가짜 머리) |
 | `node tools/eval/makeup.mjs <이름> <얼굴 영상> 21` | 사진 따라하기 색 | 입술, 볼앞·볼중간, 섀도바깥·섀도안(피부 대비 색조 거리) |
 
 매개변수 예: `'{"hairmodel":"models/hair-matte-256.onnx"}'`(자체 머리카락 모델), `'{"covgain":0.5}'`(염색 명암 계수 시험).

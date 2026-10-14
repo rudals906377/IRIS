@@ -31,6 +31,8 @@ import type { NailStyle } from '../beauty/nail.ts';
 import { BeautyEngine } from '../engine/engine.ts';
 import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
+import { StickerGL } from '../engine/sticker-gl.ts';
+import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
@@ -694,13 +696,18 @@ function bitmapToImageData(bmp: ImageBitmap): ImageData {
 /** 마지막 생성 결과(자동 시험용) */
 let lastGen: { elapsed_ms: number; prompt: string; model: string } | null = null;
 /** 실시간에 입히기용: 생성에 쓴 캡처의 얼굴 점(생성 사진 좌표)과 결과 */
-let lastGenLive: { category: GenCategory; image: string; mask: string; facePts: { x: number; y: number }[] | null } | null = null;
+let lastGenLive: { category: GenCategory; image: string; mask: string; facePts: { x: number; y: number; z?: number }[] | null } | null = null;
 const genLiveEl = $<HTMLButtonElement>('gen-live');
 
 // ---- 생성된 머리 스티커: 생성 결과의 머리카락 부분을 얼굴 점에 붙여 두고, 고개 움직임을 따라 같이 움직인다 ----
 /** 얼굴에서 잘 안 움직이는 점들(윤곽·콧대)로 닮음 변환(크기·회전·이동)을 구한다 */
 const STICKER_PTS = [...FACE_OVAL, 1, 4, 6, 168, 197, 5, 195];
-let hairSticker: { img: ImageBitmap; p0: { x: number; y: number }[] } | null = null;
+/** p0: 캡처 때 얼굴 점(2D 닮음 변환용), p3·mesh: 깊이가 있으면 3D 로 휘기(고개를 돌려도 머리 모양 유지) */
+let hairSticker: { img: ImageBitmap; p0: { x: number; y: number }[]; p3: Vec3[] | null; mesh: WarpMesh | null } | null = null;
+let stickerGL: StickerGL | null = null;
+let stickerXY: Float32Array | undefined;
+/** 고개 자세를 조금 부드럽게(깊이 떨림이 회전으로 번지지 않게) */
+let stickerPose: Pose3 | null = null;
 
 function similarity(from: { x: number; y: number }[], to: { x: number; y: number }[]): { a: number; b: number; tx: number; ty: number } | null {
   const n = Math.min(from.length, to.length);
@@ -722,7 +729,7 @@ function similarity(from: { x: number; y: number }[], to: { x: number; y: number
   return { a, b, tx: cx1 - (a * cx0 - b * cy0), ty: cy1 - (b * cx0 + a * cy0) };
 }
 
-async function buildSticker(image: string, mask: string): Promise<ImageBitmap> {
+async function buildSticker(image: string, mask: string): Promise<{ bmp: ImageBitmap; box: { x0: number; y0: number; x1: number; y1: number } | null }> {
   const load = (src: string): Promise<HTMLImageElement> => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
   const [img, m] = await Promise.all([load(image), load(mask)]);
   const w = img.naturalWidth, h = img.naturalHeight;
@@ -737,15 +744,71 @@ async function buildSticker(image: string, mask: string): Promise<ImageBitmap> {
   const ctx = c.getContext('2d')!;
   ctx.drawImage(img, 0, 0);
   const d = ctx.getImageData(0, 0, w, h);
-  for (let i = 0; i < alpha.length; i += 4) d.data[i + 3] = alpha[i];
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let i = 0; i < alpha.length; i += 4) {
+    const a = alpha[i];
+    d.data[i + 3] = a;
+    if (a > 4) {
+      const px = (i >> 2) % w, py = (i >> 2) / w | 0;
+      if (px < x0) x0 = px;
+      if (px > x1) x1 = px;
+      if (py < y0) y0 = py;
+      if (py > y1) y1 = py;
+    }
+  }
   ctx.putImageData(d, 0, 0);
-  return createImageBitmap(c);
+  return { bmp: await createImageBitmap(c), box: x1 >= x0 ? { x0, y0, x1: x1 + 1, y1: y1 + 1 } : null };
 }
 
-engine.overlayDraw = (ctx, face) => {
+/** 3D 로 휘어 그리기. 깊이가 없거나 WebGL2 가 안 되면 false(평면 스티커로) */
+function drawSticker3D(ctx: CanvasRenderingContext2D, face: NonNullable<Parameters<NonNullable<typeof engine.overlayDraw>>[1]>, w: number, h: number): boolean {
+  const st = hairSticker;
+  if (!st?.p3 || !st.mesh || !face.z) return false;
+  const now: Vec3[] = STICKER_PTS.map((i) => ({ x: face.p[i].x, y: face.p[i].y, z: face.z![i] }));
+  const P = similarity3(st.p3, now);
+  if (!P) return false;
+  if (!stickerPose) stickerPose = P;
+  else {
+    // 회전·크기만 가볍게 거른다(이동은 거르면 늦어 보인다)
+    const k = 0.6;
+    const R = stickerPose.R.map((r0, i) => r0 + (P.R[i] - r0) * k);
+    stickerPose = { s: stickerPose.s + (P.s - stickerPose.s) * k, R, t: P.t };
+  }
+  // 거른 회전으로 이동을 다시 맞춘다(중심이 어긋나지 않게)
+  const Pf: Pose3 = { ...stickerPose, t: { x: 0, y: 0, z: 0 } };
+  let ox = 0, oy = 0;
+  for (let i = 0; i < now.length; i++) {
+    const q = applyPose(Pf, st.p3[i]);
+    ox += now[i].x - q.x;
+    oy += now[i].y - q.y;
+  }
+  Pf.t = { x: ox / now.length, y: oy / now.length, z: 0 };
+  const deg = rotationDeg(P.R);
+  // 많이 돌리면 붙인 머리가 어색해진다 → 35°~55° 에서 서서히 사라지게
+  const fade = 1 - Math.min(1, Math.max(0, (deg - 35) / 20));
+  if (fade <= 0) return true;
+  stickerGL ??= new StickerGL();
+  if (!stickerGL.ready) stickerGL.setImage(st.img);
+  stickerXY = projectMesh(st.mesh, Pf, stickerXY);
+  const cut = cutMesh(FACE_CUT.map((i) => face.p[i]));
+  // 정면에서는 지우지 않고(생성 머리가 뺨을 덮는 것도 살림), 돌릴수록 얼굴 자리를 지운다
+  const cutA = Math.min(1, Math.max(0, (deg - 5) / 15));
+  const out = stickerGL.draw(w, h, { xy: stickerXY, uv: st.mesh.uv, index: st.mesh.index }, fade * face.confidence, cut, cutA);
+  ctx.drawImage(out, 0, 0);
+  return true;
+}
+
+engine.overlayDraw = (ctx, face, w, h) => {
   if (!hairSticker || off.has('hairgen') || !face) return;
+  try {
+    if (drawSticker3D(ctx, face, w, h)) return;
+  } catch (err) {
+    console.warn('3D 머리 붙이기 실패 → 평면으로', err);
+    hairSticker.mesh = null;
+  }
   const t = similarity(hairSticker.p0, STICKER_PTS.map((i) => face.p[i]));
   if (!t) return;
+  ctx.globalAlpha = face.confidence;
   ctx.setTransform(t.a, t.b, -t.b, t.a, t.tx, t.ty);
   ctx.drawImage(hairSticker.img, 0, 0);
 };
@@ -761,7 +824,14 @@ async function applyGenLive(): Promise<void> {
         setStatus('생성할 때 얼굴 점이 없어 따라오게 할 수 없어요. 얼굴이 보이는 상태에서 다시 생성해 주세요');
         return;
       }
-      hairSticker = { img: await buildSticker(g.image, g.mask), p0: STICKER_PTS.map((i) => g.facePts![i]) };
+      const { bmp, box } = await buildSticker(g.image, g.mask);
+      const fp = g.facePts;
+      const has3 = fp.length >= 468 && fp[1].z !== undefined;
+      const p3: Vec3[] | null = has3 ? fp.map((q) => ({ x: q.x, y: q.y, z: q.z ?? 0 })) : null;
+      const mesh = p3 && box ? buildWarpMesh(headProxy(p3), bmp.width, bmp.height, box) : null;
+      hairSticker = { img: bmp, p0: STICKER_PTS.map((i) => fp[i]), p3: p3 ? STICKER_PTS.map((i) => p3[i]) : null, mesh };
+      stickerPose = null;
+      if (stickerGL) stickerGL.ready = false;
       off.delete('hairgen');
       // 생성된 머리가 덮으므로 실시간 염색은 끈다
       off.add('hair');
@@ -796,7 +866,8 @@ async function runGen(): Promise<void> {
     const image = toDataUrl(cap.image, 1024);
     // 실시간에 입히기용: 캡처의 얼굴 점을 생성 사진 좌표(최대 1024)로
     const capScale = Math.min(1, 1024 / Math.max(cap.image.width, cap.image.height));
-    const capFace = cap.face ? cap.face.p.map((q) => ({ x: q.x * capScale, y: q.y * capScale })) : null;
+    const capZ = cap.face?.z;
+    const capFace = cap.face ? cap.face.p.map((q, i) => ({ x: q.x * capScale, y: q.y * capScale, z: capZ ? capZ[i] * capScale : undefined })) : null;
     const realistic = genEngineEl.value === 'realistic' || cat === 'makeup';
     if (realistic && !lastStyle) {
       genStatusEl.textContent = '먼저 📷 사진 고르기로 옮길 사진을 골라 주세요';
