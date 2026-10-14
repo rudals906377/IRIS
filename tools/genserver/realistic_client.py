@@ -20,6 +20,9 @@ import numpy as np
 from PIL import Image
 
 REALISTIC_URL = os.environ.get("REALISTIC_URL", "http://127.0.0.1:8767")
+# 헤어 2(Stable-Hair, 디퓨전): 같은 PC 에서 따로 도는 서버. 느리고(10~20초) 품질은 HairFastGAN 과 비슷하지만(CPU 비교),
+# 고른 사진에서 얼굴을 못 찾아도 사진 가운데를 참고해 그릴 수 있다 → 기본은 HairFastGAN, 그게 못 할 때 헤어 2
+STABLEHAIR_URL = os.environ.get("STABLEHAIR_URL", "http://127.0.0.1:8768")
 
 
 def _durl(img: Image.Image, fmt: str = "JPEG") -> str:
@@ -40,6 +43,24 @@ def health(url: str = REALISTIC_URL, timeout: float = 0.8) -> dict | None:
         return None
 
 
+def hair_model(choice: str = "auto") -> str | None:
+    """쓸 헤어 모델: 'stablehair' | 'hairfast' | None(둘 다 꺼짐). auto 는 HairFastGAN(빠름), 없으면 Stable-Hair"""
+    h2 = health(STABLEHAIR_URL)
+    h1 = health()
+    has2 = bool(h2 and h2.get("hair"))
+    has1 = bool(h1 and h1.get("hair"))
+    if choice == "hairfast":
+        return "hairfast" if has1 else ("stablehair" if has2 else None)
+    if choice == "stablehair":
+        return "stablehair" if has2 else ("hairfast" if has1 else None)
+    return "hairfast" if has1 else ("stablehair" if has2 else None)
+
+
+def stablehair_on() -> bool:
+    h = health(STABLEHAIR_URL)
+    return bool(h and h.get("hair"))
+
+
 def _post(path: str, body: dict, url: str = REALISTIC_URL) -> dict:
     req = urllib.request.Request(url + path, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     try:
@@ -56,8 +77,11 @@ def _post(path: str, body: dict, url: str = REALISTIC_URL) -> dict:
         raise RuntimeError(f"사진처럼 그리기 서버에 연결 못 함({url}): {e}") from e
 
 
-def hair(face: Image.Image, ref: Image.Image, seed: int | None = None) -> tuple[Image.Image, np.ndarray]:
-    out = _post("/hair", {"face": _durl(face), "shape": _durl(ref), "seed": seed})
+def hair(face: Image.Image, ref: Image.Image, seed: int | None = None, model: str = "hairfast", steps: int = 30) -> tuple[Image.Image, np.ndarray]:
+    if model == "stablehair":
+        out = _post("/hair", {"face": _durl(face), "shape": _durl(ref), "seed": seed, "steps": steps}, STABLEHAIR_URL)
+    else:
+        out = _post("/hair", {"face": _durl(face), "shape": _durl(ref), "seed": seed})
     res = _img(out["image"]).convert("RGB")
     valid = (np.asarray(_img(out["valid"]).convert("L")) > 127).astype(np.uint8)
     if res.size != face.size:
@@ -95,6 +119,15 @@ def feather(mask: np.ndarray, px: int) -> np.ndarray:
     m = (mask > 0).astype(np.float32)
     k = max(1, px) * 2 + 1
     return cv2.GaussianBlur(m, (k, k), px * 0.6)
+
+
+def inner_fade(valid: np.ndarray, px: int) -> np.ndarray:
+    """valid(덮인 곳) 안쪽에서 1, 가장자리로 갈수록 0 이 되는 가중치(가장자리 px 폭). 사진 테두리에 붙은 쪽은 줄이지 않는다."""
+    v = (valid > 0).astype(np.uint8)
+    # 사진 밖은 '덮인 곳'으로 쳐서, 사진 테두리 쪽은 깎이지 않게
+    pad = cv2.copyMakeBorder(v, px, px, px, px, cv2.BORDER_REPLICATE)
+    d = cv2.distanceTransform(pad, cv2.DIST_L2, 5)[px:-px, px:-px]
+    return np.clip(d / max(1, px), 0, 1).astype(np.float32)
 
 
 def blend(before: Image.Image, after: Image.Image, soft: np.ndarray) -> Image.Image:

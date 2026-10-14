@@ -503,6 +503,9 @@ const genEl = $<HTMLElement>('gen');
 const genStatusEl = $<HTMLElement>('gen-status');
 const genCatEl = $<HTMLSelectElement>('gen-cat');
 const genEngineEl = $<HTMLSelectElement>('gen-engine');
+const genHairModelEl = $<HTMLSelectElement>('gen-hair-model');
+/** 헤어 2(Stable-Hair) 서버가 켜져 있는지(마지막 확인) */
+let hair2On = false;
 const genGrowEl = $<HTMLInputElement>('gen-grow');
 const genExtendEl = $<HTMLInputElement>('gen-extend');
 const genDescEl = $<HTMLInputElement>('gen-desc');
@@ -554,7 +557,11 @@ async function refreshGenStatus(): Promise<boolean> {
   if (!h.anydoor && genEngineEl.value === 'anydoor') genEngineEl.value = 'default';
   if (!real && genEngineEl.value === 'realistic') genEngineEl.value = 'default';
   if (real && !genEngineEl.dataset.touched && (genCatEl.value === 'hair' || genCatEl.value === 'makeup')) genEngineEl.value = 'realistic';
-  genEngineEl.title = real ? `사진처럼 서버 연결됨(헤어 ${real.hair ? '○' : '×'} · 메이크업 ${real.makeup ? '○' : '×'})` : h.anydoor ? 'AnyDoor 연결됨' : '사진처럼·AnyDoor 서버는 지금 꺼져 있어요';
+  hair2On = !!real?.hair2;
+  const sh = genHairModelEl.querySelector<HTMLOptionElement>('option[value="stablehair"]');
+  if (sh) sh.disabled = !hair2On;
+  if (!hair2On && genHairModelEl.value === 'stablehair') genHairModelEl.value = 'auto';
+  genEngineEl.title = real ? `사진처럼 서버 연결됨(헤어 ${real.hair ? '○' : '×'} · 헤어 2 ${real.hair2 ? '○' : '×'} · 메이크업 ${real.makeup ? '○' : '×'})` : h.anydoor ? 'AnyDoor 연결됨' : '사진처럼·AnyDoor 서버는 지금 꺼져 있어요';
   syncGenCategory();
   genRunEl.disabled = false;
   return true;
@@ -567,6 +574,7 @@ function syncGenCategory(): void {
   const real = genEngineEl.value === 'realistic' || cat === 'makeup';
   if (cat === 'makeup' && genEngineEl.value !== 'realistic') genEngineEl.value = 'realistic';
   $('gen-grow-row').hidden = cat !== 'hair' || real;
+  $('gen-hair-model-row').hidden = cat !== 'hair' || !real;
   $('gen-extend-row').hidden = cat !== 'nail';
   $('gen-use-ref-row').hidden = !lastStyle || real;
   genRunEl.textContent = real ? '📸 지금 모습에 사진처럼 옮기기' : '📸 지금 모습으로 생성';
@@ -891,7 +899,9 @@ async function runGen(): Promise<void> {
       reference_mask = m.toDataURL('image/png');
     }
     genBeforeEl.src = image;
-    const working = genEngineEl.value === 'anydoor' ? '만드는 중… (1~2분)' : realistic ? (cat === 'makeup' ? '화장을 옮기는 중… (10~30초)' : '머리 모양·색을 옮기는 중… (몇 초)') : '만드는 중… (10~30초)';
+    const hairModel = genHairModelEl.value as 'auto' | 'stablehair' | 'hairfast';
+    const slowHair = hairModel === 'stablehair' && hair2On;
+    const working = genEngineEl.value === 'anydoor' ? '만드는 중… (1~2분)' : realistic ? (cat === 'makeup' ? '화장을 옮기는 중… (10~30초)' : slowHair ? '머리를 지우고 새 머리를 그리는 중… (10~20초)' : '머리 모양·색을 옮기는 중… (몇 초)') : '만드는 중… (10~30초)';
     genStatusEl.textContent = working;
     const r = await genGenerate(
       {
@@ -904,6 +914,7 @@ async function runGen(): Promise<void> {
         grow: Number(genGrowEl.value),
         extend: Number(genExtendEl.value),
         engine: realistic ? 'realistic' : genEngineEl.value === 'anydoor' ? 'anydoor' : 'default',
+        hair_model: hairModel,
       },
       undefined,
       (ms, line) => {
@@ -913,7 +924,7 @@ async function runGen(): Promise<void> {
     genAfterEl.src = r.image;
     genAfterEl.style.clipPath = `inset(0 0 0 ${genSliderEl.value}%)`;
     genSaveEl.href = r.image;
-    genInfoEl.textContent = `${(r.elapsed_ms / 1000).toFixed(1)}초 · ${r.model === 'dry-run' ? '시험 모드' : r.model === 'anydoor' ? 'AnyDoor 합성' : r.model === 'realistic' ? '사진처럼 옮김' : r.model}`;
+    genInfoEl.textContent = `${(r.elapsed_ms / 1000).toFixed(1)}초 · ${r.model === 'dry-run' ? '시험 모드' : r.model === 'anydoor' ? 'AnyDoor 합성' : r.model === 'realistic' ? (r.hair_model === 'stablehair' ? '사진처럼 옮김(헤어 2)' : '사진처럼 옮김') : r.model}`;
     genResultEl.hidden = false;
     genStatusEl.textContent = '완성! 막대를 움직여 전후를 비교해 보세요';
     lastGen = { elapsed_ms: r.elapsed_ms, prompt: r.prompt, model: r.model };

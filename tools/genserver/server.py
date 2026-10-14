@@ -90,6 +90,7 @@ class GenerateBody(BaseModel):
     color_lock: bool = True  # 헤어: 생성 뒤 머리색을 참고 사진에 맞춤
     engine: str = "default"  # default(SDXL/SD1.5 인페인팅) | anydoor(tools/anydoor 합성 서버) | realistic(tools/realistic 헤어·메이크업 옮기기)
     reference_mask: str | None = None  # 참고 사진에서 합성할 물체 마스크(dataURL, 흰색=물체). 없으면 서버가 추정
+    hair_model: str = "auto"  # 사진처럼 헤어: auto(HairFastGAN, 고른 사진에서 얼굴을 못 찾으면 헤어 2) | stablehair(디퓨전, 10~20초) | hairfast(빠름)
 
 
 @app.get("/health")
@@ -110,9 +111,13 @@ def health() -> dict:
 
 
 def _realistic_health() -> dict | None:
-    """사진처럼 그리기 서버(8767) 상태: {hair, makeup} 또는 None(꺼짐)."""
+    """사진처럼 그리기 서버(8767)와 헤어 2(8768) 상태: {hair, makeup, hair2} 또는 None(둘 다 꺼짐)."""
     h = realistic_client.health()
-    return {"hair": bool(h.get("hair")), "makeup": bool(h.get("makeup"))} if h else None
+    h2 = realistic_client.health(realistic_client.STABLEHAIR_URL)
+    if not h and not h2:
+        return None
+    hair2 = bool(h2 and h2.get("hair"))
+    return {"hair": bool(h and h.get("hair")) or hair2, "makeup": bool(h and h.get("makeup")), "hair2": hair2}
 
 
 # 비동기 작업: 무료 터널(trycloudflare)은 응답을 100초까지만 기다리므로, 오래 걸리는 생성은
@@ -221,15 +226,25 @@ def generate_realistic(body: GenerateBody, img: Image.Image, ref: Image.Image | 
         raise HTTPException(400, "사진처럼 그리기 엔진은 헤어와 메이크업만 됩니다(네일·타투는 기본 또는 AnyDoor 엔진)")
     if ref is None:
         raise HTTPException(400, "사진처럼 그리기 엔진은 고른 사진이 필요합니다(📷 사진 고르기)")
-    h = realistic_client.health()
+    h = _realistic_health()
     if h is None:
         raise HTTPException(503, f"사진처럼 그리기 서버가 꺼져 있습니다({realistic_client.REALISTIC_URL}) — tools/realistic/run.bat")
     if not h.get(body.category):
         raise HTTPException(503, f"사진처럼 그리기 서버에 {'헤어' if body.category == 'hair' else '메이크업'} 모델이 없습니다(설치: tools/realistic/setup.py)")
-    log(f"사진처럼 {body.category}")
+    model = realistic_client.hair_model(body.hair_model) if body.category == "hair" else "stablemakeup"
+    log(f"사진처럼 {body.category} ({model})")
     try:
         if body.category == "hair":
-            out, valid = realistic_client.hair(img, ref, seed=body.seed)
+            try:
+                out, valid = realistic_client.hair(img, ref, seed=body.seed, model=model or "hairfast", steps=max(10, min(50, body.steps)))
+            except RuntimeError as e:
+                # HairFastGAN 은 고른 사진에도 얼굴이 있어야 한다 → 자동이면 헤어 2(사진 가운데를 참고)로 다시
+                if body.hair_model == "auto" and model == "hairfast" and "고른 사진" in str(e) and realistic_client.stablehair_on():
+                    log("  고른 사진에서 얼굴을 못 찾음 → 헤어 2(Stable-Hair)로 다시")
+                    model = "stablehair"
+                    out, valid = realistic_client.hair(img, ref, seed=body.seed, model=model, steps=max(10, min(50, body.steps)))
+                else:
+                    raise
             # 섞을 자리: 원래 머리카락과 결과 머리카락을 합친 곳(머리가 길어지거나 짧아진 곳 모두).
             # 결과 쪽 머리카락은 원래 머리와 이어진 덩어리만(다시 그려져 흐려진 배경이 머리카락으로 읽히는 것 제외)
             before_hair = (masker.segment(img)["hair"] > 0.5).astype(np.uint8)
@@ -240,7 +255,8 @@ def generate_realistic(body: GenerateBody, img: Image.Image, ref: Image.Image | 
             px = max(4, int(min(img.width, img.height) * 0.02))
             region = cv2_dilate(region, px)
             log(f"  섞는 자리 {int(region.sum() * 100 / max(1, valid.sum()))}% (원래 머리 {int(before_hair.sum())}px, 결과 머리 {int(after_hair.sum())}px)")
-            soft = realistic_client.feather(region, px)
+            # 정렬 사각형(valid) 가장자리에서 끊긴 직선이 보이지 않게, 사각형 안쪽으로 점점 섞는다
+            soft = realistic_client.feather(region, px) * realistic_client.inner_fade(valid, px * 2)
             mixed = realistic_client.blend(img, out, soft)
             # 색감·결(잡음)을 주변에 맞춘다. 색은 고른 사진을 따라야 하므로 harmonize 의 색 보정은 약하게
             out = harmonize(img, mixed, region, seed=body.seed or 0, color_strength=0.3)
@@ -258,7 +274,7 @@ def generate_realistic(body: GenerateBody, img: Image.Image, ref: Image.Image | 
         raise HTTPException(500, str(e)) from e
     ms = int((time.time() - t0) * 1000)
     log(f"완료 {ms}ms (사진처럼)")
-    return {"image": encode(out), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": ms, "prompt": "", "model": "realistic", "found": None}
+    return {"image": encode(out), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": ms, "prompt": "", "model": "realistic", "found": None, "hair_model": model}
 
 
 def generate_anydoor(body: GenerateBody, img: Image.Image, ref: Image.Image | None, mask, found, t0: float) -> dict:

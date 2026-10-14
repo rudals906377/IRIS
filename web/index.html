@@ -83,6 +83,8 @@
               <summary>고급</summary>
               <label title="기본: 다시 그리기. 사진처럼: 고른 사진의 머리 모양·색과 화장을 그대로 옮기는 전용 모델. AnyDoor: 사진의 물체를 그대로 합성">엔진 <select id="gen-engine">
                 <option value="default">기본</option><option value="realistic">사진처럼(헤어·메이크업)</option><option value="anydoor">AnyDoor</option></select></label>
+              <label id="gen-hair-model-row" hidden title="빠르게: HairFastGAN(몇 초). 다시 그리기: Stable-Hair 가 내 머리를 지운 뒤 고른 사진의 머리를 새로 그림(10~20초, 결과 느낌이 다름). 자동: 빠르게, 고른 사진에서 얼굴을 못 찾으면 다시 그리기">헤어 모델 <select id="gen-hair-model">
+                <option value="auto">자동</option><option value="hairfast">빠르게(몇 초)</option><option value="stablehair">다시 그리기(10~20초)</option></select></label>
               <label class="gen-desc">설명(영어) <input type="text" id="gen-desc" placeholder="예: long layered hair, golden blonde" /></label>
             </details>
           </div>

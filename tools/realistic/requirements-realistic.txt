@@ -25,6 +25,8 @@ transformers==4.34.0
 accelerate==0.23.0
 safetensors
 spiga
+# Stable-Hair(헤어 2): 저장소 안의 고친 diffusers 를 쓴다. 추가로 필요한 것만
+einops
 git+https://github.com/sajjjadayobi/FaceLib.git@382841efec823f059f49754e5d378abb12cfb551
 # 서버
 fastapi

@@ -21,6 +21,8 @@ export interface GenOptions {
   seed?: number;
   /** 엔진: default(인페인팅) | anydoor(물체 합성) | realistic(사진처럼: 헤어 모양·색, 메이크업 옮기기) */
   engine?: 'default' | 'anydoor' | 'realistic';
+  /** 사진처럼 헤어 모델: auto(헤어 2 가 켜져 있으면 그것) | stablehair(디퓨전, 자연스러움) | hairfast(빠름) */
+  hair_model?: 'auto' | 'stablehair' | 'hairfast';
 }
 
 export interface GenResult {
@@ -29,6 +31,8 @@ export interface GenResult {
   elapsed_ms: number;
   prompt: string;
   model: string;
+  /** 사진처럼 헤어에 실제로 쓴 모델 */
+  hair_model?: string | null;
 }
 
 export interface GenHealth {
@@ -40,7 +44,7 @@ export interface GenHealth {
   /** AnyDoor 합성 서버(8766)가 켜져 있는지 */
   anydoor?: boolean;
   /** 사진처럼 그리기 서버(8767)가 켜져 있으면 {hair, makeup} */
-  realistic?: { hair: boolean; makeup: boolean } | null;
+  realistic?: { hair: boolean; makeup: boolean; hair2?: boolean } | null;
 }
 
 export const DEFAULT_GEN_URL = 'http://127.0.0.1:8765';

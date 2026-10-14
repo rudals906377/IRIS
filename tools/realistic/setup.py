@@ -1,9 +1,9 @@
-"""사진처럼 그리기(헤어 HairFastGAN + 메이크업 Stable-Makeup) 설치 - 윈도우·리눅스, 엔비디아 GPU. 처음 한 번만:  python setup.py
-하는 일: 두 공식 저장소 받기(git 없으면 ZIP) → 전용 가상환경(venv_realistic) → PyTorch 2.0.1(cu118) + 패키지
-        → 가중치(헤어 약 6.4GB: Hugging Face / 메이크업 약 4.3GB: Google Drive + SD1.5 4GB + CLIP 1.6GB)
+"""사진처럼 그리기(헤어 HairFastGAN + 헤어 2 Stable-Hair + 메이크업 Stable-Makeup) 설치 - 윈도우·리눅스, 엔비디아 GPU. 처음 한 번만:  python setup.py
+하는 일: 공식 저장소 받기(git 없으면 ZIP) → 전용 가상환경(venv_realistic) → PyTorch 2.0.1(cu118) + 패키지
+        → 가중치(헤어 약 6.4GB: Hugging Face / 헤어 2 약 6.1GB: Google Drive / 메이크업 약 4.3GB: Google Drive + SD1.5 4GB + CLIP 1.6GB)
         → CUDA 컴파일 없이 도는 패치 복사 → 서버 파일 복사.
-다시 실행하면 빠진 것만 채운다. 30~60분(인터넷 속도에 따라). 디스크 약 20GB.
-옵션:  --no-makeup  (헤어만)   --no-hair  (메이크업만)
+다시 실행하면 빠진 것만 채운다(이미 설치했으면 새로 추가된 헤어 2 만 받는다). 30~60분(인터넷 속도에 따라). 디스크 약 26GB.
+옵션:  --no-makeup  (메이크업 빼기)   --no-hair  (HairFastGAN 빼기)   --no-hair2  (Stable-Hair 빼기)
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ VENV = os.path.join(HERE, "venv_realistic")
 VPY = os.path.join(VENV, "Scripts" if WIN else "bin", "python.exe" if WIN else "python")
 HAIR = os.path.join(HERE, "HairFastGAN")
 MAKEUP = os.path.join(HERE, "Stable-Makeup")
+HAIR2 = os.path.join(HERE, "Stable-Hair")
 
 HAIR_FILES = [
     "pretrained_models/StyleGAN/ffhq.pt",
@@ -47,6 +48,13 @@ MAKEUP_DRIVE = [
     ("1hXwUNLFTUuT_AseMEiLOTkwj0JVoP9PT", "models/stablemakeup/pytorch_model.bin"),
     ("1erdooW-JT9YP6jNNc8ZR4-Kc5KOBumss", "models/stablemakeup/pytorch_model_1.bin"),
     ("1vY1akep_tWxh36iv6IZYxu-HX0yTcbpZ", "models/stablemakeup/pytorch_model_2.bin"),
+]
+# Stable-Hair 가중치(공식 README 의 Google Drive 폴더): 1단계 머리 지우기, 2단계 참고 머리 인코더·어댑터·ControlNet
+HAIR2_DRIVE = [
+    ("1oYNoKPEN0mZpRhZ7s3_xSDlaO209vFn4", "models/stage1/pytorch_model.bin"),
+    ("1voeq4Uw9RBv-c4vcfc8GR3MI8Qs0XNNa", "models/stage2/pytorch_model.bin"),
+    ("15wytQlOe94dF1KZJUwqf0RGKaH9WQZe-", "models/stage2/pytorch_model_1.bin"),
+    ("1Uv3l3JCo-aOJbEWR1shINwl2sY5eGcIL", "models/stage2/pytorch_model_2.bin"),
 ]
 
 
@@ -90,12 +98,15 @@ def main() -> None:
         fail("파이썬 3.10 또는 3.11 이 필요합니다(PyTorch 2.0.1).")
     want_hair = "--no-hair" not in sys.argv
     want_makeup = "--no-makeup" not in sys.argv
+    want_hair2 = "--no-hair2" not in sys.argv
 
     print("\n[1/6] 저장소")
     if want_hair:
         fetch_repo(HAIR, "AIRI-Institute/HairFastGAN", "hair_swap.py", "HairFastGAN")
     if want_makeup:
         fetch_repo(MAKEUP, "Xiaojiu-z/Stable-Makeup", "pipeline_sd15.py", "Stable-Makeup")
+    if want_hair2:
+        fetch_repo(HAIR2, "Xiaojiu-z/Stable-Hair", "infer_full.py", "Stable-Hair")
 
     if not os.path.exists(VPY):
         print("\n[2/6] 가상환경 만드는 중...")
@@ -119,6 +130,8 @@ def main() -> None:
         args.append("--no-hair")
     if not want_makeup:
         args.append("--no-makeup")
+    if not want_hair2:
+        args.append("--no-hair2")
     if run(args) != 0:
         fail("가중치 내려받기 실패. 다시 실행하면 이어받습니다.")
 
@@ -127,7 +140,7 @@ def main() -> None:
         for name in ("fused_act.py", "upfirdn2d.py"):
             shutil.copy(os.path.join(HERE, "patches", name), os.path.join(HAIR, "models", "stylegan2", "op", name))
         print("  HairFastGAN: StyleGAN CUDA 확장 → 순수 PyTorch 판으로 바꿈(컴파일 불필요)")
-    print("\n설치 끝. 실행:  run.bat   (또는  python run.py) → '준비 완료' 가 뜨면 사진처럼 그리기 서버(포트 8767)")
+    print("\n설치 끝. 실행:  run.bat   (또는  python run.py) → '준비 완료' 가 뜨면 사진처럼 그리기 서버(포트 8767, 헤어 2 는 8768)")
 
 
 if __name__ == "__main__":
