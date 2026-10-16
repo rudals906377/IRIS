@@ -197,6 +197,7 @@ export function recolorHair(
   // ② 원래 결이 거의 없는(검게 뭉개진) 곳에는 머리 흐름을 따라 그린 가는 올 무늬를 더한다
   // 어두운 픽셀은 점처럼 흩어진 잡음이라 넓게(얼굴 크기 사진에서 5px 안팎) 흐린 밝기로 순위를 정한다
   const blur2 = lift > 0 ? boxBlur(luma, w, h, Math.max(2, Math.round(Math.min(w, h) / 150))) : luma;
+  const fine = lift > 0 ? boxBlur(luma, w, h, 1) : null;
   const mineDark = mine.L[Math.round(Q * 0.15)], mineMid = mine.L[Q / 2];
   const strands = lift > 0.05 ? strandTexture(luma, w, h, alpha, seed) : null;
   const local = lift > 0.05 ? boxBlur(luma.map((v, i) => (v - box[i]) ** 2), w, h, 3) : null;
@@ -286,6 +287,13 @@ export function recolorHair(
     // 크게 밝힐 때 원본 어두운 픽셀의 잡음(JPEG)이 그대로 검은 점이 되므로 살짝 흐린 밝기로 재고, 어둡게 하는 쪽은 4 까지만
     const dl = (((lift > 0 ? blur2[i] : luma[i]) - box[i]) / 255) * 100 * detail;
     L += lift > 0 ? Math.max(-4, dl) : dl;
+    if (fine) {
+      // 크게 밝힐 때 올 결: 어두운 머리의 올 대비는 밝기 '차'로는 아주 작아 밝힌 뒤 평평한 물감처럼 된다
+      // → 1px 흐린 밝기 / 3px 상자 평균의 '비'로 올 결을 되살린다(어둡게 하는 쪽은 60%: 검은 점 방지). 정보 없는 새까만 곳(루마 16 아래)은 빼고
+      const rr = Math.max(-0.2, Math.min(0.12, Math.log((fine[i] + 6) / (box[i] + 6))));
+      const info = Math.max(0, Math.min(1, (luma[i] - 16) / 16));
+      L *= Math.exp((rr < 0 ? rr * 0.6 : rr) * 0.6 * lift * info);
+    }
     lab2rgb(Math.max(0, Math.min(100, L)), bandAt('a'), bandAt('b'), tmp, 0);
     out[o] = rgba[o] + (tmp[0] - rgba[o]) * al;
     out[o + 1] = rgba[o + 1] + (tmp[1] - rgba[o + 1]) * al;
