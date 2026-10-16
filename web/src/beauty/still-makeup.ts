@@ -144,6 +144,21 @@ export function transferMakeup(
     }
     return d;
   });
+  // 입술 밝기 차이는 입술 가운데 값 ±8 안으로: 립스틱은 입술을 고르게 바꾼다. 고른 사진이 입을 살짝 벌려
+  // 입꼬리·입술 사이가 그늘로 새까마면 그 그늘(화장 아님)이 다문 내 입꼬리에 검은 점·줄로 옮겨졌다
+  {
+    const v: number[] = [];
+    for (let i = 0; i < n; i += 2) if (lipM[i] > 0.5 && V[i] > 0.5) v.push(D[0][i]);
+    if (v.length > 20) {
+      v.sort((p, q) => p - q);
+      const med = v[v.length >> 1];
+      for (let i = 0; i < n; i++) {
+        if (lipM[i] <= 0) continue;
+        const c = Math.max(med - 8, Math.min(med + 8, D[0][i]));
+        D[0][i] += (c - D[0][i]) * lipM[i];
+      }
+    }
+  }
   // 가까운 둘레(얼굴 폭 6%)로 먼저, 손이 넓게 가린 곳은 먼 둘레(18%)로
   const Df = D.map((d) => wblur(d, V, w, h, rf(0.06)));
   const Dg = D.map((d) => wblur(d, V, w, h, rf(0.18)));
@@ -192,6 +207,8 @@ export function transferMakeup(
   }
   // 그 아래는 가는 선(그린 아래 속눈썹)만: 얼굴 폭 1.2% 흐림보다 어두운 정도
   const rfThin = wblur(rfL[0], V, w, h, rf(0.012));
+  // 입꼬리·입술 선 그늘도 둥글고 어두워 주근깨로 잡힌다(입술 칸 바로 밖이라 입술 제외에 안 걸림): 입술 둘레(얼굴 폭 3%)는 뺀다
+  const mouthB = boxBlur(lipO, w, h, rf(0.03));
   // ⑤ 옮기기
   const o = new Uint8ClampedArray(4);
   for (let i = 0; i < n; i++) {
@@ -213,7 +230,7 @@ export function transferMakeup(
     if (lowerOK[i] < 1) L += Math.min(0, rfL[0][i] - rfThin[i]) * amt.eye * eyeM[i] * keep * Vb[i] * (1 - lowerOK[i]);
     // 주근깨·점: 피부(눈가·입술 밖)에서 뚜렷한 작은 어두운 점
     const fr = rfL[0][i] - rfSkinMean[i] + 2.5;
-    if (fr < 0 && dots[i] > 0) L += fr * 2 * dots[i] * amt.skin * keep * Vb[i] * (1 - eyeM[i]) * (1 - lipM[i]);
+    if (fr < 0 && dots[i] > 0) L += fr * 2 * dots[i] * amt.skin * keep * Vb[i] * (1 - eyeM[i]) * (1 - ramp(mouthB[i], 0, 0.08));
     lab2rgb(Math.max(0, Math.min(100, L)), a, b, o, 0);
     const X = (i % w) + x0, Y = Math.floor(i / w) + y0;
     const q = (Y * W + X) * 4;
