@@ -46,6 +46,8 @@ export function transferMakeup(
   oval: number[], amt: MakeupAmounts,
   mySkin: Float32Array | null = null, refSkin: Float32Array | null = null, refHands: Float32Array | null = null,
   dbg?: Record<string, unknown>,
+  /** 피부에서 내 원래 화색을 빼는 몫(0.5: 내 혈색 + 고른 사진 블러셔). 얼굴 바꾸기는 1(바뀐 얼굴의 내 홍조가 겹쳐 블러셔가 두 배가 됐다) */
+  skinOwn = 0.5,
 ): Uint8ClampedArray {
   const out = new Uint8ClampedArray(my);
   const fw = Math.hypot(myPts[454].x - myPts[234].x, myPts[454].y - myPts[234].y);
@@ -139,7 +141,7 @@ export function transferMakeup(
     // 화장은 피부를 파랗게·크게 어둡게 만들지 않으므로 차이를 그럴 만한 범위로 자른다(가장자리·머리카락 대응 실수 막기)
     const [lo, hi] = LIMIT[c];
     for (let i = 0; i < n; i++) {
-      const wm = 0.5 + 0.5 * Math.max(lipM[i], eyeM[i]);
+      const wm = skinOwn + (1 - skinOwn) * Math.max(lipM[i], eyeM[i]);
       // 바탕색 차이 몫은 ±3 까지만: 얼굴에만 입히므로 크면 귀·목과 갈려 가면처럼 보인다(빨간 조명 사진은 피부가 붉게 찍힌다)
       const v = (rfLow[c][i] - rfBase[c][i]) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
       d[i] = Math.max(lo, Math.min(hi, v));

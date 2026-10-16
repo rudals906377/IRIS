@@ -1641,7 +1641,7 @@ async function makeSwap(mine: ImageBitmap, ref: ImageBitmap): Promise<ImageBitma
   // (실시간 화장을 얹으면 고른 사진 화장 위에 둥근 블러셔가 겹쳐 무거워진다)
   setStatus('그 사진의 화장을 바뀐 얼굴에 옮기는 중…');
   await new Promise((r) => setTimeout(r, 30));
-  out = transferMakeup(out, rc.width, rc.height, rp, rd, rc.width, rc.height, rp, FACE_OVAL, mkAmounts(), skin, skin, hands);
+  out = transferMakeup(out, rc.width, rc.height, rp, rd, rc.width, rc.height, rp, FACE_OVAL, mkAmounts(), skin, skin, hands, undefined, 1);
   const bmp = await createImageBitmap(new ImageData(out as unknown as Uint8ClampedArray<ArrayBuffer>, rc.width, rc.height));
   const myW = Math.hypot(mp[454].x - mp[234].x, mp[454].y - mp[234].y);
   swapSmall = fw / Math.max(1, myW) > 2;
