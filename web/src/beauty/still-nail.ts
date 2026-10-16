@@ -252,3 +252,52 @@ export function syntheticNail(color: [number, number, number], gloss = 0.5): { r
   const frame = nailFrame(mask, w, h, { x: 0, y: -1 })!;
   return { rgba, w, h, mask, frame };
 }
+
+/**
+ * 손톱 마스크를 가장자리의 '손톱 색 쪽' 픽셀로 조금 넓힌다(제자리 수정). SAM 마스크는 실제 손톱보다 1~2px 작아,
+ * 다른 네일을 입히면 원래 매니큐어 색(빨강)이 테두리로 비친다. 둘레 피부 평균 → 손톱 평균 선 위에서 손톱 쪽(35% 넘게)인 픽셀만, 최대 maxPx 번.
+ */
+export function growNailMask(mask: Uint8Array, w: number, h: number, rgba: Uint8ClampedArray, maxPx: number): void {
+  const lab = new Float32Array(3);
+  const at = (i: number): [number, number, number] => { rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab); return [lab[0], lab[1], lab[2]]; };
+  let x0 = w, y0 = h, x1 = 0, y1 = 0, area = 0;
+  for (let i = 0; i < mask.length; i++) if (mask[i]) { const x = i % w, y = (i / w) | 0; area++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (area < 10) return;
+  const pad = maxPx + 6;
+  const bx0 = Math.max(0, x0 - pad), by0 = Math.max(0, y0 - pad), bx1 = Math.min(w - 1, x1 + pad), by1 = Math.min(h - 1, y1 + pad);
+  // 손톱 속(가장자리 2px 안쪽)과 둘레 띠(3~6px 밖)의 평균
+  const dist = (x: number, y: number, r: number, want: number): boolean => {
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const xx = x + dx, yy = y + dy;
+      const v = xx >= 0 && yy >= 0 && xx < w && yy < h ? mask[yy * w + xx] : 0;
+      if (v === want) return true;
+    }
+    return false;
+  };
+  const nail = [0, 0, 0], ring = [0, 0, 0];
+  let nn = 0, nr = 0;
+  for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {
+    const i = y * w + x;
+    if (mask[i] && !dist(x, y, 2, 0)) { const c = at(i); nail[0] += c[0]; nail[1] += c[1]; nail[2] += c[2]; nn++; }
+    else if (!mask[i] && !dist(x, y, 2, 1) && dist(x, y, 6, 1)) { const c = at(i); ring[0] += c[0]; ring[1] += c[1]; ring[2] += c[2]; nr++; }
+  }
+  if (!nn || !nr) return;
+  for (let c = 0; c < 3; c++) { nail[c] /= nn; ring[c] /= nr; }
+  const d = [nail[0] - ring[0], nail[1] - ring[1], nail[2] - ring[2]];
+  const dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+  // 손톱과 둘레 색이 비슷하면(맨 손톱) 넓히지 않는다
+  if (dd < 15 * 15) return;
+  for (let it = 0; it < maxPx; it++) {
+    const add: number[] = [];
+    for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {
+      const i = y * w + x;
+      if (mask[i]) continue;
+      if (!((x > 0 && mask[i - 1]) || (x < w - 1 && mask[i + 1]) || (y > 0 && mask[i - w]) || (y < h - 1 && mask[i + w]))) continue;
+      const c = at(i);
+      const t = ((c[0] - ring[0]) * d[0] + (c[1] - ring[1]) * d[1] + (c[2] - ring[2]) * d[2]) / dd;
+      if (t > 0.35) add.push(i);
+    }
+    if (!add.length) break;
+    for (const i of add) mask[i] = 1;
+  }
+}

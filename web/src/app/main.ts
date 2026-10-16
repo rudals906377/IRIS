@@ -34,7 +34,7 @@ import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../en
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
 import { boxBlur, closeHoles, colorGate, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
-import { hullFill, maskContrast, nailFrame, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
+import { growNailMask, hullFill, maskContrast, nailFrame, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
@@ -1373,7 +1373,10 @@ async function ensureNailsOnce(): Promise<void> {
       if (!a || a > base.w * base.h * 0.03) continue;
       const cx = sx / a, cy = sy / a;
       if (boxes.length && !boxes.some((b) => cx >= b.x0 && cx <= b.x1 && cy >= b.y0 && cy <= b.y1)) continue;
-      if (maskContrast(base.rgba, base.w, base.h, n.mask) >= 4) myNails.push(n);
+      if (maskContrast(base.rgba, base.w, base.h, n.mask) >= 4) {
+        growNailMask(n.mask, base.w, base.h, base.rgba, Math.min(4, Math.max(2, Math.round(Math.sqrt(a) * 0.08))));
+        myNails.push(n);
+      }
     }
   }
   setStatus(myNails.length ? '빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요' : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');
@@ -1465,6 +1468,8 @@ async function addMyNail(
     return false;
   }
   hullFill(r.mask, base.w, base.h);
+  // 마스크가 실제 손톱보다 조금 작아 원래 매니큐어 색이 테두리로 비치지 않게 손톱 색 쪽 가장자리까지 넓힌다
+  growNailMask(r.mask, base.w, base.h, base.rgba, Math.min(4, Math.max(2, Math.round(Math.sqrt(area) * 0.08))));
   // 이미 잡은 손톱과 절반 넘게 겹치면 같은 손톱(두 번 그리면 진해지고 테두리가 두꺼워진다)
   for (const m of myNails) {
     let ov = 0, a2 = 0;

@@ -99,3 +99,19 @@ test('손톱 대비: 둘레 피부와 같은 색이면 작고, 빨간 매니큐�
   for (let y = 15; y < 25; y++) for (let x = 15; x < 25; x++) { const o = (y * w + x) * 4; rgba[o] = 200; rgba[o + 1] = 20; rgba[o + 2] = 30; }
   assert.ok(maskContrast(rgba, w, h, mask) > 30);
 });
+
+test('손톱 마스크 넓히기: 빨간 매니큐어 테두리(마스크 밖 1~2px)까지 넓히고, 피부로는 안 번진다', async () => {
+  const { growNailMask } = await import('../src/beauty/still-nail.ts');
+  const w = 60, h = 60, rgba = new Uint8ClampedArray(w * h * 4), mask = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    const r = Math.hypot(x - 30, y - 30);
+    // 실제 손톱(반지름 12) 빨강, 가장자리 12~13 은 빨강·피부 섞임, 밖은 피부
+    rgba.set(r < 12 ? [220, 30, 40, 255] : r < 13 ? [225, 110, 100, 255] : [230, 185, 160, 255], i * 4);
+    if (r < 10) mask[i] = 1;
+  }
+  growNailMask(mask, w, h, rgba, 4);
+  assert.equal(mask[30 * w + 30 + 11], 1, '빨간 테두리');
+  assert.equal(mask[30 * w + 30 + 12], 1, '섞인 가장자리');
+  assert.equal(mask[30 * w + 30 + 15], 0, '피부');
+});
