@@ -763,6 +763,28 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   return { dst: arm, skin: body.skin, ink, src };
 }
 
+/** 내 사진에서 가슴(어깨 사이 아래)이 옷에 가려 있으면 미리 보기할 팔 자리, 보이면 null */
+async function coveredTorsoArm(): Promise<'forearmL' | 'forearmR' | null> {
+  photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+  const mc = stillCanvas();
+  const mp = await photoAnalyzer.pose(mc);
+  const ms = await photoAnalyzer.bodySkin(mc);
+  if (!mp || !ms || Math.min(mp.vis[11], mp.vis[12]) < 0.5) return null;
+  const A = mp.p[11], B = mp.p[12];
+  const sw = Math.hypot(A.x - B.x, A.y - B.y);
+  const c = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 + sw * 0.25 };
+  let on = 0, all = 0;
+  for (let dy = -0.15; dy <= 0.15; dy += 0.05) for (let dx = -0.25; dx <= 0.25; dx += 0.05) {
+    const X = Math.round(c.x + dx * sw), Y = Math.round(c.y + dy * sw);
+    if (X < 0 || Y < 0 || X >= mc.width || Y >= mc.height) continue;
+    all++;
+    if (ms[Y * mc.width + X] > 0.5) on++;
+  }
+  if (!all || on > all * 0.3) return null;
+  const arms = armsOf(mp, ms, mc.width, mc.height);
+  const k = arms[0].vis >= arms[1].vis ? 0 : 1;
+  return arms[k].seen ? (k === 0 ? 'forearmL' : 'forearmR') : null;
+}
 let tatPlanOk = false;
 /** 사진 관절점 → 팔(왼·오른, 사람 기준) */
 function armsOf(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Float32Array, W: number, H: number, legs = false): { arm: Arm; vis: number; seen: boolean }[] {
@@ -845,9 +867,12 @@ async function armTattooPlan(): Promise<TatPlan | null> {
           // 뒷모습(얼굴이 안 보임)은 관절점이 왼쪽·오른쪽·크기를 자주 틀려 옮기지 않는다: 앞모습끼리(가슴·쇄골)만
           const refFace = await photoAnalyzer.faceLandmarks(rc);
           const myFace = await photoAnalyzer.faceLandmarks(mc);
-          dbgTat({ refFace: !!refFace, myFace: !!myFace });
-          if (!refFace || !myFace) {
-            tatNote = !refFace ? '등 타투예요. 등 자리로 옮기기는 아직 안 돼서 팔에 미리 보여 드려요(📍 자리 고르기로 옮길 수 있어요)' : '내 사진에서 얼굴·어깨가 보여야 가슴 타투를 그 자리에 옮길 수 있어요(지금은 팔에 미리 보기)';
+          // 얼굴이 사진 위로 잘린 앞모습(가슴·팔 타투 사진에 흔함)도 있다: 얼굴이 없어도 사람 왼어깨(11)가 그림 오른쪽이면 앞모습
+          const sw0 = Math.abs(rp.p[11].x - rp.p[12].x);
+          const refFront = !!refFace || rp.p[11].x - rp.p[12].x > sw0 * 0.3;
+          dbgTat({ refFace: !!refFace, refFront, myFace: !!myFace });
+          if (!refFront || !myFace) {
+            tatNote = !refFront ? '등 타투예요. 등 자리로 옮기기는 아직 안 돼서 팔에 미리 보여 드려요(📍 자리 고르기로 옮길 수 있어요)' : '내 사진에서 얼굴·어깨가 보여야 가슴 타투를 그 자리에 옮길 수 있어요(지금은 팔에 미리 보기)';
             return null;
           }
           // 어깨를 그림 왼쪽→오른쪽으로 정렬해 크기·회전·위치만 맞춘다(도안이 늘어나지 않게)
@@ -858,7 +883,23 @@ async function armTattooPlan(): Promise<TatPlan | null> {
           const a = frame(mp), b = frame(rp);
           const toRef = affine3(a, b), fromRef = affine3(b, a);
           if (!toRef || !fromRef) return null;
-          return { torso: { toRef, fromRef }, skin: ms, ink };
+          // 옮길 자리가 내 사진에선 옷에 가려 있으면(티셔츠 입은 가슴) 굽어도 안 보인다
+          let torsoVis = 1;
+          {
+            let on = 0, all = 0;
+            for (let y = 0; y < ink.h; y += 2) for (let x = 0; x < ink.w; x += 2) {
+              const al = ink.rgba[(y * ink.w + x) * 4 + 3] / 255;
+              if (al < 0.15) continue;
+              const rx = ref.rect.x + ((x + 0.5) / ink.w) * ref.rect.w, ry = ref.rect.y + ((y + 0.5) / ink.h) * ref.rect.h;
+              const X = Math.round(fromRef[0] * rx + fromRef[1] * ry + fromRef[2]), Y = Math.round(fromRef[3] * rx + fromRef[4] * ry + fromRef[5]);
+              all += al;
+              if (X >= 0 && Y >= 0 && X < mc.width && Y < mc.height && ms[Y * mc.width + X] > 0.5) on += al;
+            }
+            torsoVis = all ? on / all : 1;
+            dbgTat({ torsoVisible: torsoVis });
+          }
+          // 가려 있으면 몸통은 건너뛰고 아래 팔 대 팔로(가슴·팔 같이 있는 사진의 소매는 옮길 수 있다)
+          if (torsoVis >= 0.25) return { torso: { toRef, fromRef }, skin: ms, ink };
         }
       }
       // 팔 점을 못 찾으면(몸이 안 나온 팔 사진) 아래 '띠' 방식으로
@@ -997,6 +1038,16 @@ async function updateStillHair(): Promise<void> {
   const nailOn = !!(chosen.nail.color && !off.has('nail') && myNails.length && refNailArt());
   const tatOn = !!(refTat && tattoo.design === refTat.design && !off.has('tattoo'));
   let plan = tatOn ? await armTattooPlan() : null;
+  // 가슴·목 타투인데 내 사진에선 그 자리가 옷에 가려 있으면 굽어도 안 보인다 → 보이는 팔에 미리 보기 + 안내
+  if (tatOn && !plan && /^(chest|neck)/.test(tattoo.place)) {
+    const arm = await coveredTorsoArm();
+    if (arm) {
+      tattoo.place = arm;
+      tattoo.along = tattoo.across = undefined;
+      tatNote = '고른 타투 자리(가슴·목)가 내 사진에선 옷에 가려 있어요. 보이는 팔에 미리 보여 드려요(📍 자리 고르기로 옮길 수 있어요)';
+      applyTattooToEngine();
+    }
+  }
   // 팔 대 팔이 안 되면 고른 자리에 굽는다
   const pk = placeKey();
   const placeOn = !plan && !!tattoo.design && !off.has('tattoo');
