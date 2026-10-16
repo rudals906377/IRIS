@@ -1479,6 +1479,7 @@ async function ensureNailsOnce(): Promise<void> {
     }
   }
   dropSkinNails();
+  dropOversizeNails();
   setStatus(myNails.length ? '빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요' : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');
   nailGen++;
   applyAll();
@@ -1519,6 +1520,13 @@ function dropSkinNails(): void {
   const dE = means.map((m) => (m ? Math.hypot((m[0] - skin[0]) * 0.5, m[1] - skin[1], m[2] - skin[2]) : 0));
   if (!dE.some((v) => v > 30)) return;
   for (let k = myNails.length - 1; k >= 0; k--) if (dE[k] < 15) myNails.splice(k, 1);
+}
+/** 같은 사진 손톱들 넓이 가운데 값의 1.6배 넘는 '손톱'은 SAM 이 손끝 살까지 잡은 것: 뺀다(3개 이상일 때만, 한 손 크기가 비슷하다는 가정) */
+function dropOversizeNails(): void {
+  if (myNails.length < 3) return;
+  const areas = myNails.map((m) => m.mask.reduce((a, v) => a + v, 0));
+  const med = [...areas].sort((a, b) => a - b)[areas.length >> 1];
+  for (let k = myNails.length - 1; k >= 0; k--) if (areas[k] > med * 1.6) myNails.splice(k, 1);
 }
 async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Promise<void> {
   const base = stillRGBA();
