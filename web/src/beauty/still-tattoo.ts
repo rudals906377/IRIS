@@ -356,3 +356,58 @@ export function limbRegion(m: Float32Array, W: number, H: number, rect: { x: num
   }
   return { mask, box: { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 } };
 }
+
+/** 세 점 대응(a[i] → b[i])의 아핀 변환 [m00, m01, m02, m10, m11, m12]: b = M·[x, y, 1] */
+export function affine3(a: P[], b: P[]): number[] | null {
+  const [p0, p1, p2] = a;
+  const det = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
+  if (Math.abs(det) < 1e-6) return null;
+  // a 쪽 기저의 역행렬
+  const i00 = (p2.y - p0.y) / det, i01 = -(p2.x - p0.x) / det, i10 = -(p1.y - p0.y) / det, i11 = (p1.x - p0.x) / det;
+  const row = (k: 'x' | 'y') => {
+    const d1 = b[1][k] - b[0][k], d2 = b[2][k] - b[0][k];
+    const m0 = d1 * i00 + d2 * i10, m1 = d1 * i01 + d2 * i11;
+    return [m0, m1, b[0][k] - m0 * p0.x - m1 * p0.y];
+  };
+  return [...row('x'), ...row('y')];
+}
+const apply = (M: number[], p: P): P => ({ x: M[0] * p.x + M[1] * p.y + M[2], y: M[3] * p.x + M[4] * p.y + M[5] });
+
+/**
+ * 몸통 타투(등·가슴): 어깨 두 점과 엉덩이 가운데의 대응(내 사진 → 고른 사진 아핀)으로 잉크를 옮긴다.
+ * toRef: 내 사진 좌표 → 고른 사진 좌표, fromRef: 그 반대(범위 계산용).
+ */
+export function transferTorsoInk(
+  dst: Uint8ClampedArray, W: number, H: number, skin: Float32Array, ink: InkMap, toRef: number[], fromRef: number[], amount = 1,
+): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(dst);
+  const r = ink.rect;
+  const cs = [{ x: r.x, y: r.y }, { x: r.x + r.w, y: r.y }, { x: r.x, y: r.y + r.h }, { x: r.x + r.w, y: r.y + r.h }].map((p) => apply(fromRef, p));
+  const x0 = Math.max(0, Math.floor(Math.min(...cs.map((p) => p.x)))), x1 = Math.min(W - 1, Math.ceil(Math.max(...cs.map((p) => p.x))));
+  const y0 = Math.max(0, Math.floor(Math.min(...cs.map((p) => p.y)))), y1 = Math.min(H - 1, Math.ceil(Math.max(...cs.map((p) => p.y))));
+  if (x1 <= x0 || y1 <= y0) return out;
+  const L = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) L[i] = 0.299 * dst[i * 4] + 0.587 * dst[i * 4 + 1] + 0.114 * dst[i * 4 + 2];
+  const Lb = boxBlur(L, W, H, Math.max(2, Math.round((x1 - x0) * 0.02)));
+  const o = new Float32Array(4), acc = new Float32Array(4);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const i = y * W + x;
+    const k = Math.max(0, Math.min(1, (skin[i] - 0.3) / 0.4));
+    if (k <= 0) continue;
+    acc.fill(0);
+    for (const [ox, oy] of SUB) {
+      const p = apply(toRef, { x: x + ox, y: y + oy });
+      sampleInk(ink, p.x, p.y, o);
+      for (let c = 0; c < 4; c++) acc[c] += (c < 3 ? o[c] * o[3] : o[3]) / 4;
+    }
+    const a = Math.min(1, acc[3] * amount) * k;
+    if (a < 0.004) continue;
+    const hl = Math.max(0, L[i] - Lb[i]);
+    for (let c = 0; c < 3; c++) {
+      const T = acc[c] / Math.max(1e-6, acc[3]);
+      const v = dst[i * 4 + c];
+      out[i * 4 + c] = v + (v * Math.min(1, T) + hl * 0.7 - v) * a;
+    }
+  }
+  return out;
+}

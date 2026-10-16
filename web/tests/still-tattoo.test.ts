@@ -84,3 +84,20 @@ test('몸 분할이 놓친 사진: 관절점 둘레 피부색으로 팔을 잡�
   assert.equal(m[100 * W + 100], 1, '잉크 줄(메움)');
   assert.equal(m[100 * W + 160], 0, '배경');
 });
+
+test('몸통 타투: 세 점 아핀 대응과 옮기기(피부에만)', async () => {
+  const { affine3, transferTorsoInk } = await import('../src/beauty/still-tattoo.ts');
+  // 고른 사진 → 내 사진: 2배 확대 + (10, 20) 이동
+  const a = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 10 }];
+  const b = a.map((p) => ({ x: p.x * 2 + 10, y: p.y * 2 + 20 }));
+  const M = affine3(a, b)!;
+  assert.ok(Math.abs(M[0] * 5 + M[1] * 7 + M[2] - 20) < 1e-9 && Math.abs(M[3] * 5 + M[4] * 7 + M[5] - 34) < 1e-9);
+  assert.equal(affine3([{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 2 }], b), null);
+  // 고른 사진 (20, 20) 둘레 잉크 점 → 내 사진 (50, 60)
+  const ink: InkMap = { rgba: new Uint8ClampedArray(40 * 40 * 4), w: 40, h: 40, rect: { x: 0, y: 0, w: 40, h: 40 } };
+  for (let y = 18; y < 23; y++) for (let x = 18; x < 23; x++) { const o = (y * 40 + x) * 4; ink.rgba[o] = ink.rgba[o + 1] = ink.rgba[o + 2] = 30; ink.rgba[o + 3] = 255; }
+  const W = 120, H = 120, img = new Uint8ClampedArray(W * H * 4).fill(200), skin = new Float32Array(W * H).fill(1);
+  const out = transferTorsoInk(img, W, H, skin, ink, affine3(b, a)!, M);
+  assert.ok(out[(60 * W + 50) * 4] < 100, `잉크 자리 ${out[(60 * W + 50) * 4]}`);
+  assert.equal(out[(20 * W + 20) * 4], 200);
+});

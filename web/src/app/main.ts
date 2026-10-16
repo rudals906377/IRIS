@@ -39,7 +39,7 @@ import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
 import { extractDesign, findInk, type InkSource } from '../beauty/tattoo-extract.ts';
-import { armStrip, inkOnArm, limbRegion, measureHalfWidth, stripPoint, transferArmInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
+import { affine3, armStrip, inkOnArm, limbRegion, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
 
@@ -649,7 +649,11 @@ async function refHairDist(): Promise<HairDist | null> {
 /** user: ✂️ 로 직접 고른 영역(그 부분만 옮기고 팔 전체로 넓히지 않는다) */
 type RefTat = { img: ImageBitmap | HTMLImageElement; w: number; h: number; design: TattooDesign; rect: { x: number; y: number; w: number; h: number }; src: InkSource; user?: boolean };
 let refTat: RefTat | null = null as RefTat | null;
-type TatPlan = { dst: Arm; skin: Float32Array; ink: InkMap; src: Arm | ((lambda: number, s: number) => { x: number; y: number } | null) };
+type TatPlan =
+  | { dst: Arm; skin: Float32Array; ink: InkMap; src: Arm | ((lambda: number, s: number) => { x: number; y: number } | null); torso?: undefined }
+  | { torso: { toRef: number[]; fromRef: number[] }; skin: Float32Array; ink: InkMap };
+/** 팔 대 팔로 못 옮긴 까닭(사용자 안내) */
+let tatNote = '';
 let tatPlan: { ref: RefTat; mine: ImageBitmap; p: Promise<TatPlan | null> } | null = null;
 /** 사진에 구운 팔 타투가 있으면 실시간 타투는 끈다 */
 function tatBaked(): boolean {
@@ -679,6 +683,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
   if (!ref || !mine) return null;
   if (tatPlan?.ref !== ref || tatPlan.mine !== mine) {
     tatPlanOk = false;
+    tatNote = '';
     const p = (async (): Promise<TatPlan | null> => {
       photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
       setStatus('타투가 팔 어디에 있는지 보는 중…');
@@ -695,6 +700,63 @@ async function armTattooPlan(): Promise<TatPlan | null> {
       let ink: InkMap = { rgba: dc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, dc.width, dc.height).data, w: dc.width, h: dc.height, rect: ref.rect };
       let total = 0;
       for (let i = 3; i < ink.rgba.length; i += 4) if (ink.rgba[i] >= 32) total += ink.rgba[i] / 255;
+      // 몸통 타투(등·가슴): 잉크가 고른 사진 어깨~엉덩이 안에 절반 넘게 있으면 어깨·엉덩이 대응으로 옮긴다
+      const torsoPts = (pp: { p: { x: number; y: number }[]; vis: number[] }) => {
+        const P = pp.p, sw = Math.hypot(P[11].x - P[12].x, P[11].y - P[12].y);
+        const mid = { x: (P[11].x + P[12].x) / 2, y: (P[11].y + P[12].y) / 2 };
+        // 엉덩이가 안 보이면 어깨 가운데에서 어깨선에 수직으로 어깨 폭만큼 아래
+        const hipsOk = Math.min(pp.vis[23], pp.vis[24]) > 0.5;
+        let down = { x: -(P[12].y - P[11].y) / sw, y: (P[12].x - P[11].x) / sw };
+        if (down.y < 0) down = { x: -down.x, y: -down.y };
+        const third = hipsOk ? { x: (P[23].x + P[24].x) / 2, y: (P[23].y + P[24].y) / 2 } : { x: mid.x + down.x * sw * 1.3, y: mid.y + down.y * sw * 1.3 };
+        return { pts: [P[11], P[12], third], hipsOk, sw };
+      };
+      if (rp && Math.min(rp.vis[11], rp.vis[12]) > 0.5) {
+        const tp = torsoPts(rp);
+        const poly = [rp.p[11], rp.p[12], tp.pts[2]];
+        // 어깨·엉덩이 사다리꼴(어깨 폭 15% 넓힘) 안 잉크
+        const c = { x: (poly[0].x + poly[1].x + poly[2].x) / 3, y: (poly[0].y + poly[1].y + poly[2].y) / 3 };
+        const P4 = [rp.p[12], rp.p[11], { x: tp.pts[2].x + (rp.p[11].x - rp.p[12].x) / 2, y: tp.pts[2].y + (rp.p[11].y - rp.p[12].y) / 2 }, { x: tp.pts[2].x - (rp.p[11].x - rp.p[12].x) / 2, y: tp.pts[2].y - (rp.p[11].y - rp.p[12].y) / 2 }]
+          .map((q) => ({ x: c.x + (q.x - c.x) * 1.15, y: c.y + (q.y - c.y) * 1.15 }));
+        const inside = (x: number, y: number) => {
+          let ins = false;
+          for (let i = 0, j = 3; i < 4; j = i++) {
+            const a = P4[i], b = P4[j];
+            if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) ins = !ins;
+          }
+          return ins;
+        };
+        let inT = 0;
+        for (let y = 0; y < ink.h; y++) for (let x = 0; x < ink.w; x++) {
+          const a = ink.rgba[(y * ink.w + x) * 4 + 3];
+          if (a < 32) continue;
+          if (inside(ref.rect.x + ((x + 0.5) / ink.w) * ref.rect.w, ref.rect.y + ((y + 0.5) / ink.h) * ref.rect.h)) inT += a / 255;
+        }
+        dbgTat({ torsoFrac: inT / Math.max(1, total), refNose: rp.vis[0] });
+        if (inT > total * 0.5) {
+          const mc = stillCanvas();
+          const mp = await photoAnalyzer.pose(mc);
+          const ms = await photoAnalyzer.bodySkin(mc);
+          if (!mp || !ms || Math.min(mp.vis[11], mp.vis[12]) < 0.5) return null;
+          // 뒷모습(얼굴이 안 보임)은 관절점이 왼쪽·오른쪽·크기를 자주 틀려 옮기지 않는다: 앞모습끼리(가슴·쇄골)만
+          const refFace = await photoAnalyzer.faceLandmarks(rc);
+          const myFace = await photoAnalyzer.faceLandmarks(mc);
+          dbgTat({ refFace: !!refFace, myFace: !!myFace });
+          if (!refFace || !myFace) {
+            tatNote = !refFace ? '등 타투예요. 등 자리로 옮기기는 아직 안 돼서 팔에 미리 보여 드려요(📍 자리 고르기로 옮길 수 있어요)' : '내 사진에서 얼굴·어깨가 보여야 가슴 타투를 그 자리에 옮길 수 있어요(지금은 팔에 미리 보기)';
+            return null;
+          }
+          // 어깨를 그림 왼쪽→오른쪽으로 정렬해 크기·회전·위치만 맞춘다(도안이 늘어나지 않게)
+          const frame = (pp: { p: { x: number; y: number }[] }) => {
+            const [A, B] = [pp.p[11], pp.p[12]].sort((u, v) => u.x - v.x);
+            return [A, B, { x: A.x - (B.y - A.y), y: A.y + (B.x - A.x) }];
+          };
+          const a = frame(mp), b = frame(rp);
+          const toRef = affine3(a, b), fromRef = affine3(b, a);
+          if (!toRef || !fromRef) return null;
+          return { torso: { toRef, fromRef }, skin: ms, ink };
+        }
+      }
       // 팔 점을 못 찾으면(몸이 안 나온 팔 사진) 아래 '띠' 방식으로
       const legs = /^(thigh|calf)/.test(tattoo.place);
       const rArms = rp ? armsOf(rp, rs, ref.w, ref.h, legs) : null;
@@ -708,6 +770,8 @@ async function armTattooPlan(): Promise<TatPlan | null> {
       if (!poseOk) {
         // 가까운 팔 사진(몸이 안 나옴): 피부·잉크 영역 모양에서 팔 축·굵기를 읽는다. 팔 타투라고 읽힌 경우만
         if (!/^(forearm|upperArm|thigh|calf)/.test(tattoo.place)) return null;
+        // ✂️ 로 일부만 고른 도안은 팔 어디인지 알 수 없다: 실시간 타투(📍 자리 고르기)로
+        if (ref.user) return null;
         // 자동으로 고른 도안 영역은 소매 일부만일 때가 많다: 그 영역이 있는 팔(피부·잉크 덩어리) 전체로 넓혀 다시 뽑는다
         const found = findInk(ref.src);
         const m = new Float32Array(ref.w * ref.h);
@@ -872,7 +936,9 @@ async function updateStillHair(): Promise<void> {
       }
       if (plan) {
         setStatus('타투를 팔에 옮기는 중…');
-        out = transferArmInk(out, base.w, base.h, plan.dst, plan.skin, plan.ink, plan.src, false, Math.min(1, strength));
+        out = plan.torso
+          ? transferTorsoInk(out, base.w, base.h, plan.skin, plan.ink, plan.torso.toRef, plan.torso.fromRef, Math.min(1, strength))
+          : transferArmInk(out, base.w, base.h, plan.dst, plan.skin, plan.ink, plan.src, false, Math.min(1, strength));
       }
       const bmp = await createImageBitmap(new ImageData(out as unknown as Uint8ClampedArray<ArrayBuffer>, base.w, base.h));
       if (stale()) return;
@@ -890,6 +956,8 @@ async function updateStillHair(): Promise<void> {
   } finally {
     if (stillHairBusy === job) stillHairBusy = null;
   }
+  // 몸통 타투를 반대쪽(앞/뒤) 사진에 넣으려던 경우 안내
+  if (tatOn && !plan && tatNote) setStatus(tatNote);
 }
 
 /** 처리 해상도의 원본 사진 RGBA(한 번만) */
