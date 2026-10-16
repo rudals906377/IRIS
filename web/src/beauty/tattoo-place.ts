@@ -4,7 +4,7 @@
 
 import { add, dist, lerp, norm, perp, scale, sub, type Vec2 } from '../engine/math.ts';
 
-export type TattooPlace = 'forearmL' | 'forearmR' | 'upperArmL' | 'upperArmR' | 'neckL' | 'neckR' | 'chest';
+export type TattooPlace = 'forearmL' | 'forearmR' | 'upperArmL' | 'upperArmR' | 'neckL' | 'neckR' | 'chest' | 'thighL' | 'thighR' | 'calfL' | 'calfR';
 
 /** L/R은 사람 기준(정면 영상에서 사람 왼쪽 = 이미지 오른쪽) */
 export const PLACE_LABELS: Record<TattooPlace, string> = {
@@ -15,11 +15,16 @@ export const PLACE_LABELS: Record<TattooPlace, string> = {
   neckL: '목 왼쪽',
   neckR: '목 오른쪽',
   chest: '쇄골 아래',
+  thighL: '왼 허벅지',
+  thighR: '오른 허벅지',
+  calfL: '왼 종아리',
+  calfR: '오른 종아리',
 };
 
 /** MediaPipe Pose 번호. 100번대는 얼굴 점에서 가져와 넣는 보조점(턱 끝, 턱선 양쪽) */
 export const POSE = {
   nose: 0, earL: 7, earR: 8, shoulderL: 11, shoulderR: 12, elbowL: 13, elbowR: 14, wristL: 15, wristR: 16,
+  hipL: 23, hipR: 24, kneeL: 25, kneeR: 26, ankleL: 27, ankleR: 28,
   chin: 100, jawL: 101, jawR: 102,
 } as const;
 /** 보조점에 쓰는 얼굴 점 번호(MediaPipe 얼굴 메쉬): 턱 끝, 사람 왼쪽 턱선, 오른쪽 턱선 */
@@ -72,6 +77,19 @@ export function placeAxis(place: TattooPlace, pose: PosePoints): { a: Vec2; b: V
       if (!has(s, e)) return null;
       // 어깨점은 관절 중심이라 도안이 어깨 위로 올라가지 않게 조금 아래에서 시작
       return { a: lerp(P[s], P[e], 0.12), b: P[e], widthRatio: 0.4, cylinder: true, conf: V(s, e) };
+    }
+    case 'thighL':
+    case 'thighR': {
+      const [hp, k] = place === 'thighL' ? [POSE.hipL, POSE.kneeL] : [POSE.hipR, POSE.kneeR];
+      if (!has(hp, k)) return null;
+      // 엉덩이 관절점은 골반 안쪽이라 조금 아래에서 시작
+      return { a: lerp(P[hp], P[k], 0.12), b: P[k], widthRatio: 0.45, cylinder: true, conf: V(hp, k) };
+    }
+    case 'calfL':
+    case 'calfR': {
+      const [k, an] = place === 'calfL' ? [POSE.kneeL, POSE.ankleL] : [POSE.kneeR, POSE.ankleR];
+      if (!has(k, an)) return null;
+      return { a: P[k], b: P[an], widthRatio: 0.3, cylinder: true, conf: V(k, an) };
     }
     case 'neckL':
     case 'neckR': {
@@ -224,7 +242,7 @@ export function measureLimbWidth(
   return widths[Math.floor(widths.length / 2)];
 }
 
-export const ALL_PLACES: TattooPlace[] = ['forearmL', 'forearmR', 'upperArmL', 'upperArmR', 'neckL', 'neckR', 'chest'];
+export const ALL_PLACES: TattooPlace[] = ['forearmL', 'forearmR', 'upperArmL', 'upperArmR', 'neckL', 'neckR', 'chest', 'thighL', 'thighR', 'calfL', 'calfR'];
 
 /**
  * 화면에서 누른 점(px) → 가장 가까운 부위와 그 안의 위치. 부위 굵기 안쪽(여유 30%)을 누른 경우만.

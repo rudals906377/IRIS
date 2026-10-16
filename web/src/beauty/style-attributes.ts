@@ -188,6 +188,8 @@ export function hintsFromStyleAI(r: StyleAIResult): StyleHints {
         '목·귀뒤': 'neckL',
       };
       if (place && pm[place]) t.place = pm[place];
+      else if (place && /허벅지/.test(place)) t.place = 'thighL';
+      else if (place && /종아리|정강이|발목|다리/.test(place)) t.place = 'calfL';
       const size = get('size');
       if (size === '미니') t.size = 0.15;
       else if (size === '스몰') t.size = 0.3;

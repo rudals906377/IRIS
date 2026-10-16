@@ -63,3 +63,24 @@ test('팔 대 팔: 고른 사진 팔 중간의 잉크 줄이 내 팔(기울어�
   const noSkin = new Float32Array(W * H);
   assert.equal(transferArmInk(img, W, H, dst, noSkin, ink, src)[(40 * W + 120) * 4], 200);
 });
+
+test('몸 분할이 놓친 사진: 관절점 둘레 피부색으로 팔을 잡고 잉크 선 구멍은 메운다', async () => {
+  const { poseSkin } = await import('../src/beauty/tattoo-extract.ts');
+  const W = 200, H = 200, d = new Uint8ClampedArray(W * H * 4);
+  // 배경: 회색, 팔(어깨 (100,40) → 손목 (100,160), 폭 30): 피부색, 가운데 가로 잉크 줄
+  for (let i = 0; i < W * H; i++) { d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = 120; d[i * 4 + 3] = 255; }
+  for (let y = 40; y < 160; y++) for (let x = 85; x < 115; x++) {
+    const o = (y * W + x) * 4;
+    const ink = y >= 98 && y < 102;
+    d[o] = ink ? 40 : 215; d[o + 1] = ink ? 40 : 170; d[o + 2] = ink ? 45 : 140;
+  }
+  const pose = Array.from({ length: 33 }, () => ({ x: -100, y: -100 }));
+  const vis = new Array(33).fill(0);
+  pose[11] = { x: 100, y: 40 }; pose[13] = { x: 100, y: 100 }; pose[15] = { x: 100, y: 160 };
+  pose[12] = { x: 40, y: 40 };
+  vis[11] = vis[13] = vis[15] = vis[12] = 1;
+  const m = poseSkin(d, W, H, pose, vis, []);
+  assert.equal(m[70 * W + 100], 1, '팔');
+  assert.equal(m[100 * W + 100], 1, '잉크 줄(메움)');
+  assert.equal(m[100 * W + 160], 0, '배경');
+});

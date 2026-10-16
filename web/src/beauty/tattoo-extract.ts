@@ -8,6 +8,8 @@
 // 4) 도안 만들기: 픽셀마다 잉크 아래의 피부색(주변 피부로 추정)으로 나눈 '투과율'을 구해,
 //    내 피부에 곱하면 사진과 같은 비율로 어두워지고 색 잉크는 색이 남는다(RGB = 잉크 색, A = 잉크 양).
 
+import { rgb2lab } from './still-hair.ts';
+
 export interface InkSource {
   w: number;
   h: number;
@@ -285,4 +287,65 @@ export function extractDesign(src: InkSource, rect?: Rect | null, maxSide = 512)
     }
   }
   return { rgba, w: tw, h: th, rect: R, inkMask };
+}
+
+/**
+ * 몸 분할이 사람을 놓친 사진(복잡한 배경 등)용 피부 확률: 몸 관절점 둘레(팔·다리·몸통·목)에서
+ * 피부색(얼굴 볼, 없으면 팔다리 가운데의 피부다운 색)과 색감이 가까운 곳. 잉크 선이 구멍이 되지 않게 닫기(넓혔다 줄이기)를 한다.
+ * pose: MediaPipe Pose 33점(px), vis: 보임 정도. cheeks: 얼굴 볼 점(px, 없으면 빈 배열)
+ */
+export function poseSkin(d: Uint8ClampedArray, w: number, h: number, pose: { x: number; y: number }[], vis: number[], cheeks: { x: number; y: number }[]): Float32Array {
+  const lab = new Float32Array(3);
+  const sampleAt = (p: { x: number; y: number }, out: number[][]) => {
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const x = Math.round(p.x + dx), y = Math.round(p.y + dy);
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      const o = (y * w + x) * 4;
+      rgb2lab(d[o], d[o + 1], d[o + 2], lab);
+      out.push([lab[0], lab[1], lab[2]]);
+    }
+  };
+  const SEGS = [[11, 13], [13, 15], [12, 14], [14, 16], [23, 25], [25, 27], [24, 26], [26, 28]];
+  let samples: number[][] = [];
+  for (const c of cheeks) sampleAt(c, samples);
+  // 볼이 없으면 팔다리 가운데에서, 피부다운 색만
+  if (samples.length < 20) {
+    for (const [a, b] of SEGS) if ((vis[a] ?? 0) > 0.5 && (vis[b] ?? 0) > 0.5) sampleAt({ x: (pose[a].x + pose[b].x) / 2, y: (pose[a].y + pose[b].y) / 2 }, samples);
+    samples = samples.filter(([L, a, b]) => L > 20 && L < 95 && a > 3 && a < 32 && b > 4 && b < 38);
+  }
+  if (samples.length < 10) return new Float32Array(w * h);
+  const med = (k: number) => samples.map((s) => s[k]).sort((p, q) => p - q)[Math.floor(samples.length / 2)];
+  const a0 = med(1), b0 = med(2);
+  // 둘레 제한: 관절 마디 캡슐 + 몸통
+  const sw = Math.hypot(pose[11].x - pose[12].x, pose[11].y - pose[12].y) || Math.min(w, h) * 0.2;
+  const near = new Uint8Array(w * h);
+  const capsule = (A: { x: number; y: number }, B: { x: number; y: number }, r: number) => {
+    const x0 = Math.max(0, Math.floor(Math.min(A.x, B.x) - r)), x1 = Math.min(w - 1, Math.ceil(Math.max(A.x, B.x) + r));
+    const y0 = Math.max(0, Math.floor(Math.min(A.y, B.y) - r)), y1 = Math.min(h - 1, Math.ceil(Math.max(A.y, B.y) + r));
+    const dx = B.x - A.x, dy = B.y - A.y, L2 = dx * dx + dy * dy || 1;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const t = Math.max(0, Math.min(1, ((x - A.x) * dx + (y - A.y) * dy) / L2));
+      if ((x - A.x - t * dx) ** 2 + (y - A.y - t * dy) ** 2 <= r * r) near[y * w + x] = 1;
+    }
+  };
+  for (const [a, b] of SEGS) if ((vis[a] ?? 0) > 0.3 && (vis[b] ?? 0) > 0.3) capsule(pose[a], pose[b], sw * (a >= 23 ? 0.32 : 0.24));
+  // 손목 너머 손, 몸통(어깨~엉덩이), 목
+  for (const [a, b] of [[15, 19], [16, 20], [11, 24], [12, 23], [11, 12], [23, 24]]) if ((vis[a] ?? 0) > 0.3 && (vis[b] ?? 0) > 0.3) capsule(pose[a], pose[b], sw * 0.3);
+  const neck = { x: (pose[11].x + pose[12].x) / 2, y: (pose[11].y + pose[12].y) / 2 };
+  capsule(neck, pose[0], sw * 0.22);
+  const raw = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    if (!near[i]) continue;
+    rgb2lab(d[i * 4], d[i * 4 + 1], d[i * 4 + 2], lab);
+    const dd = Math.hypot(lab[1] - a0, lab[2] - b0);
+    raw[i] = lab[0] > 15 && dd < 9 ? 1 : 0;
+  }
+  // 닫기: 넓혔다 줄여 잉크 선 구멍을 메운다
+  const r = Math.max(2, Math.round(Math.min(w, h) * 0.012));
+  const grow = boxBlur(raw, w, h, r);
+  for (let i = 0; i < grow.length; i++) grow[i] = grow[i] > 0.02 ? 1 : 0;
+  const shrink = boxBlur(grow, w, h, r);
+  const out = new Float32Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = near[i] && shrink[i] > 0.98 ? 1 : 0;
+  return out;
 }

@@ -262,7 +262,9 @@ export class BeautyEngine {
     const p: PosePoints['p'] = {};
     const vis: PosePoints['vis'] = {};
     if (lm) {
-      for (let i = 0; i <= 16 && i < lm.length; i++) {
+      // 0~16: 얼굴·팔, 23~28: 엉덩이·무릎·발목(다리 타투)
+      for (let i = 0; i <= 28 && i < lm.length; i++) {
+        if (i > 16 && i < 23) continue;
         let f = this.poseFilters.get(i);
         if (!f) {
           f = new PointFilter({ minCutoff: 1.0, beta: 0.02, dCutoff: 1.0 });
@@ -274,7 +276,7 @@ export class BeautyEngine {
       this.poseSeen = t;
     } else if (this.lastPose && t - this.poseSeen <= 300) {
       // 잠깐 놓치면 마지막 관절점을 유지
-      for (let i = 0; i <= 16; i++) {
+      for (let i = 0; i <= 28; i++) {
         if (this.lastPose.p[i]) {
           p[i] = this.lastPose.p[i];
           vis[i] = this.lastPose.vis[i];
