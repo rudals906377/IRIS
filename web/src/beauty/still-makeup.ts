@@ -159,6 +159,22 @@ export function transferMakeup(
     const at = (k: number) => { const p = dp[k]; const i = Math.round(p.y) * w + Math.round(p.x); return { V: +V[i].toFixed(2), Cf: +Cf[i].toFixed(2), my: [0, 1, 2].map((c) => +myLow[c][i].toFixed(1)), rf: [0, 1, 2].map((c) => +rfLow[c][i].toFixed(1)), D: [0, 1, 2].map((c) => +D[c][i].toFixed(1)) }; };
     Object.assign(dbg, { amt, base: { my: [myBase[1][0], myBase[2][0]], rf: [rfBase[1][0], rfBase[2][0]] }, cheekR: at(205), cheekL: at(425), lip: at(14), nose: at(6), npick: pick.length });
   }
+  // 아이라인·속눈썹: 고른 사진에서 눈두덩 평균(얼굴 폭 5%)보다 어두운 정도를 내 눈두덩 평균 위에 놓는다(내 속눈썹이 더 어두우면 그대로)
+  // 주근깨: 피부 평균(얼굴 폭 2%)보다 뚜렷이(L 2.5 넘게) 어두운 작은 점만(옮기면서 흐려지므로 2배)
+  const rfLid = wblur(rfL[0], V, w, h, rf(0.05)), myLid = wblur(myL[0], V, w, h, rf(0.05));
+  const rfSkinMean = wblur(rfL[0], V, w, h, rf(0.02));
+  // 주근깨는 '둥근 점'만: 밝기 곡률(헤시안)의 두 고윳값이 모두 크면 점, 하나만 크면 선(가닥 머리카락·손가락 가장자리·주름)
+  const dots = dotMask(rfL[0], w, h);
+  // 콧구멍도 둥글고 어두워 점으로 잡힌다: 코 아래(콧방울·인중 위) 둘레는 뺀다
+  {
+    const nb = [64, 98, 240, 2, 460, 327, 294].map((k) => dp[k]);
+    let nx0 = Infinity, ny0 = Infinity, nx1 = -Infinity, ny1 = -Infinity;
+    for (const p of nb) { nx0 = Math.min(nx0, p.x); ny0 = Math.min(ny0, p.y); nx1 = Math.max(nx1, p.x); ny1 = Math.max(ny1, p.y); }
+    const mg = fw * 0.06;
+    for (let y = Math.max(0, Math.floor(ny0 - mg)); y <= Math.min(h - 1, Math.ceil(ny1 + mg)); y++) {
+      for (let x = Math.max(0, Math.floor(nx0 - mg)); x <= Math.min(w - 1, Math.ceil(nx1 + mg)); x++) dots[y * w + x] = 0;
+    }
+  }
   // ⑤ 옮기기
   const o = new Uint8ClampedArray(4);
   for (let i = 0; i < n; i++) {
@@ -172,11 +188,36 @@ export function transferMakeup(
     const a = myL[1][i] + D[1][i] * mAB, b = myL[2][i] + D[2][i] * mAB;
     // 아이라인·속눈썹(눈가의 어두운 잔무늬), 입술 광(입술의 밝은 잔무늬)
     const det = (rfL[0][i] - rfLow[0][i]) * keep * Vb[i];
-    L += amt.eye * eyeM[i] * Math.min(0, det) * 0.9 + amt.lip * lipM[i] * Math.max(0, det) * 0.6;
+    L += amt.lip * lipM[i] * Math.max(0, det) * 0.6;
+    // 아이라인: 고른 사진의 '눈두덩보다 어두운 정도'를 내 눈두덩에(어둡게만)
+    const liner = myLid[i] + Math.min(0, rfL[0][i] - rfLid[i]);
+    const we = amt.eye * eyeM[i] * keep * Vb[i];
+    if (we > 0.002 && liner < L) L += (liner - L) * we;
+    // 주근깨·점: 피부(눈가·입술 밖)에서 뚜렷한 작은 어두운 점
+    const fr = rfL[0][i] - rfSkinMean[i] + 2.5;
+    if (fr < 0 && dots[i] > 0) L += fr * 2 * dots[i] * amt.skin * keep * Vb[i] * (1 - eyeM[i]) * (1 - lipM[i]);
     lab2rgb(Math.max(0, Math.min(100, L)), a, b, o, 0);
     const X = (i % w) + x0, Y = Math.floor(i / w) + y0;
     const q = (Y * W + X) * 4;
     out[q] = o[0]; out[q + 1] = o[1]; out[q + 2] = o[2];
   }
   return out;
+}
+
+/** 어두운 둥근 점(주근깨) 가중치 0~1: 살짝 흐린 밝기의 헤시안이 양의 정부호(둘레보다 오목)이고 두 방향 곡률이 비슷한 곳, 점 크기만큼 넓힘 */
+export function dotMask(L: Float32Array, w: number, h: number): Float32Array {
+  const S = boxBlur(boxBlur(L, w, h, 1), w, h, 1);
+  const m = new Float32Array(w * h);
+  for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+    const i = y * w + x;
+    const hxx = S[i + 2] - 2 * S[i] + S[i - 2], hyy = S[i + 2 * w] - 2 * S[i] + S[i - 2 * w];
+    const hxy = (S[i + 2 + 2 * w] - S[i + 2 - 2 * w] - S[i - 2 + 2 * w] + S[i - 2 - 2 * w]) / 4;
+    const tr = hxx + hyy, dd = Math.sqrt((hxx - hyy) ** 2 + 4 * hxy * hxy);
+    const lmin = (tr - dd) / 2, lmax = (tr + dd) / 2;
+    // 오목(둘레보다 어두운 점) + 둥근 정도(작은 곡률이 큰 곡률의 40% 넘게) + 뚜렷함
+    if (lmin > 0.6 && lmin > 0.4 * lmax) m[i] = Math.min(1, lmin / 2);
+  }
+  const g = boxBlur(m, w, h, 2);
+  for (let i = 0; i < g.length; i++) g[i] = Math.min(1, g[i] * 4);
+  return g;
 }

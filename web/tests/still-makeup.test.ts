@@ -54,3 +54,16 @@ test('메이크업: 고른 사진 볼의 블러셔(붉은 기)가 내 볼로, �
   const other = (130 + 135 * W) * 4;
   assert.ok(Math.abs(out[other + 1] - my[other + 1]) < 8, `반대 볼 ${out[other + 1]}`);
 });
+
+test('주근깨 찾기: 둥근 어두운 점은 잡고, 가는 선(머리카락·손가락 가장자리)은 안 잡는다', async () => {
+  const { dotMask } = await import('../src/beauty/still-makeup.ts');
+  const w = 80, h = 40, L = new Float32Array(w * h).fill(70);
+  // 왼쪽: 지름 4px 점, 오른쪽: 세로로 긴 선(폭 2px)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if ((x - 20) ** 2 + (y - 20) ** 2 <= 4) L[y * w + x] = 50;
+    if (x >= 59 && x <= 60) L[y * w + x] = 50;
+  }
+  const m = dotMask(L, w, h);
+  assert.ok(m[20 * w + 20] > 0.5, `점 ${m[20 * w + 20]}`);
+  assert.ok(m[20 * w + 60] < 0.2, `선 ${m[20 * w + 60]}`);
+});
