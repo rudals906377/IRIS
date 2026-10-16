@@ -1313,7 +1313,8 @@ async function nailsByColor(
       const r = await sam.segment(b.x, b.y);
       let area = 0;
       for (let i = 0; i < r.mask.length; i++) area += r.mask[i];
-      if (r.score < 0.6 || area < w * h * 0.002 || area > w * h * 0.08) continue;
+      // 작은 손톱(손이 사진의 일부)도: 최소 넓이는 사진의 0.06%(모양·대비로 거른다)
+      if (r.score < 0.6 || area < w * h * 0.0006 || area > w * h * 0.08) continue;
       hullFill(r.mask, w, h);
       const f = nailFrame(r.mask, w, h, null, rgba);
       if (!f) continue;
@@ -1456,6 +1457,7 @@ async function ensureNailsOnce(): Promise<void> {
   // (빨간 매니큐어 손톱 넷 중 둘만 바뀌면 섞여 보여 어색하다)
   if (myNails.length && myNails.length < 10) await moreNailsLikeMine(handsMine);
   // 손 점으로 하나도 못 찾았으면(가까이 찍은 손) 색으로: 매니큐어 바른 손톱은 피부와 색이 뚜렷이 다르다
+  const colorFound = !myNails.length;
   if (!myNails.length) {
     const base = stillRGBA();
     // 손 점으로 찾을 때와 같은 기준: 사진의 3% 넘는 덩어리는 손톱이 아니고, 손이 잡혔으면 손 둘레(손 크기 50% 여백: 서로 낀 손은 점이 어긋난다) 안만
@@ -1478,6 +1480,8 @@ async function ensureNailsOnce(): Promise<void> {
       }
     }
   }
+  // 색으로 몇 개만 찾았어도(서로 낀 손) 그 손톱 색으로 나머지를 더 찾는다
+  if (colorFound && myNails.length && myNails.length < 10) await moreNailsLikeMine(handsMine);
   dropSkinNails();
   dropOversizeNails();
   setStatus(myNails.length ? '빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요' : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');
