@@ -212,6 +212,9 @@ export function recolorHair(
   const wr = 0.85 * hl;
   // ① 픽셀마다 순위(0~1)
   const U = new Float32Array(w * h).fill(-1);
+  // 내 머리 밝기 분포 위쪽(97%)보다 훨씬 밝은 픽셀은 머리카락이 아니라 가르마 두피·배경일 때가 많다(알파 줄일 몫, 0~1)
+  const over = new Float32Array(w * h);
+  const qHi = mine.L[Math.round(Q * 0.97)], qMid = mine.L[Q / 2];
   for (let i = 0; i < w * h; i++) {
     if (alpha[i] * amt < 0.004) continue;
     const o = i * 4;
@@ -223,6 +226,7 @@ export function recolorHair(
       Lsrc += ((blur2[i] - luma[i]) / 255) * 100 * dark * lift;
     }
     U[i] = quantilePos(mine.L, Lsrc) / Q;
+    if (lift > 0) over[i] = Math.max(0, Math.min(1, ((lab[0] - qHi) / Math.max(4, qHi - qMid) - 0.5) / 1));
     if (ribbons) {
       // 리본 위쪽 일부만 밝은 가닥으로(위로만 민다: 어둡게 누르면 단색 머리에 검은 얼룩이 생긴다)
       const r = Math.max(0, Math.min(1, (ribbons[i] - 0.15) / 0.4));
@@ -260,7 +264,8 @@ export function recolorHair(
   const aBlur = boxBlur(alpha, w, h, 3);
   for (let i = 0; i < w * h; i++) {
     const a0 = luma[i] < 24 && aBlur[i] > 0.85 ? Math.max(alpha[i], aBlur[i]) : alpha[i];
-    const al = a0 * amt;
+    // 크게 밝힐 때 가르마 두피처럼 내 머리보다 훨씬 밝은 곳은 가장 밝은 머리색으로 바뀌어 하얀 솜털 얼룩이 된다 → 덜 물들인다
+    const al = a0 * amt * (1 - 0.8 * over[i]);
     if (al < 0.004 || U[i] < 0) continue;
     const o = i * 4;
     // 양 끝 분위(그림자·배경·반사가 섞인 곳)는 버리고 3%~97% 사이로 대응시킨다(검은 점·흰 점 방지)
