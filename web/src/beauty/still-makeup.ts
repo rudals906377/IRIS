@@ -219,8 +219,11 @@ export function transferMakeup(
     // 눈 안(흰자·눈동자)은 어떤 화장도 옮기지 않는다
     const keep = (1 - browM[i]) * ramp(Cf[i], 0.03, 0.15) * faceM[i] * (1 - ramp(openB[i], 0.5, 0.85));
     if (keep <= 0.002) continue;
-    const mAB = keep * Math.max(amt.skin * faceM[i], amt.lip * lipM[i], amt.eye * eyeM[i]);
-    const mL = keep * Math.min(1, amt.lip * lipM[i] + amt.eye * eyeM[i] + amt.skin * 0.2 * faceM[i] * (1 - lipM[i]) * (1 - eyeM[i]));
+    // 얼굴 위로 내려온 머리카락(피부 바탕보다 훨씬 어두운 픽셀)에는 화장 색을 입히지 않는다: 검은 앞머리가 붉게 물들었다
+    // (눈가는 속눈썹·아이라인이라 빼지 않는다. 아이라인은 아래에서 따로 옮긴다)
+    const hairK = 1 - ramp(myBase[0][i] - myL[0][i], 18, 38) * (1 - lipM[i]) * (1 - ramp(openB[i], 0.02, 0.2));
+    const mAB = keep * hairK * Math.max(amt.skin * faceM[i], amt.lip * lipM[i], amt.eye * eyeM[i]);
+    const mL = keep * hairK * Math.min(1, amt.lip * lipM[i] + amt.eye * eyeM[i] + amt.skin * 0.2 * faceM[i] * (1 - lipM[i]) * (1 - eyeM[i]));
     if (mAB <= 0.002 && mL <= 0.002) continue;
     let L = myL[0][i] + D[0][i] * mL;
     const a = myL[1][i] + D[1][i] * mAB, b = myL[2][i] + D[2][i] * mAB;
