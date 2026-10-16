@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { closeHoles, guidedFilter, hairDist, recolorHair, type HairDist } from '../beauty/still-hair.ts';
+import { closeHoles, colorGate, guidedFilter, hairDist, recolorHair, type HairDist } from '../beauty/still-hair.ts';
 import { hullFill, nailFrame, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
@@ -605,6 +605,8 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   // 아주 어두운 머리카락 덩어리는 분할·필터가 놓쳐 작은 구멍(원래 색 얼룩)이 된다 → 머리 크기에 맞춰 닫기
   const closed = closeHoles(alpha, W, H, Math.max(3, Math.round(rect.size / 90)));
   for (let i = 0; i < alpha.length; i++) alpha[i] = closed[i];
+  // 가장자리에서 내 머리색과 다른 픽셀(어두운 배경)은 뺀다
+  colorGate(rgba, alpha, coarse);
   const dist = hairDist(rgba, alpha);
   if (!dist) return null;
   mineHair = { alpha, rgba, w: W, h: H, dist };

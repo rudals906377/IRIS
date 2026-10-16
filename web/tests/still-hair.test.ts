@@ -93,3 +93,37 @@ test('분위 위치: 같은 값이 여러 분위면 그 가운데', () => {
   assert.equal(quantilePos(qs, 0), 4.5);
   assert.ok(Math.abs(quantilePos(qs, 20) - 20) < 1e-6);
 });
+
+test('색 거르기: 가장자리의 머리색과 다른 픽셀(초록 나뭇잎)은 빼고, 확실한 머리카락은 그대로', async () => {
+  const { colorGate } = await import('../src/beauty/still-hair.ts');
+  const n = 400;
+  const rgba = new Uint8ClampedArray(n * 4);
+  const alpha = new Float32Array(n).fill(1);
+  const coarse = new Float32Array(n).fill(1);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    const leaf = i >= 300;
+    rgba[o] = leaf ? 20 : 35 + (i % 7); rgba[o + 1] = leaf ? 60 : 30 + (i % 5); rgba[o + 2] = leaf ? 25 : 28 + (i % 3); rgba[o + 3] = 255;
+    if (i >= 250) coarse[i] = 0.5; // 가장자리
+  }
+  colorGate(rgba, alpha, coarse);
+  assert.equal(alpha[10], 1);
+  assert.ok(alpha[260] > 0.8, `가장자리 머리 ${alpha[260]}`);
+  assert.ok(alpha[350] < 0.2, `나뭇잎 ${alpha[350]}`);
+});
+
+test('색 거르기: 피부와 섞인 이마 잔머리(붉은 쪽)는 남긴다', async () => {
+  const { colorGate } = await import('../src/beauty/still-hair.ts');
+  const n = 300;
+  const rgba = new Uint8ClampedArray(n * 4);
+  const alpha = new Float32Array(n).fill(1);
+  const coarse = new Float32Array(n).fill(1);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    const mix = i >= 250; // 피부와 반쯤 섞인 잔머리
+    rgba[o] = mix ? 140 : 35 + (i % 7); rgba[o + 1] = mix ? 100 : 30 + (i % 5); rgba[o + 2] = mix ? 85 : 28 + (i % 3); rgba[o + 3] = 255;
+    if (i >= 250) coarse[i] = 0.5;
+  }
+  colorGate(rgba, alpha, coarse);
+  assert.ok(alpha[280] > 0.9, `잔머리 ${alpha[280]}`);
+});

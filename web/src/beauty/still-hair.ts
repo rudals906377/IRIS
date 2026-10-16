@@ -111,7 +111,7 @@ const at = (q: Float32Array, t: number): number => {
  * 내 사진의 머리카락을 고른 사진 분포로 바꾼 새 그림(RGBA). alpha: 0~1(픽셀마다), amount: 진하기(0~1.6, 1 이 사진 그대로).
  * 결 보존: 분위 대응만 쓰면 고른 사진 머리의 밝기 폭이 좁을 때(검은 머리) 결이 눌린다 → 내 사진의 잔결(주변과의 차)을 조금 되살린다.
  */
-export function recolorHair(rgba: Uint8ClampedArray, w: number, h: number, alpha: Float32Array, mine: HairDist, ref: HairDist, amount = 1): Uint8ClampedArray {
+export function recolorHair(rgba: Uint8ClampedArray, w: number, h: number, alpha: Float32Array, mine: HairDist, ref: HairDist, amount = 1, seed = 1): Uint8ClampedArray {
   const out = new Uint8ClampedArray(rgba);
   const lab = new Float32Array(3);
   const tmp = new Uint8ClampedArray(3);
@@ -129,14 +129,32 @@ export function recolorHair(rgba: Uint8ClampedArray, w: number, h: number, alpha
   const ratio = (ref.L[Q / 2] + 2) / (mine.L[Q / 2] + 2);
   const lift = Math.max(0, Math.min(1, (ratio - 1.8) / 2.2));
   const g = 1 - 0.45 * lift;
+  // 크게 밝힐 때: ① 아주 어두운 곳은 JPEG 네모 무늬가 그대로 얼룩이 되므로 주변 밝기로 대응 위치를 정하고
+  // ② 원래 결이 거의 없는(검게 뭉개진) 곳에는 머리 흐름을 따라 그린 가는 올 무늬를 더한다
+  const blur2 = lift > 0 ? boxBlur(luma, w, h, 2) : luma;
+  const mineDark = mine.L[Math.round(Q * 0.15)], mineMid = mine.L[Q / 2];
+  const strands = lift > 0.05 ? strandTexture(luma, w, h, alpha, seed) : null;
+  const local = lift > 0.05 ? boxBlur(luma.map((v, i) => (v - box[i]) ** 2), w, h, 3) : null;
+  const refSpread = ref.L[Math.round(Q * 0.9)] - ref.L[Math.round(Q * 0.1)];
   for (let i = 0; i < w * h; i++) {
     const al = alpha[i] * amt;
     if (al < 0.004) continue;
     const o = i * 4;
     rgb2lab(rgba[o], rgba[o + 1], rgba[o + 2], lab);
+    let Lsrc = lab[0];
+    if (lift > 0) {
+      // 어두울수록 주변(5px) 밝기를 더 섞는다: 루마 차이만큼 L 을 옮기는 근사
+      const dark = 1 - Math.max(0, Math.min(1, (Lsrc - mineDark) / Math.max(1, mineMid - mineDark)));
+      Lsrc += ((blur2[i] - luma[i]) / 255) * 100 * dark * lift;
+    }
     // 양 끝 분위(그림자·배경·반사가 섞인 곳)는 버리고 3%~97% 사이로 대응시킨다(검은 점·흰 점 방지)
-    const t = TRIM + Math.pow(quantilePos(mine.L, lab[0]) / Q, g) * (Q - 2 * TRIM);
+    const t = TRIM + Math.pow(quantilePos(mine.L, Lsrc) / Q, g) * (Q - 2 * TRIM);
     let L = at(ref.L, t);
+    if (strands && local) {
+      // 원래 잔결이 약한 곳일수록(표준편차 루마 3 아래) 그린 올 무늬를 세게
+      const weak = 1 - Math.max(0, Math.min(1, (Math.sqrt(local[i]) - 1.5) / 4));
+      L += strands[i] * refSpread * 0.28 * lift * weak;
+    }
     // 잔결: 내 픽셀이 주변보다 밝거나 어두운 정도(L 단위 근사)
     L += ((luma[i] - box[i]) / 255) * 100 * detail;
     lab2rgb(Math.max(0, Math.min(100, L)), at(ref.a, t), at(ref.b, t), tmp, 0);
@@ -212,4 +230,107 @@ export function closeHoles(a: Float32Array, w: number, h: number, r: number): Fl
   };
   const d = pass(pass(a, true, true), false, true);
   return pass(pass(d, true, false), false, false);
+}
+
+
+/**
+ * 머리 흐름을 따라 늘인 가는 올 무늬(−1~1 쯤, 평균 0): 잡음을 머리카락 방향으로 평균 내는 선적분 컨볼루션(LIC).
+ * 방향은 밝기 기울기의 구조 텐서로 구하고(올과 수직인 기울기 → 올 방향), 결이 없는 곳(방향이 흐린 곳)은
+ * 정수리에서 바깥으로 퍼지는 방향을 쓴다. alpha 가 있는 곳만 계산한다.
+ */
+export function strandTexture(luma: Float32Array, w: number, h: number, alpha: Float32Array, seed = 1): Float32Array {
+  const n = w * h;
+  const gx = new Float32Array(n), gy = new Float32Array(n);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x;
+    gx[i] = luma[i + 1] - luma[i - 1];
+    gy[i] = luma[i + w] - luma[i - w];
+  }
+  const r = Math.max(3, Math.round(Math.min(w, h) / 120));
+  const j11 = boxBlur(gx.map((v) => v * v), w, h, r);
+  const j22 = boxBlur(gy.map((v) => v * v), w, h, r);
+  const j12 = boxBlur(gx.map((v, i) => v * gy[i]), w, h, r);
+  // 정수리: 머리카락 상자 위쪽 가운데
+  let x0 = w, x1 = 0, y0 = h;
+  for (let i = 0; i < n; i++) if (alpha[i] > 0.5) { const x = i % w, y = (i / w) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; }
+  const crownX = (x0 + x1) / 2, crownY = y0 + (x1 - x0) * 0.15;
+  const dx = new Float32Array(n), dy = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    if (alpha[i] < 0.01) continue;
+    const a = j11[i], b = j22[i], c = j12[i];
+    const tr = a + b;
+    const coh = tr > 1e-3 ? Math.sqrt((a - b) * (a - b) + 4 * c * c) / tr : 0;
+    // 기울기 주방향 θ, 올 방향은 그에 수직
+    const th = 0.5 * Math.atan2(2 * c, a - b) + Math.PI / 2;
+    let ux = Math.cos(th), uy = Math.sin(th);
+    const px = (i % w) - crownX, py = ((i / w) | 0) - crownY;
+    const pl = Math.hypot(px, py) || 1;
+    const fx = px / pl, fy = py / pl;
+    if (ux * fx + uy * fy < 0) { ux = -ux; uy = -uy; }
+    const k = Math.max(0, Math.min(1, (coh - 0.2) / 0.4));
+    const vx = ux * k + fx * (1 - k), vy = uy * k + fy * (1 - k);
+    const vl = Math.hypot(vx, vy) || 1;
+    dx[i] = vx / vl;
+    dy[i] = vy / vl;
+  }
+  // 잡음(가는 올 굵기 1~2px) → 방향을 따라 앞뒤로 L 걸음 평균
+  let sd = seed * 2654435761 >>> 0;
+  const noise = new Float32Array(n);
+  for (let i = 0; i < n; i++) { sd = (sd * 1664525 + 1013904223) >>> 0; noise[i] = sd / 4294967296 - 0.5; }
+  const nz = boxBlur(noise, w, h, 1);
+  const L = Math.max(6, Math.round(Math.min(w, h) / 60));
+  const out = new Float32Array(n);
+  let sum = 0, sum2 = 0, cnt = 0;
+  for (let i = 0; i < n; i++) {
+    if (alpha[i] < 0.01) continue;
+    let acc = nz[i], m = 1;
+    for (const sgn of [1, -1]) {
+      let x = i % w, y = (i / w) | 0;
+      for (let k = 0; k < L; k++) {
+        const j = (Math.round(y) * w + Math.round(x));
+        if (j < 0 || j >= n) break;
+        const ddx = dx[j] || dx[i], ddy = dy[j] || dy[i];
+        x += sgn * ddx;
+        y += sgn * ddy;
+        const xi = Math.round(x), yi = Math.round(y);
+        if (xi < 0 || yi < 0 || xi >= w || yi >= h) break;
+        acc += nz[yi * w + xi];
+        m++;
+      }
+    }
+    out[i] = acc / m;
+    sum += out[i]; sum2 += out[i] * out[i]; cnt++;
+  }
+  const mean = sum / Math.max(1, cnt);
+  const sdv = Math.sqrt(Math.max(1e-9, sum2 / Math.max(1, cnt) - mean * mean));
+  for (let i = 0; i < n; i++) if (alpha[i] >= 0.01) out[i] = Math.max(-2.5, Math.min(2.5, (out[i] - mean) / sdv)) / 2.5;
+  return out;
+}
+
+/**
+ * 머리카락 알파의 가장자리(분할이 확실하지 않은 곳)에서 '내 머리카락 색'과 다른 픽셀을 뺀다(제자리 수정).
+ * 어두운 머리 + 어두운 배경(나뭇잎·벽)에서 알파가 배경으로 번져, 밝게 염색하면 배경까지 금발이 되던 것을 막는다.
+ * sure: 확실한 머리카락(분할 확률)이 이 값 이상인 곳은 건드리지 않는다.
+ */
+export function colorGate(rgba: Uint8ClampedArray, alpha: Float32Array, coarse: Float32Array, sure = 0.85): void {
+  const lab = new Float32Array(3);
+  let n = 0, sa = 0, sb = 0, saa = 0, sbb = 0;
+  for (let i = 0; i < alpha.length; i += 2) {
+    if (alpha[i] < 0.95 || coarse[i] < sure) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    n++; sa += lab[1]; sb += lab[2]; saa += lab[1] * lab[1]; sbb += lab[2] * lab[2];
+  }
+  if (n < 100) return;
+  const ma = sa / n, mb = sb / n;
+  const da = Math.max(3, Math.sqrt(Math.max(0, saa / n - ma * ma)));
+  const db = Math.max(3, Math.sqrt(Math.max(0, sbb / n - mb * mb)));
+  for (let i = 0; i < alpha.length; i++) {
+    if (alpha[i] <= 0 || coarse[i] >= sure) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    // 한쪽만 본다: 머리보다 초록(a↓)·파랑(b↓) 쪽으로 벗어난 것만 뺀다(나뭇잎·하늘·푸른 벽).
+    // 피부와 섞인 이마 잔머리는 빨강·노랑(a·b↑) 쪽이고, 빛 받은 머리 끝은 밝기만 달라서 남는다
+    const d = Math.hypot(Math.max(0, (ma - lab[1]) / da), Math.max(0, (mb - lab[2]) / db));
+    const keep = Math.max(0, Math.min(1, 1 - (d - 2.5) / 2));
+    alpha[i] *= keep;
+  }
 }
