@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { boxBlur, closeHoles, colorGate, flyaways, guidedFilter, hairBands, hairCore, pureHair, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { hullFill, maskContrast, nailFrame, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
@@ -1353,6 +1353,9 @@ async function ensureNailsOnce(): Promise<void> {
       }
     }
   }
+  // 손 점으로 몇 개만 찾았으면(손가락이 겹쳐 손 점이 어긋남) 찾은 손톱 색과 비슷한 손 둘레 덩어리를 더 찾는다
+  // (빨간 매니큐어 손톱 넷 중 둘만 바뀌면 섞여 보여 어색하다)
+  if (myNails.length && myNails.length < 10) await moreNailsLikeMine(handsMine);
   // 손 점으로 하나도 못 찾았으면(가까이 찍은 손) 색으로: 매니큐어 바른 손톱은 피부와 색이 뚜렷이 다르다
   if (!myNails.length) {
     const base = stillRGBA();
@@ -1376,6 +1379,61 @@ async function ensureNailsOnce(): Promise<void> {
   setStatus(myNails.length ? '빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요' : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');
   nailGen++;
   applyAll();
+}
+async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Promise<void> {
+  const base = stillRGBA();
+  const { w, h, rgba } = base;
+  const lab = new Float32Array(3);
+  let n = 0, L = 0, A = 0, B = 0, area = 0;
+  for (const m of myNails) for (let i = 0; i < m.mask.length; i++) {
+    if (!m.mask[i]) continue;
+    area++;
+    if (i % 3) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    n++; L += lab[0]; A += lab[1]; B += lab[2];
+  }
+  if (!n) return;
+  L /= n; A /= n; B /= n;
+  const avg = area / myNails.length, side = Math.sqrt(avg);
+  const boxes = hands.map((hp) => {
+    const xs = hp.p.map((q) => q.x), ys = hp.p.map((q) => q.y);
+    const m = Math.hypot(hp.p[9].x - hp.p[0].x, hp.p[9].y - hp.p[0].y) * 0.5;
+    return { x0: Math.min(...xs) - m, y0: Math.min(...ys) - m, x1: Math.max(...xs) + m, y1: Math.max(...ys) + m };
+  });
+  const G = 3, gw = Math.floor(w / G), gh = Math.floor(h / G);
+  const hit = new Uint8Array(gw * gh);
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    const px = x * G + 1, py = y * G + 1, i = py * w + px;
+    if (boxes.length && !boxes.some((b) => px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1)) continue;
+    if (myNails.some((m) => m.mask[i])) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    if (Math.hypot((lab[0] - L) * 0.5, lab[1] - A, lab[2] - B) < 14) hit[y * gw + x] = 1;
+  }
+  const seen = new Uint8Array(gw * gh);
+  const cands: { x: number; y: number; a: number }[] = [];
+  for (let s0 = 0; s0 < hit.length; s0++) {
+    if (!hit[s0] || seen[s0]) continue;
+    const st = [s0];
+    seen[s0] = 1;
+    let c = 0, sx = 0, sy = 0;
+    while (st.length) {
+      const q = st.pop()!, qx = q % gw, qy = (q / gw) | 0;
+      c++; sx += qx; sy += qy;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = qx + dx, ny = qy + dy, j = ny * gw + nx;
+        if (nx >= 0 && ny >= 0 && nx < gw && ny < gh && hit[j] && !seen[j]) { seen[j] = 1; st.push(j); }
+      }
+    }
+    const a = c * G * G;
+    // 찾은 손톱 넓이의 0.25~3배만(손톱 끝 일부만 보이는 것부터 가까운 손톱까지)
+    if (a < avg * 0.25 || a > avg * 3) continue;
+    cands.push({ x: (sx / c) * G + 1, y: (sy / c) * G + 1, a });
+  }
+  if (!cands.length) return;
+  const sam = await mySamImage();
+  for (const c of cands.sort((p, q) => q.a - p.a).slice(0, 8)) {
+    await addMyNail(sam, c.x, c.y, null, true, { c: { x: c.x, y: c.y }, size: side });
+  }
 }
 async function addMyNail(
   sam: SamImage, x: number, y: number, hint: { x: number; y: number } | null, quiet = false,
