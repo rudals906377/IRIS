@@ -317,6 +317,7 @@ const MAKEUP_PARTS = ['lip', 'blush', 'shadow', 'liner', 'brow', 'contour', 'bas
 const isGroup = (x: unknown): x is Group => (GROUPS as readonly string[]).includes(x as string);
 
 async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMode, file?: File, original?: ImageBitmap): Promise<StyleResult> {
+  nailLabelColor = null;
   photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
   if (source instanceof ImageBitmap) lastSource = original ?? source;
   setStatus('사진 보는 중…');
@@ -457,6 +458,21 @@ async function feedback(measure: FaceMeasure): Promise<void> {
  * 스타일 AI 힌트를 분석 결과에 얹는다: 종류(모양·무늬·기법)는 AI가, 색은 측정값이 정한다.
  * 측정에서 못 찾은 부위는 그 종류의 기본색으로 채우고, AI가 '없음'이라 하면 뺀다.
  */
+/** 측정이 손톱을 못 찾아 스타일 AI 색 이름으로 정한 네일 색(sRGB 0~1). 고른 사진 손톱 찾기 결과를 검증하는 데 쓴다 */
+let nailLabelColor: RGB | null = null;
+/** 스타일 AI의 네일 색 이름 → 색(이름에 든 낱말로) */
+function nailColorFromLabel(label: string | undefined): RGB | null {
+  if (!label) return null;
+  const table: [string, string][] = [
+    ['연핑크', '#f2c4c8'], ['누드', '#e6c2ad'], ['베이지', '#e6cfb8'], ['코랄', '#f08070'], ['버건디', '#6a1a2a'], ['와인', '#6a1a2a'],
+    ['레드', '#c4202a'], ['빨강', '#c4202a'], ['핑크', '#f090a8'], ['화이트', '#f4f1ee'], ['흰', '#f4f1ee'], ['블랙', '#1c1a1c'], ['검정', '#1c1a1c'],
+    ['실버', '#c8c8cc'], ['그레이', '#9a9aa0'], ['회색', '#9a9aa0'], ['네이비', '#283c70'], ['블루', '#5a7ac8'], ['파랑', '#5a7ac8'], ['민트', '#a0e0c8'],
+    ['그린', '#6aa070'], ['초록', '#6aa070'], ['퍼플', '#9a70c0'], ['보라', '#9a70c0'], ['라벤더', '#c0a8e0'], ['골드', '#d2b060'],
+    ['브라운', '#7a5040'], ['갈색', '#7a5040'], ['오렌지', '#f08a3a'], ['옐로', '#f2d26a'], ['노랑', '#f2d26a'], ['투명', '#f0d6d2'], ['클리어', '#f0d6d2'],
+  ];
+  for (const [k, hex] of table) if (label.includes(k)) return c(hex);
+  return null;
+}
 function applyHints(r: StyleResult, h: StyleHints): void {
   const m = r.makeup;
   if (m && h.makeup) {
@@ -489,6 +505,20 @@ function applyHints(r: StyleResult, h: StyleHints): void {
       // 끝이 밝은 그라데이션: 잰 색을 뿌리로, 끝은 그보다 밝게
       r.hair.tip = gam(lin(r.hair.color).map((v) => Math.min(1, v * 1.8 + 0.03)) as RGB);
     } else if (h.hair.tech === 'solid') r.hair.tip = null;
+  }
+  // 스타일 AI가 네일 사진이라고 봤는데 색 측정이 손톱을 못 찾았으면(피부색에 가까운 연핑크·누드·시럽 네일) AI가 읽은 색 이름으로.
+  // 그때 측정이 잡은 '타투'(손가락 주름·그늘)는 AI가 타투라고 하지 않았으면 버린다
+  if (h.category === 'nail' && !r.nail) {
+    const col = nailColorFromLabel(h.nail?.colorLabel);
+    nailLabelColor = col;
+    if (col) {
+      // 앱의 색(RGB)은 선형값(hex() 가 감마로 바꿈): 표의 sRGB 를 선형으로
+      r.nail = { color: lin(col), style: h.nail?.style ?? 'solid' };
+      if (r.tattoo && !h.tattoo) {
+        r.tattoo = undefined;
+        r.tattooSrc = undefined;
+      }
+    }
   }
   if (r.nail && h.nail) {
     if (h.nail.style) r.nail.style = h.nail.style;
@@ -1357,6 +1387,19 @@ async function findRefNails(): Promise<void> {
   }
   // ② 손 점이 없으면(손톱만 가까이 찍힌 사진 등) 색 덩어리로
   const best = await nailsByColor(rgba, w, h, () => samImage(cv), '고른 사진에서 손톱을 찾는 중…');
+  // 스타일 AI가 읽은 네일 색(연핑크 등)과 크게 다르면(ΔE 35 넘게) 손가락 사이 그늘·배경을 잡은 것: 버리고 그 색의 가상 손톱으로
+  if (best.length && nailLabelColor) {
+    const lab = new Float32Array(3), lab2 = new Float32Array(3);
+    const rs: number[] = [], gs: number[] = [], bs: number[] = [];
+    for (const n of best) for (let i = 0; i < n.mask.length; i += 3) if (n.mask[i]) { rs.push(rgba[i * 4]); gs.push(rgba[i * 4 + 1]); bs.push(rgba[i * 4 + 2]); }
+    const med = (a: number[]): number => a.sort((x, y) => x - y)[a.length >> 1];
+    rgb2lab(med(rs), med(gs), med(bs), lab);
+    rgb2lab(nailLabelColor[0] * 255, nailLabelColor[1] * 255, nailLabelColor[2] * 255, lab2);
+    if (Math.hypot(lab[0] - lab2[0], lab[1] - lab2[1], lab[2] - lab2[2]) > 35) {
+      refNails = { src, rgba, w, h, nails: [] };
+      return;
+    }
+  }
   refNails = { src, rgba, w, h, nails: best };
   // 사진 분석이 손을 못 찾아 손톱 색을 배경에서 잘못 읽었을 수 있다 → 찾은 손톱 픽셀의 가운데 색으로 바로잡는다
   if (best.length && chosen.nail.color) {
