@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, flyaways, guidedFilter, hairDist, pureHair, quantilePos, recolorHair } from '../src/beauty/still-hair.ts';
+import { Q, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -218,4 +218,23 @@ test('머리색 거르기: 시스루 앞머리 사이 이마(피부색)는 고�
   // 금발처럼 머리와 피부색이 비슷하면 빼지 않는다
   for (let i = 0; i < 400; i++) rgba.set([225, 185, 160, 255], i * 4);
   assert.equal(pureHair(rgba, hair, [face]).slice(0, 500).reduce((a, b) => a + b, 0), 500);
+});
+
+test('피부 거르기: 검은 머리 알파 안의 피부색 픽셀(앞머리 사이 이마)은 알파를 줄이고, 머리·금발은 그대로', () => {
+  const n = 900, rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n), face = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    // 0~399 검은 머리, 400~499 머리 알파 안 이마(피부색), 500~ 얼굴 피부
+    rgba.set(i < 400 ? [25, 20, 18, 255] : [225, 180, 160, 255], i * 4);
+    alpha[i] = i < 500 ? 1 : 0;
+    face[i] = i >= 500 ? 1 : 0;
+  }
+  skinGate(rgba, alpha, face);
+  assert.equal(alpha[10], 1);
+  assert.ok(alpha[450] < 0.1, `이마 ${alpha[450]}`);
+  // 금발(피부와 비슷)이면 손대지 않는다
+  for (let i = 0; i < 400; i++) rgba.set([215, 185, 140, 255], i * 4);
+  const a2 = new Float32Array(n);
+  for (let i = 0; i < 500; i++) a2[i] = 1;
+  skinGate(rgba, a2, face);
+  assert.equal(a2[450], 1);
 });

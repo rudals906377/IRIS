@@ -575,3 +575,38 @@ export function pureHair(rgba: Uint8ClampedArray, alpha: Float32Array, others: F
   }
   return out;
 }
+
+/**
+ * 내 머리 알파에서 색이 얼굴 피부 쪽인 픽셀(가르마 두피, 시스루 앞머리 사이 이마)을 덜 물들인다(제자리 수정).
+ * 머리 가운데 색 → 피부 가운데 색 선 위에서 피부 쪽(55%~85%)일수록 알파를 줄인다. 머리와 피부색이 비슷하면(금발, ΔE 25 미만) 안 함.
+ * faceP: 얼굴·목 확률(0~1). 피부 기준색은 그 확률 0.8 넘는 곳의 가운데 값.
+ */
+export function skinGate(rgba: Uint8ClampedArray, alpha: Float32Array, faceP: Float32Array): void {
+  const lab = new Float32Array(3);
+  const med = (sel: (i: number) => boolean): [number, number, number] | null => {
+    const L: number[] = [], A: number[] = [], B: number[] = [];
+    for (let i = 0; i < alpha.length; i += 3) {
+      if (!sel(i)) continue;
+      rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+      L.push(lab[0]); A.push(lab[1]); B.push(lab[2]);
+    }
+    if (L.length < 50) return null;
+    const m = (v: number[]) => v.sort((p, q) => p - q)[v.length >> 1];
+    return [m(L), m(A), m(B)];
+  };
+  const hc = med((i) => alpha[i] >= 0.95);
+  const sc = med((i) => faceP[i] >= 0.8 && alpha[i] < 0.05);
+  if (!hc || !sc) return;
+  const d = [sc[0] - hc[0], sc[1] - hc[1], sc[2] - hc[2]];
+  const dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+  if (dd < 25 * 25) return;
+  for (let i = 0; i < alpha.length; i++) {
+    if (alpha[i] <= 0) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    const t = ((lab[0] - hc[0]) * d[0] + (lab[1] - hc[1]) * d[1] + (lab[2] - hc[2]) * d[2]) / dd;
+    // 색도(a·b)까지 피부 쪽이어야: 빛 받아 밝기만 오른 머리(윤기)는 a·b 가 머리색이라 덜 걸린다
+    const tc = (d[1] * d[1] + d[2] * d[2]) > 16 ? ((lab[1] - hc[1]) * d[1] + (lab[2] - hc[2]) * d[2]) / (d[1] * d[1] + d[2] * d[2]) : t;
+    const s = Math.max(0, Math.min(1, (Math.min(t, tc) - 0.55) / 0.3));
+    if (s > 0) alpha[i] *= 1 - s;
+  }
+}
