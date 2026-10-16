@@ -37,6 +37,7 @@ import { boxBlur, closeHoles, colorGate, guidedFilter, hairDist, recolorHair, ty
 import { hullFill, nailFrame, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
+import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
 import { extractDesign, findInk, type InkSource } from '../beauty/tattoo-extract.ts';
 import { armStrip, inkOnArm, limbRegion, measureHalfWidth, stripPoint, transferArmInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
@@ -178,6 +179,8 @@ function applyLookToEngine(): void {
   for (const part of Object.keys(chosen) as PartName[]) {
     const c = chosen[part];
     if (!c.color || off.has(part) || part === 'hair' || part === 'nail') continue;
+    // 사진 모드: 고른 사진 화장을 그대로 옮겨 구웠으면 실시간 화장은 눈썹만
+    if (mkBaked() && part !== 'brow') continue;
     if (part === 'lip') look.lip = { color: c.color, amount: amt(c.amount), gloss, over: overlip, style: lipStyle };
     else if (part === 'blush') look.blush = { color: c.color, amount: amt(c.amount), pos: blushPos, size: blushSize };
     else if (part === 'shadow') look.shadow = { color: c.color, amount: amt(c.amount), pearl, colorOut: shadowOut ?? undefined };
@@ -749,6 +752,52 @@ async function armTattooPlan(): Promise<TatPlan | null> {
   return tatPlan.p;
 }
 
+// ---- 사진 모드 메이크업: 고른 사진 얼굴의 화장(맨 피부와의 차이)을 내 얼굴에 그대로 옮긴다(still-makeup.ts) ----
+type MkPlan = { myPts: { x: number; y: number }[]; mySkin: Float32Array | null; ref: Uint8ClampedArray; rw: number; rh: number; refPts: { x: number; y: number }[]; refSkin: Float32Array | null; refHands: Float32Array | null };
+let mkPlan: { mine: ImageBitmap; ref: ImageBitmap; p: Promise<MkPlan | null>; ok: boolean } | null = null;
+function mkBaked(): boolean {
+  return !!(PHOTO_MODE && !swapMode && mkPlan?.ok && mkPlan.mine === photoOriginal && mkPlan.ref === lastSource);
+}
+function mkAmounts(): MakeupAmounts {
+  const has = (k: PartName) => !!(chosen[k].color && !off.has(k));
+  const v = Math.min(1, strength);
+  return { lip: has('lip') ? v : 0, eye: has('shadow') || has('liner') ? v : 0, skin: has('blush') || has('contour') || has('base') ? v : 0 };
+}
+async function makeupPlan(): Promise<MkPlan | null> {
+  const mine = photoOriginal, ref = lastSource;
+  if (!mine || !ref) return null;
+  if (mkPlan?.mine === mine && mkPlan.ref === ref) return mkPlan.p;
+  const p = (async (): Promise<MkPlan | null> => {
+    photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+    const mc = stillCanvas(), rc = toCanvas(ref, 1600);
+    const myPts = await photoAnalyzer.faceLandmarks(mc);
+    const refPts = await photoAnalyzer.faceLandmarks(rc);
+    if (!myPts || !refPts) return null;
+    setStatus('화장을 얼굴 모양에 맞추는 중…');
+    const mySkin = await skinOf(mc, myPts, 5);
+    const refSkin = await skinOf(rc, refPts, 5);
+    // 얼굴 가린 손: 몸 피부 분할 + 손 점으로 그린 손가락(얼굴 위 손가락은 분할이 얼굴로 보기도 한다)
+    const body = await photoAnalyzer.bodySkin(rc).catch(() => null);
+    const fingers = await photoAnalyzer.handMask(rc).catch(() => null);
+    let refHands = body;
+    if (body && fingers) for (let i = 0; i < body.length; i++) body[i] = Math.max(body[i], fingers[i]);
+    else if (fingers) refHands = fingers;
+    const rd = rc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, rc.width, rc.height).data;
+    return { myPts, mySkin, ref: rd, rw: rc.width, rh: rc.height, refPts, refSkin, refHands };
+  })().catch((err) => {
+    console.warn('사진 화장 옮기기 실패(실시간 화장으로)', err);
+    return null;
+  });
+  const entry = { mine, ref, p, ok: false };
+  mkPlan = entry;
+  const r = await p;
+  if (mkPlan === entry) {
+    entry.ok = !!r;
+    applyLookToEngine();
+  }
+  return r;
+}
+
 async function updateStillHair(): Promise<void> {
   if (!PHOTO_MODE || !photoOriginal || engine.source.kind !== 'image' || swapMode) return;
   if (stillHairBusy) {
@@ -761,12 +810,16 @@ async function updateStillHair(): Promise<void> {
   const nailOn = !!(chosen.nail.color && !off.has('nail') && myNails.length && refNailArt());
   const tatOn = !!(refTat && tattoo.design === refTat.design && !off.has('tattoo'));
   const plan = tatOn ? await armTattooPlan() : null;
-  const key = `${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen : 0}|${plan ? strength.toFixed(2) : 0}`;
+  const mk = mkAmounts();
+  // 고른 사진에서 화장을 읽었을 때만(얼굴이 보이는 사진)
+  const mkOn = !!(lastSource && lastStyle?.makeup && (mk.lip || mk.eye || mk.skin));
+  const mkp = mkOn ? await makeupPlan() : null;
+  const key = `${mkp ? `${mk.lip}:${mk.eye}:${mk.skin}` : 0}|${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen : 0}|${plan ? strength.toFixed(2) : 0}`;
   if (key === stillHairKey && refHair?.src === lastSource) return;
   // 작업이 곧바로 끝나는 경우(할 일 없음)에도 표시가 남지 않게, 끝난 뒤 '그 작업이면' 지운다
   const job = (async () => {
     try {
-      if (amount <= 0 && !nailOn && !plan) {
+      if (amount <= 0 && !nailOn && !plan && !mkp) {
         engine.source.replaceStill(photoOriginal!);
         stillHairKey = key;
         return;
@@ -784,6 +837,10 @@ async function updateStillHair(): Promise<void> {
           setStatus('머리카락 색을 올마다 옮기는 중…');
           out = recolorHair(mine.rgba, mine.w, mine.h, mine.alpha, mine.dist, ref, Math.min(1, amount));
         }
+      }
+      if (mkp) {
+        setStatus('고른 사진 화장을 옮기는 중…');
+        out = transferMakeup(out, base.w, base.h, mkp.myPts, mkp.ref, mkp.rw, mkp.rh, mkp.refPts, FACE_OVAL, mk, mkp.mySkin, mkp.refSkin, mkp.refHands, ((window as unknown as { irisMk: Record<string, unknown> }).irisMk = {}));
       }
       if (nailOn) {
         out = new Uint8ClampedArray(out);
@@ -1036,6 +1093,34 @@ function toCanvas(img: ImageBitmap, maxSide: number): HTMLCanvasElement {
   cv.getContext('2d')!.drawImage(img, 0, 0, cv.width, cv.height);
   return cv;
 }
+/** 사진 속 얼굴 피부·이목구비 확률(캔버스 크기). hairPad: 머리카락 둘레를 이만큼(분할 칸) 넓혀 뺀다. 이마에 걸친 가는 가닥이 금처럼 옮겨지지 않게 */
+async function skinOf(c: HTMLCanvasElement, pts: { x: number; y: number }[], hairPad = 0): Promise<Float32Array | null> {
+  const w = Math.hypot(pts[454].x - pts[234].x, pts[454].y - pts[234].y);
+  const cx = (pts[234].x + pts[454].x) / 2, cy = (pts[10].y + pts[152].y) / 2;
+  const size = w * 2.2;
+  const rect = { x: cx - size / 2, y: cy - size / 2, size };
+  try {
+    const p = await parseFace(c, rect, setStatus);
+    const face = new Float32Array(p.size * p.size);
+    for (let i = 0; i < face.length; i++) face[i] = p.face[i] / 255;
+    if (hairPad > 0) {
+      const hair = new Float32Array(p.size * p.size);
+      for (let i = 0; i < hair.length; i++) hair[i] = p.hair[i] / 255;
+      const hb = boxBlur(hair, p.size, p.size, hairPad);
+      for (let i = 0; i < face.length; i++) face[i] *= 1 - Math.min(1, hb[i] * 4);
+    }
+    const m = new Float32Array(c.width * c.height);
+    for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+      const u = Math.floor(((x - rect.x) / rect.size) * p.size), v = Math.floor(((y - rect.y) / rect.size) * p.size);
+      if (u >= 0 && v >= 0 && u < p.size && v < p.size) m[y * c.width + x] = face[v * p.size + u];
+    }
+    return m;
+  } catch (err) {
+    console.warn('얼굴 분할 실패(윤곽만 사용)', err);
+    return null;
+  }
+}
+
 async function makeSwap(mine: ImageBitmap, ref: ImageBitmap): Promise<ImageBitmap | string> {
   if (swapCache?.mine === mine && swapCache.ref === ref) return swapCache.bmp;
   photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
@@ -1047,33 +1132,6 @@ async function makeSwap(mine: ImageBitmap, ref: ImageBitmap): Promise<ImageBitma
   // 두 사진 얼굴 주변을 정밀 분할: 고른 사진의 앞머리·안경은 그대로 두고, 내 앞머리는 옮기지 않으려고
   setStatus('얼굴 자리를 나누는 중…');
   const fw = Math.hypot(rp[454].x - rp[234].x, rp[454].y - rp[234].y);
-  // hairPad: 머리카락 둘레를 이만큼(분할 칸) 넓혀 뺀다. 이마에 걸친 가는 가닥이 금처럼 옮겨지지 않게
-  const skinOf = async (c: HTMLCanvasElement, pts: { x: number; y: number }[], hairPad = 0): Promise<Float32Array | null> => {
-    const w = Math.hypot(pts[454].x - pts[234].x, pts[454].y - pts[234].y);
-    const cx = (pts[234].x + pts[454].x) / 2, cy = (pts[10].y + pts[152].y) / 2;
-    const size = w * 2.2;
-    const rect = { x: cx - size / 2, y: cy - size / 2, size };
-    try {
-      const p = await parseFace(c, rect, setStatus);
-      const face = new Float32Array(p.size * p.size);
-      for (let i = 0; i < face.length; i++) face[i] = p.face[i] / 255;
-      if (hairPad > 0) {
-        const hair = new Float32Array(p.size * p.size);
-        for (let i = 0; i < hair.length; i++) hair[i] = p.hair[i] / 255;
-        const hb = boxBlur(hair, p.size, p.size, hairPad);
-        for (let i = 0; i < face.length; i++) face[i] *= 1 - Math.min(1, hb[i] * 4);
-      }
-      const m = new Float32Array(c.width * c.height);
-      for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
-        const u = Math.floor(((x - rect.x) / rect.size) * p.size), v = Math.floor(((y - rect.y) / rect.size) * p.size);
-        if (u >= 0 && v >= 0 && u < p.size && v < p.size) m[y * c.width + x] = face[v * p.size + u];
-      }
-      return m;
-    } catch (err) {
-      console.warn('얼굴 분할 실패(윤곽만 사용)', err);
-      return null;
-    }
-  };
   const skin = await skinOf(rc, rp);
   const mySkin = await skinOf(mc, mp, 5);
   const hands = await photoAnalyzer.bodySkin(rc).catch(() => null);

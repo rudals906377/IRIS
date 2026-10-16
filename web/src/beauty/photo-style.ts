@@ -151,6 +151,42 @@ export class PhotoAnalyzer {
   /**
    * 사진을 분석한다. mode가 auto면 얼굴·손·머리카락이 보이는 정도로 무엇을 가져올지 정한다.
    */
+  /**
+   * 손 자리(0~1, 캔버스 크기): 손 점으로 손가락 뼈마디를 굵은 선으로, 손바닥을 다각형으로 그린다.
+   * 얼굴 위에 올린 손가락은 분할이 얼굴 피부로 보기도 해서, 화장 옮기기에서 손을 빼는 데 쓴다
+   */
+  async handMask(canvas: HTMLCanvasElement): Promise<Float32Array | null> {
+    const hm = await this.handModel();
+    const r = hm.detect(canvas);
+    if (!r.landmarks.length) return null;
+    const c = document.createElement('canvas');
+    c.width = canvas.width;
+    c.height = canvas.height;
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    g.strokeStyle = g.fillStyle = '#fff';
+    g.lineCap = g.lineJoin = 'round';
+    for (const lm of r.landmarks) {
+      const p = toPx(lm, canvas.width, canvas.height);
+      const palm = Math.hypot(p[5].x - p[17].x, p[5].y - p[17].y);
+      g.lineWidth = Math.max(4, palm * 0.42);
+      for (const chain of [[0, 1, 2, 3, 4], [0, 5, 6, 7, 8], [5, 9, 10, 11, 12], [9, 13, 14, 15, 16], [13, 17, 18, 19, 20], [0, 17]]) {
+        g.beginPath();
+        chain.forEach((k, i) => (i ? g.lineTo(p[k].x, p[k].y) : g.moveTo(p[k].x, p[k].y)));
+        // 손끝은 마지막 마디만큼 더 늘인다(손톱까지)
+        const a = p[chain[chain.length - 2]], b = p[chain[chain.length - 1]];
+        g.lineTo(b.x + (b.x - a.x) * 0.4, b.y + (b.y - a.y) * 0.4);
+        g.stroke();
+      }
+      g.beginPath();
+      [0, 1, 5, 9, 13, 17].forEach((k, i) => (i ? g.lineTo(p[k].x, p[k].y) : g.moveTo(p[k].x, p[k].y)));
+      g.fill();
+    }
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    const m = new Float32Array(c.width * c.height);
+    for (let i = 0; i < m.length; i++) m[i] = d[i * 4] / 255;
+    return m;
+  }
+
   /** 몸 관절점(픽셀 좌표 33개 + 보임 정도). 사진 모드 타투를 팔 대 팔로 옮기는 데 쓴다 */
   async pose(canvas: HTMLCanvasElement): Promise<{ p: Vec2[]; vis: number[] } | null> {
     if (!this.poseLm) {

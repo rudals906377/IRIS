@@ -22,7 +22,7 @@ const gam = (c: number): number => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.po
 const LIN = new Float32Array(256);
 for (let i = 0; i < 256; i++) LIN[i] = lin(i / 255);
 
-function rgb2lab(r: number, g: number, b: number, out: Float32Array): void {
+export function rgb2lab(r: number, g: number, b: number, out: Float32Array): void {
   const R = LIN[r], G = LIN[g], B = LIN[b];
   const x = (0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047;
   const y = 0.2126 * R + 0.7152 * G + 0.0722 * B;
@@ -34,7 +34,7 @@ function rgb2lab(r: number, g: number, b: number, out: Float32Array): void {
   out[2] = 200 * (fy - fz);
 }
 
-function lab2rgb(L: number, a: number, b: number, out: Uint8ClampedArray, o: number): void {
+export function lab2rgb(L: number, a: number, b: number, out: Uint8ClampedArray, o: number): void {
   const fy = (L + 16) / 116, fx = fy + a / 500, fz = fy - b / 200;
   const inv = (t: number): number => (t * t * t > 0.008856 ? t * t * t : (t - 16 / 116) / 7.787);
   const x = inv(fx) * 0.95047, y = inv(fy), z = inv(fz) * 1.08883;

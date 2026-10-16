@@ -66,23 +66,16 @@ export function fillPoly(poly: P[], w: number, h: number): Float32Array {
 }
 
 /**
- * 내 얼굴(src, 점 srcPts)을 고른 사진(dst, 점 dstPts) 얼굴 자리에 휘어 넣은 새 그림(RGBA, dst 크기).
- * oval: 얼굴 윤곽 점 번호(순서대로). skin: dst 의 얼굴 피부·이목구비 확률(0~1, dst 크기, 없으면 윤곽만).
- * hands: dst 의 몸 피부(얼굴 가린 손) 확률. srcSkin: src 의 얼굴 피부·이목구비 확률(src 크기, 내 앞머리 빼기).
+ * src 를 점 대응(srcPts → dstPts, 들로네 삼각형마다 무게중심 좌표)으로 휘어 dst 크기(W×H)로.
+ * rgb: 0~255 실수 3채널, cover: 삼각형이 덮은 곳 1, extra: 함께 휠 src 크기 확률 맵들(가장 가까운 칸).
  */
-export function swapFace(
-  dst: Uint8ClampedArray, W: number, H: number, dstPts: P[],
-  src: Uint8ClampedArray, sw: number, sh: number, srcPts: P[],
-  oval: number[], skin: Float32Array | null = null, hands: Float32Array | null = null,
-  srcSkin: Float32Array | null = null,
-): Uint8ClampedArray {
-  const N = Math.min(468, dstPts.length, srcPts.length);
-  const dp = dstPts.slice(0, N), sp = srcPts.slice(0, N);
+export function warpTriangles(
+  dp: P[], W: number, H: number, src: Uint8ClampedArray, sw: number, sh: number, sp: P[], extraIn: Float32Array[] = [],
+): { rgb: Float32Array; cover: Float32Array; extra: Float32Array[] } {
   const tris = delaunay(dp);
-  // ① 휘기
   const warped = new Float32Array(W * H * 3);
   const cover = new Float32Array(W * H);
-  const wSkin = srcSkin ? new Float32Array(W * H) : null;
+  const extra = extraIn.map(() => new Float32Array(W * H));
   for (let t = 0; t < tris.length; t += 3) {
     const [i, j, k] = [tris[t], tris[t + 1], tris[t + 2]];
     const A = dp[i], B = dp[j], C = dp[k];
@@ -107,10 +100,30 @@ export function swapFace(
           warped[o + c] = (a * (1 - fx) + b * fx) * (1 - fy) + (d * (1 - fx) + e * fx) * fy;
         }
         cover[y * W + x] = 1;
-        if (wSkin) wSkin[y * W + x] = srcSkin![Math.round(yy) * sw + Math.round(xx)];
+        for (let e = 0; e < extra.length; e++) extra[e][y * W + x] = extraIn[e][Math.round(yy) * sw + Math.round(xx)];
       }
     }
   }
+  return { rgb: warped, cover, extra };
+}
+
+/**
+ * 내 얼굴(src, 점 srcPts)을 고른 사진(dst, 점 dstPts) 얼굴 자리에 휘어 넣은 새 그림(RGBA, dst 크기).
+ * oval: 얼굴 윤곽 점 번호(순서대로). skin: dst 의 얼굴 피부·이목구비 확률(0~1, dst 크기, 없으면 윤곽만).
+ * hands: dst 의 몸 피부(얼굴 가린 손) 확률. srcSkin: src 의 얼굴 피부·이목구비 확률(src 크기, 내 앞머리 빼기).
+ */
+export function swapFace(
+  dst: Uint8ClampedArray, W: number, H: number, dstPts: P[],
+  src: Uint8ClampedArray, sw: number, sh: number, srcPts: P[],
+  oval: number[], skin: Float32Array | null = null, hands: Float32Array | null = null,
+  srcSkin: Float32Array | null = null,
+): Uint8ClampedArray {
+  const N = Math.min(468, dstPts.length, srcPts.length);
+  const dp = dstPts.slice(0, N), sp = srcPts.slice(0, N);
+  // ① 휘기
+  const wr = warpTriangles(dp, W, H, src, sw, sh, sp, srcSkin ? [srcSkin] : []);
+  const { rgb: warped, cover } = wr;
+  const wSkin = srcSkin ? wr.extra[0] : null;
   // ② 바꿀 자리: 윤곽 안 ∩ 두 사진 모두 피부·이목구비(앞머리·안경 제외) ∩ 휜 곳, 안쪽으로 조금 줄이고 부드럽게
   const ov = oval.map((i) => dp[i]);
   let mask = fillPoly(ov, W, H);
