@@ -1140,7 +1140,10 @@ function mySamImage(): Promise<SamImage> {
  * 색으로 손톱 찾기: 피부·흰 바탕(바탕이 흰 사진만)·아주 어두운 곳을 뺀 픽셀을 색 상자로 묶고, 많은 색부터 그 색 덩어리 가운데를
  * SAM 으로 오려 손톱 모양(길쭉함·꽉 참)인 것이 가장 많은 색을 고른다. 손 점이 안 잡히는 가까운 손 사진용.
  */
-async function nailsByColor(rgba: Uint8ClampedArray, w: number, h: number, getSam: () => Promise<SamImage>, status: string): Promise<{ mask: Uint8Array; frame: NailFrame }[]> {
+async function nailsByColor(
+  rgba: Uint8ClampedArray, w: number, h: number, getSam: () => Promise<SamImage>, status: string,
+  region: { x0: number; y0: number; x1: number; y1: number }[] = [],
+): Promise<{ mask: Uint8Array; frame: NailFrame }[]> {
   const G = 4;
   const gw = Math.floor(w / G), gh = Math.floor(h / G);
   const bin = new Int16Array(gw * gh).fill(-1);
@@ -1159,6 +1162,8 @@ async function nailsByColor(rgba: Uint8ClampedArray, w: number, h: number, getSa
   const whiteBg = edgeWhite > edge * 0.25;
   for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
     const o = ((y * G + 2) * w + x * G + 2) * 4;
+    // 손이 잡혔으면 손 둘레에서만 색을 센다(손톱과 비슷한 색의 머리카락·옷이 많은 색을 차지하지 않게)
+    if (region.length && !region.some((b) => x * G >= b.x0 && x * G <= b.x1 && y * G >= b.y0 && y * G <= b.y1)) continue;
     const r = rgba[o], g = rgba[o + 1], b = rgba[o + 2];
     const mx = Math.max(r, g, b);
     if (mx < 35) continue; // 아주 어두움
@@ -1351,8 +1356,22 @@ async function ensureNailsOnce(): Promise<void> {
   // 손 점으로 하나도 못 찾았으면(가까이 찍은 손) 색으로: 매니큐어 바른 손톱은 피부와 색이 뚜렷이 다르다
   if (!myNails.length) {
     const base = stillRGBA();
-    const found = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…');
-    for (const n of found) if (maskContrast(base.rgba, base.w, base.h, n.mask) >= 4) myNails.push(n);
+    // 손 점으로 찾을 때와 같은 기준: 사진의 3% 넘는 덩어리는 손톱이 아니고, 손이 잡혔으면 손 둘레(손 크기 50% 여백: 서로 낀 손은 점이 어긋난다) 안만
+    // (서로 낀 손 사진에서 손톱 색과 비슷한 어두운 머리카락이 큰 손톱으로 칠해졌다)
+    const boxes = handsMine.map((hp) => {
+      const xs = hp.p.map((q) => q.x), ys = hp.p.map((q) => q.y);
+      const m = Math.hypot(hp.p[9].x - hp.p[0].x, hp.p[9].y - hp.p[0].y) * 0.5;
+      return { x0: Math.min(...xs) - m, y0: Math.min(...ys) - m, x1: Math.max(...xs) + m, y1: Math.max(...ys) + m };
+    });
+    const found = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…', boxes);
+    for (const n of found) {
+      let a = 0, sx = 0, sy = 0;
+      for (let i = 0; i < n.mask.length; i++) if (n.mask[i]) { a++; sx += i % base.w; sy += (i / base.w) | 0; }
+      if (!a || a > base.w * base.h * 0.03) continue;
+      const cx = sx / a, cy = sy / a;
+      if (boxes.length && !boxes.some((b) => cx >= b.x0 && cx <= b.x1 && cy >= b.y0 && cy <= b.y1)) continue;
+      if (maskContrast(base.rgba, base.w, base.h, n.mask) >= 4) myNails.push(n);
+    }
   }
   setStatus(myNails.length ? '빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요' : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');
   nailGen++;
