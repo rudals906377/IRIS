@@ -11,7 +11,7 @@ import { chroma, measureFace, type FaceMeasure } from './face-measure.ts';
 import type { RGB } from './makeup.ts';
 import type { NailStyle } from './nail.ts';
 import type { TattooDesign } from './tattoo-designs.ts';
-import { extractDesign, poseSkin, type InkSource, type Rect } from './tattoo-extract.ts';
+import { boxBlur, extractDesign, poseSkin, type InkSource, type Rect } from './tattoo-extract.ts';
 import type { StyleAIResult, StyleHints } from './style-attributes.ts';
 import { colorDiff, dominantColors, gam, glossFrom, hairTarget, hex, isSkin, lin, lipTarget, luma, tintTarget } from './style-math.ts';
 
@@ -699,6 +699,29 @@ function inkSource(px: Pixels, seg: SegMasks): InkSource {
       const k = y * w + x;
       skin[k] = Math.max(seg.body[si], seg.face[si]);
       avoid[k] = Math.max(seg.hair[si], seg.clothes ? seg.clothes[si] : 0, seg.bg[si]);
+    }
+  }
+  // 타투가 빽빽한 팔은 분할 모델이 '옷'으로 본다(색 잉크가 피부를 덮어서). 옷으로 본 곳이라도 둘레(짧은 변 2%)에
+  // 피부색 픽셀이 30% 넘게 섞여 있으면(85% 아래) 타투 덮인 피부로 친다. 검은·흰 옷은 피부색 픽셀이 거의 없어 그대로
+  {
+    const sc = new Float32Array(w * h);
+    const d = px.d;
+    for (let i = 0; i < w * h; i++) {
+      const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2];
+      const Y = 0.299 * r + 0.587 * g + 0.114 * b, Cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b, Cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b;
+      sc[i] = Y > 60 && Cr > 135 && Cr < 175 && Cb > 85 && Cb < 128 && r > g ? 1 : 0;
+    }
+    const f = boxBlur(sc, w, h, Math.max(2, Math.round(Math.min(w, h) * 0.02)));
+    for (let i = 0; i < w * h; i++) {
+      if (avoid[i] < 0.3 || f[i] < 0.2) continue;
+      // 피부색이 거의 전부(85% 넘게)면 타투 섞인 피부가 아니라 살구색 옷(니트 크롭톱 등)
+      const k = Math.max(0, Math.min(1, (f[i] - 0.2) / 0.2)) * (1 - Math.max(0, Math.min(1, (f[i] - 0.7) / 0.15)));
+      // 머리카락·배경은 그대로(옷으로 본 몫만 덜어 낸다)
+      const y = Math.floor(i / w), x = i % w;
+      const si = Math.floor((y * seg.h) / h) * seg.w + Math.floor((x * seg.w) / w);
+      const other = Math.max(seg.hair[si], seg.bg[si]);
+      // 피부 지도(팔 찾기·자리 맞추기에 쓰임)는 그대로 두고, 도안 뽑기의 '피부 아님'만 덜어 낸다
+      avoid[i] = Math.max(other, avoid[i] * (1 - k));
     }
   }
   return { w, h, d: px.d, skin, avoid };
