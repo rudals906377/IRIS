@@ -68,13 +68,23 @@ export function hairDist(rgba: Uint8ClampedArray, alpha: ArrayLike<number>, thr 
     const c = Math.min(n - 1, Math.round((k / Q) * (n - 1)));
     L[k] = Ls[idx[c]];
     const lo = Math.max(0, Math.floor(((k - 1) / Q) * (n - 1))), hi = Math.min(n - 1, Math.ceil(((k + 1) / Q) * (n - 1)));
-    let sa = 0, sb = 0;
+    let sa = 0, sb = 0, sc = 0;
     for (let j = lo; j <= hi; j++) {
       sa += As[idx[j]];
       sb += Bs[idx[j]];
+      sc += Math.hypot(As[idx[j]], Bs[idx[j]]);
     }
-    a[k] = sa / (hi - lo + 1);
-    b[k] = sb / (hi - lo + 1);
+    const m = hi - lo + 1;
+    a[k] = sa / m;
+    b[k] = sb / m;
+    // 같은 밝기에 색이 다른 가닥이 섞인 머리(라임 + 청록)는 평균하면 탁한 올리브가 된다 → 색상은 평균, 채도는 픽셀 평균 채도로(최대 1.6배).
+    // 색이 거의 없는 머리(은발·검정, 채도 8 아래)는 잡음 채도가 붙지 않게 그대로
+    const cm = Math.hypot(a[k], b[k]), cs = sc / m;
+    if (cs > 8 && cm > 1) {
+      const f = Math.min(1.6, cs / cm);
+      a[k] *= f;
+      b[k] *= f;
+    }
   }
   return { L, a, b, n };
 }
