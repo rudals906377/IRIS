@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { boxBlur, closeHoles, colorGate, guidedFilter, hairDist, recolorHair, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, guidedFilter, hairBands, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { hullFill, nailFrame, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
@@ -564,7 +564,7 @@ const btnMyPhotoEl = $<HTMLButtonElement>('btn-myphoto');
  */
 let photoOriginal: ImageBitmap | null = null;
 let mineHair: { alpha: Float32Array; rgba: Uint8ClampedArray; w: number; h: number; dist: HairDist } | null = null;
-let refHair: { src: ImageBitmap; dist: HairDist | null } | null = null;
+let refHair: { src: ImageBitmap; dist: HairDist | null; bands: HairBands | null } | null = null;
 let stillHairTimer = 0;
 let stillHairBusy: Promise<void> | null = null;
 let stillHairKey = '';
@@ -612,6 +612,20 @@ async function mineHairMatte(): Promise<typeof mineHair> {
       coarse[y * W + x] = ((h[y0 * N + x0] * (1 - tx) + h[y0 * N + x0 + 1] * tx) * (1 - ty) + (h[(y0 + 1) * N + x0] * (1 - tx) + h[(y0 + 1) * N + x0 + 1] * tx) * ty) / 255;
     }
   }
+  // 긴 머리는 머리 상자 밖(어깨 아래)까지 내려온다: 상자 밖은 사진 전체 머리카락 분할로, 상자 아래쪽 가장자리는 둘을 섞는다
+  photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+  const segHair = await photoAnalyzer.hairMask(cv).catch(() => null);
+  if (photoOriginal !== orig) return null;
+  if (segHair) {
+    const bx0 = rect.x, by0 = rect.y, bx1 = rect.x + rect.size, by1 = rect.y + rect.size;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      const inBox = x >= bx0 && x < bx1 && y >= by0 && y < by1;
+      // 상자 안: 가장자리(아래·옆 15%)로 갈수록 분할을 더 믿는다
+      const edge = inBox ? Math.max(0, 1 - Math.min(by1 - y, x - bx0, bx1 - x) / (rect.size * 0.15)) : 1;
+      coarse[i] = Math.max(coarse[i], segHair[i] * edge);
+    }
+  }
   const guide = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) guide[i] = (0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2]) / 255;
   const px = Math.max(2, Math.round(rect.size / 300));
@@ -644,7 +658,7 @@ async function refHairDist(): Promise<HairDist | null> {
   const p = await parseFace(src, { x: (src.width - size) / 2, y: (src.height - size) / 2, size });
   const a = new Float32Array(p.size * p.size);
   for (let i = 0; i < a.length; i++) a[i] = p.hair[i] / 255;
-  refHair = { src, dist: hairDist(p.rgba, a, 0.7, 200) };
+  refHair = { src, dist: hairDist(p.rgba, a, 0.7, 200), bands: hairBands(p.rgba, p.size, a, 0.7, 200) };
   return refHair.dist;
 }
 // ---- 사진 모드 타투: 고른 사진의 팔 타투를 내 팔 같은 자리로(still-tattoo.ts) ----
@@ -998,7 +1012,10 @@ async function updateStillHair(): Promise<void> {
           setStatus(mine ? '고른 사진에서 머리카락을 찾지 못해 머리색만 옮겼어요' : '');
         } else {
           setStatus('머리카락 색을 올마다 옮기는 중…');
-          out = recolorHair(mine.rgba, mine.w, mine.h, mine.alpha, mine.dist, ref, Math.min(1, amount));
+          // 투톤·옴브레 사진이면 뿌리→끝 띠마다 옮긴다
+          const rb = refHair?.bands;
+          const span = rb?.ombre ? hairSpan(mine.alpha, mine.w) : null;
+          out = recolorHair(mine.rgba, mine.w, mine.h, mine.alpha, mine.dist, ref, Math.min(1, amount), 1, rb && span ? { ref: rb, ...span } : null);
         }
       }
       if (mkp) {
@@ -1251,6 +1268,7 @@ viewEl.addEventListener('pointerdown', (ev) => {
 });
 
 // 자동 시험용: 사진 모드 손톱 상태
+(window as unknown as { irisHair: unknown }).irisHair = () => ({ mine: mineHair, ref: refHair });
 (window as unknown as { irisTatState: unknown }).irisTatState = () => ({ planOk: tatPlanOk, sameRef: tatPlan?.ref === refTat, baked: tatBaked(), refTat: !!refTat, user: refTat?.user, designSame: refTat?.design === tattoo.design, stillKey: stillHairKey, busy: !!stillHairBusy });
 (window as unknown as { irisNail: unknown }).irisNail = { get ref() { return refNails; }, get mine() { return myNails; } };
 

@@ -204,6 +204,33 @@ export class PhotoAnalyzer {
     return { p: toPx(lm, canvas.width, canvas.height), vis: lm.map((l) => l.visibility ?? 0) };
   }
 
+  /** 머리카락 확률(0~1, 캔버스 크기로 늘임). 사진 모드 염색에서 머리 상자 밖(긴 머리 끝)을 잡는 데 쓴다 */
+  async hairMask(canvas: HTMLCanvasElement): Promise<Float32Array | null> {
+    const sm = await this.segModel();
+    let out: Float32Array | null = null;
+    sm.segment(canvas, (res) => {
+      const m = res.confidenceMasks;
+      if (!m || m.length < 4) return;
+      const b = m[CLS.hair].getAsFloat32Array();
+      const w = m[0].width, h = m[0].height;
+      const W = canvas.width, H = canvas.height;
+      const o = new Float32Array(W * H);
+      // 겹선형으로 늘인다(계단 가장자리 방지)
+      for (let y = 0; y < H; y++) {
+        const fy = Math.min(h - 1.001, Math.max(0, ((y + 0.5) * h) / H - 0.5));
+        const y0 = Math.floor(fy), ty = fy - y0;
+        for (let x = 0; x < W; x++) {
+          const fx = Math.min(w - 1.001, Math.max(0, ((x + 0.5) * w) / W - 0.5));
+          const x0 = Math.floor(fx), tx = fx - x0;
+          const i = y0 * w + x0;
+          o[y * W + x] = (b[i] * (1 - tx) + b[i + 1] * tx) * (1 - ty) + (b[i + w] * (1 - tx) + b[i + w + 1] * tx) * ty;
+        }
+      }
+      out = o;
+    });
+    return out;
+  }
+
   /** 몸 피부(손·팔·목) 확률(0~1, 캔버스 크기로 늘임). 얼굴 바꾸기에서 얼굴을 가린 손을 빼는 데 쓴다 */
   async bodySkin(canvas: HTMLCanvasElement): Promise<Float32Array | null> {
     const sm = await this.segModel();

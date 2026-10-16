@@ -127,3 +127,42 @@ test('색 거르기: 피부와 섞인 이마 잔머리(붉은 쪽)는 남긴다'
   colorGate(rgba, alpha, coarse);
   assert.ok(alpha[280] > 0.9, `잔머리 ${alpha[280]}`);
 });
+
+test('투톤: 위는 주황·아래는 노랑인 머리 → 띠 분포가 다르고 옴브레로 본다', async () => {
+  const { hairBands } = await import('../src/beauty/still-hair.ts');
+  const w = 40, h = 90, rgba = new Uint8ClampedArray(w * h * 4), alpha = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    const top = y < h / 2;
+    rgba[i * 4] = top ? 230 : 240; rgba[i * 4 + 1] = top ? 90 : 220; rgba[i * 4 + 2] = top ? 20 : 30; rgba[i * 4 + 3] = 255;
+    alpha[i] = 1;
+  }
+  const b = hairBands(rgba, w, alpha, 0.6, 100)!;
+  assert.ok(b.ombre, '옴브레');
+  assert.ok(b.bands[0].b[32] < b.bands[2].b[32] || b.bands[0].a[32] > b.bands[2].a[32] + 10, '뿌리 띠가 더 붉다');
+});
+
+test('어두운 꼬리 다듬기: 검은 옷이 섞인 아래 몇 %는 10% 자리 근처로 올린다', async () => {
+  const { trimDarkTail, Q } = await import('../src/beauty/still-hair.ts');
+  const L = new Float32Array(Q + 1), a = new Float32Array(Q + 1), b = new Float32Array(Q + 1);
+  for (let k = 0; k <= Q; k++) L[k] = k < 4 ? 5 : 50 + (k / Q) * 30;
+  const t = trimDarkTail({ L, a, b, n: 1000 });
+  assert.ok(t.L[0] > 40, `맨 아래 ${t.L[0]}`);
+  assert.equal(t.L[Q], L[Q]);
+});
+
+test('사진 염색: 새까만 점이 섞인 어두운 머리를 밝게 바꿔도 검은 점이 남지 않는다', async () => {
+  const { recolorHair, hairDist } = await import('../src/beauty/still-hair.ts');
+  const w = 60, h = 60, rgba = new Uint8ClampedArray(w * h * 4), alpha = new Float32Array(w * h).fill(1);
+  // 어두운 머리(루마 ~25) 사이사이에 새까만(0) 점과 루마 10 점
+  for (let i = 0; i < w * h; i++) {
+    const v = i % 7 === 0 ? 0 : i % 11 === 0 ? 10 : 25 + (i % 5);
+    rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = 255;
+  }
+  const mine = hairDist(rgba, alpha, 0.6, 100)!;
+  const ref = { ...hairDist(rgba.map((_, i) => (i % 4 === 3 ? 255 : 200 + (Math.floor(i / 4) % 20))), alpha, 0.6, 100)! };
+  const out = recolorHair(rgba, w, h, alpha, mine, ref, 1);
+  let mn = 255;
+  for (let y = 5; y < h - 5; y++) for (let x = 5; x < w - 5; x++) mn = Math.min(mn, out[(y * w + x) * 4]);
+  assert.ok(mn > 140, `가장 어두운 값 ${mn}`);
+});
