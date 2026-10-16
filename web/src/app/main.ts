@@ -37,6 +37,8 @@ import { boxBlur, closeHoles, colorGate, guidedFilter, hairDist, recolorHair, ty
 import { hullFill, nailFrame, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
+import { extractDesign, findInk, type InkSource } from '../beauty/tattoo-extract.ts';
+import { armStrip, inkOnArm, limbRegion, measureHalfWidth, stripPoint, transferArmInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
 
@@ -163,7 +165,7 @@ const amt = (a: number): number => Math.min(1, a * strength);
 
 function applyTattooToEngine(): void {
   const d = tattoo.design;
-  engine.tattoo = d && !off.has('tattoo') ? { design: d, place: tattoo.place, size: tattoo.size, amount: amt(tattoo.amount), ink: INK, along: tattoo.along, across: tattoo.across } : null;
+  engine.tattoo = d && !off.has('tattoo') && !tatBaked() ? { design: d, place: tattoo.place, size: tattoo.size, amount: amt(tattoo.amount), ink: INK, along: tattoo.along, across: tattoo.across } : null;
   // 타투는 몸 관절점이 필요하다: 처음 켤 때 자세 추적을 켠다(모델을 한 번 내려받음)
   if (d && !trackerConfig.pose) {
     trackerConfig.pose = true;
@@ -401,6 +403,10 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
       }
     }
     tattoo.along = tattoo.across = undefined;
+    // 사진 모드: 팔 타투면 팔 대 팔로 옮겨 사진에 굽는다(still-tattoo.ts)
+    refTat = PHOTO_MODE && r.tattooSrc && tattoo.design.canvas
+      ? { img: source, w: r.tattooSrc.src.w, h: r.tattooSrc.src.h, design: tattoo.design, rect: r.tattooSrc.rect, src: r.tattooSrc.src }
+      : null;
     setOff(['tattoo'], !on('tattoo'));
     applyTattooToEngine();
   }
@@ -625,6 +631,124 @@ async function refHairDist(): Promise<HairDist | null> {
   refHair = { src, dist: hairDist(p.rgba, a, 0.7, 200) };
   return refHair.dist;
 }
+// ---- 사진 모드 타투: 고른 사진의 팔 타투를 내 팔 같은 자리로(still-tattoo.ts) ----
+type RefTat = { img: ImageBitmap | HTMLImageElement; w: number; h: number; design: TattooDesign; rect: { x: number; y: number; w: number; h: number }; src: InkSource };
+let refTat: RefTat | null = null as RefTat | null;
+type TatPlan = { dst: Arm; skin: Float32Array; ink: InkMap; src: Arm | ((lambda: number, s: number) => { x: number; y: number } | null) };
+let tatPlan: { ref: RefTat; mine: ImageBitmap; p: Promise<TatPlan | null> } | null = null;
+/** 사진에 구운 팔 타투가 있으면 실시간 타투는 끈다 */
+function tatBaked(): boolean {
+  return !!(PHOTO_MODE && !swapMode && refTat && tattoo.design === refTat.design && tatPlan?.ref === refTat && tatPlan.mine === photoOriginal && tatPlanOk);
+}
+let tatPlanOk = false;
+/** 사진 관절점 → 팔(왼·오른, 사람 기준) */
+function armsOf(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Float32Array, W: number, H: number): { arm: Arm; vis: number; seen: boolean }[] {
+  return [[11, 13, 15], [12, 14, 16]].map(([s, e, w]) => {
+    const P = pose.p;
+    const up = Math.hypot(P[e].x - P[s].x, P[e].y - P[s].y), lo = Math.hypot(P[w].x - P[e].x, P[w].y - P[e].y);
+    const ru = measureHalfWidth(skin, W, H, P[s], P[e]), rl = measureHalfWidth(skin, W, H, P[e], P[w]);
+    return {
+      arm: { s: P[s], e: P[e], w: P[w], rUp: ru ?? up * 0.2, rLo: rl ?? lo * 0.16 },
+      vis: Math.min(pose.vis[s], pose.vis[e]),
+      seen: ru !== null || rl !== null,
+    };
+  });
+}
+function dbgTat(o: object): void {
+  const w = window as unknown as { irisTat?: object };
+  w.irisTat = { ...w.irisTat, ...o };
+}
+async function armTattooPlan(): Promise<TatPlan | null> {
+  const ref = refTat, mine = photoOriginal;
+  if (!ref || !mine) return null;
+  if (tatPlan?.ref !== ref || tatPlan.mine !== mine) {
+    tatPlanOk = false;
+    const p = (async (): Promise<TatPlan | null> => {
+      photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+      setStatus('타투가 팔 어디에 있는지 보는 중…');
+      // 고른 사진: 도안 뽑기와 같은 크기로
+      const rc = document.createElement('canvas');
+      rc.width = ref.w;
+      rc.height = ref.h;
+      rc.getContext('2d')!.drawImage(ref.img, 0, 0, ref.w, ref.h);
+      const rp = await photoAnalyzer.pose(rc);
+      const rs = await photoAnalyzer.bodySkin(rc);
+      dbgTat({ refPose: !!rp, refSkin: !!rs });
+      if (!rs) return null;
+      const dc = ref.design.canvas!;
+      let ink: InkMap = { rgba: dc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, dc.width, dc.height).data, w: dc.width, h: dc.height, rect: ref.rect };
+      let total = 0;
+      for (let i = 3; i < ink.rgba.length; i += 4) if (ink.rgba[i] >= 32) total += ink.rgba[i] / 255;
+      // 팔 점을 못 찾으면(몸이 안 나온 팔 사진) 아래 '띠' 방식으로
+      const rArms = rp ? armsOf(rp, rs, ref.w, ref.h) : null;
+      const on = rArms ? rArms.map((a) => inkOnArm(ink, a.arm)) : [{ up: 0, lo: 0 }, { up: 0, lo: 0 }];
+      let side = on[0].up + on[0].lo >= on[1].up + on[1].lo ? 0 : 1;
+      // 고른 사진 팔 점이 믿을 만하고 잉크가 그 팔에 절반 넘게 있으면 마디끼리 옮긴다
+      const inImg = (q: { x: number; y: number }) => q.x >= 0 && q.y >= 0 && q.x < ref.w && q.y < ref.h;
+      const ra = rArms?.[side];
+      const poseOk = !!ra && ra.seen && ra.vis > 0.6 && inImg(ra.arm.s) && inImg(ra.arm.e) && on[side].up + on[side].lo >= total * 0.5;
+      let strip: Strip | null = null;
+      if (!poseOk) {
+        // 가까운 팔 사진(몸이 안 나옴): 피부·잉크 영역 모양에서 팔 축·굵기를 읽는다. 팔 타투라고 읽힌 경우만
+        if (!/^(forearm|upperArm)/.test(tattoo.place)) return null;
+        // 자동으로 고른 도안 영역은 소매 일부만일 때가 많다: 그 영역이 있는 팔(피부·잉크 덩어리) 전체로 넓혀 다시 뽑는다
+        const found = findInk(ref.src);
+        const m = new Float32Array(ref.w * ref.h);
+        for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i]);
+        const limb = limbRegion(m, ref.w, ref.h, ref.rect);
+        if (!limb) return null;
+        const ex = extractDesign(ref.src, limb.box, 1600);
+        if (ex) ink = { rgba: ex.rgba, w: ex.w, h: ex.h, rect: ex.rect };
+        strip = armStrip(limb.mask, ref.w, ref.h, limb.box);
+        dbgTat({ strip: strip && { len: strip.len, mean: strip.mean, ratio: strip.ratio, p: strip.p, h: [...strip.h], refW: ref.w, rect: ink.rect } });
+        // 팔 모양(길이가 굵기의 2.5배 넘음)이 아니면 실시간 타투로
+        if (!strip || strip.len / (2 * strip.mean) < 2.5) return null;
+      }
+      const mc = stillCanvas();
+      const mp = await photoAnalyzer.pose(mc);
+      const ms = await photoAnalyzer.bodySkin(mc);
+      if (!mp || !ms) return null;
+      const mArms = armsOf(mp, ms, mc.width, mc.height);
+      const ok = (a: (typeof mArms)[number]) => a.seen && a.vis > 0.4;
+      if (strip) side = mArms[0].vis >= mArms[1].vis ? 0 : 1;
+      // 같은 쪽 팔이 보이면 그 팔, 아니면 반대쪽 팔(글씨가 뒤집히지 않게 거울로 뒤집지는 않는다)
+      const mine2 = ok(mArms[side]) ? side : ok(mArms[1 - side]) ? 1 - side : -1;
+      dbgTat({ mArms: mArms.map((a) => ({ ...a.arm, vis: a.vis, seen: a.seen })), mine2, poseOk });
+      if (mine2 < 0) return null;
+      const dst = mArms[mine2].arm;
+      if (!strip) return { dst, skin: ms, ink, src: ra!.arm };
+      // 띠: 어깨에서 시작(전체 소매) 또는 아래팔 가운데(작은 도안, 굵기 비로 크기)
+      const st = strip;
+      const upLen = Math.hypot(dst.e.x - dst.s.x, dst.e.y - dst.s.y), loLen = Math.hypot(dst.w.x - dst.e.x, dst.w.y - dst.e.y);
+      // 어깨 쪽이 뚜렷이 굵으면 어깨~손목 전체 소매로 보고 길이로 맞춘다(굵기는 근육·각도에 따라 많이 달라서)
+      const full = st.ratio > 1.25;
+      // 전체 소매: 손목(끝 쪽 35% 안에서 가장 가는 곳)까지를 내 어깨~손목에 맞춘다(주먹·손이 함께 찍혀도)
+      let wristTau = st.len;
+      if (full) {
+        const K = st.h.length;
+        let kmin = K - 1;
+        for (let i = Math.floor(K * 0.65); i < K - 1; i++) if (st.h[i] < st.h[kmin]) kmin = i;
+        wristTau = (kmin / (K - 1)) * st.len;
+      }
+      const k = full ? wristTau / (upLen + loLen) : st.mean / ((dst.rUp + dst.rLo) / 2);
+      const L = st.len / k;
+      const l0 = full ? 0 : upLen + loLen / 2 - L / 2;
+      return { dst, skin: ms, ink, src: (l: number, sg: number) => stripPoint(st, (l - l0) * k, sg) };
+    })().catch((err) => {
+      console.warn('팔 타투 옮기기 실패(실시간 타투로)', err);
+      return null;
+    });
+    tatPlan = { ref, mine, p };
+    const r = await p;
+    if (tatPlan?.p === p) {
+      tatPlanOk = !!r;
+      applyTattooToEngine();
+    }
+    return r;
+  }
+  return tatPlan.p;
+}
+
 async function updateStillHair(): Promise<void> {
   if (!PHOTO_MODE || !photoOriginal || engine.source.kind !== 'image' || swapMode) return;
   if (stillHairBusy) {
@@ -635,12 +759,14 @@ async function updateStillHair(): Promise<void> {
   // 분포를 그대로 옮기므로 진하기 1 이 '고른 사진 그대로'(분석의 amount 는 셰이더용이라 쓰지 않는다)
   const amount = h.color && !off.has('hair') && lastSource ? strength : 0;
   const nailOn = !!(chosen.nail.color && !off.has('nail') && myNails.length && refNailArt());
-  const key = `${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen : 0}`;
+  const tatOn = !!(refTat && tattoo.design === refTat.design && !off.has('tattoo'));
+  const plan = tatOn ? await armTattooPlan() : null;
+  const key = `${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen : 0}|${plan ? strength.toFixed(2) : 0}`;
   if (key === stillHairKey && refHair?.src === lastSource) return;
   // 작업이 곧바로 끝나는 경우(할 일 없음)에도 표시가 남지 않게, 끝난 뒤 '그 작업이면' 지운다
   const job = (async () => {
     try {
-      if (amount <= 0 && !nailOn) {
+      if (amount <= 0 && !nailOn && !plan) {
         engine.source.replaceStill(photoOriginal!);
         stillHairKey = key;
         return;
@@ -666,6 +792,10 @@ async function updateStillHair(): Promise<void> {
           const r = art.nails[i % art.nails.length];
           transferNail(out, base.w, base.h, n.mask, n.frame, art.rgba, art.w, art.h, r.frame, 0.35, Math.min(1, strength));
         });
+      }
+      if (plan) {
+        setStatus('타투를 팔에 옮기는 중…');
+        out = transferArmInk(out, base.w, base.h, plan.dst, plan.skin, plan.ink, plan.src, false, Math.min(1, strength));
       }
       const bmp = await createImageBitmap(new ImageData(out as unknown as Uint8ClampedArray<ArrayBuffer>, base.w, base.h));
       engine.source.replaceStill(bmp);

@@ -5,7 +5,7 @@
 //  - 타투: 피부 위의 잉크(어둡거나 피부와 색이 다른 곳)만 오려 도안으로 만든다
 // 모델은 IMAGE 모드로 따로 만들어(실시간 추적기와 분리) 처음 쓸 때만 불러온다.
 
-import { FaceLandmarker, FilesetResolver, HandLandmarker, ImageSegmenter, type NormalizedLandmark } from '@mediapipe/tasks-vision';
+import { FaceLandmarker, FilesetResolver, HandLandmarker, ImageSegmenter, PoseLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision';
 import type { Vec2 } from '../engine/math.ts';
 import { chroma, measureFace, type FaceMeasure } from './face-measure.ts';
 import type { RGB } from './makeup.ts';
@@ -19,6 +19,7 @@ const MODEL_BASE = 'https://storage.googleapis.com/mediapipe-models';
 const FACE_MODEL = `${MODEL_BASE}/face_landmarker/face_landmarker/float16/1/face_landmarker.task`;
 const SEG_MODEL = `${MODEL_BASE}/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite`;
 const HAND_MODEL = `${MODEL_BASE}/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`;
+const POSE_MODEL = `${MODEL_BASE}/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task`;
 const CLS = { background: 0, hair: 1, bodySkin: 2, faceSkin: 3, clothes: 4 } as const;
 /** 분석용 그림 크기 상한(긴 변) */
 const MAX_SIDE = 768;
@@ -91,6 +92,7 @@ export class PhotoAnalyzer {
   private face: FaceLandmarker | null = null;
   private seg: ImageSegmenter | null = null;
   private hands: HandLandmarker | null = null;
+  private poseLm: PoseLandmarker | null = null;
   private readonly wasmBase: string;
 
   constructor(wasmBase: string) {
@@ -149,6 +151,20 @@ export class PhotoAnalyzer {
   /**
    * 사진을 분석한다. mode가 auto면 얼굴·손·머리카락이 보이는 정도로 무엇을 가져올지 정한다.
    */
+  /** 몸 관절점(픽셀 좌표 33개 + 보임 정도). 사진 모드 타투를 팔 대 팔로 옮기는 데 쓴다 */
+  async pose(canvas: HTMLCanvasElement): Promise<{ p: Vec2[]; vis: number[] } | null> {
+    if (!this.poseLm) {
+      const fs = await this.fs();
+      this.poseLm = await this.make((delegate) =>
+        PoseLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: POSE_MODEL, delegate }, runningMode: 'IMAGE', numPoses: 1 }),
+      );
+    }
+    const r = this.poseLm.detect(canvas);
+    const lm = r.landmarks[0];
+    if (!lm) return null;
+    return { p: toPx(lm, canvas.width, canvas.height), vis: lm.map((l) => l.visibility ?? 0) };
+  }
+
   /** 몸 피부(손·팔·목) 확률(0~1, 캔버스 크기로 늘임). 얼굴 바꾸기에서 얼굴을 가린 손을 빼는 데 쓴다 */
   async bodySkin(canvas: HTMLCanvasElement): Promise<Float32Array | null> {
     const sm = await this.segModel();
