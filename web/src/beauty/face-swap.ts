@@ -5,7 +5,7 @@
 // ③ 피부끼리만 크게 흐린 두 그림의 비로 조명·피부색을 고른 사진에 맞추고 ④ 가장자리를 부드럽게 섞는다.
 // 순수 계산(DOM 없음).
 
-import { BROW_L_LOWER, BROW_L_UPPER, BROW_R_LOWER, BROW_R_UPPER, LIPS_INNER } from './face-regions.ts';
+import { BROW_L_LOWER, BROW_L_UPPER, BROW_R_LOWER, BROW_R_UPPER, EYE_L_LOWER, EYE_L_UPPER, EYE_R_LOWER, EYE_R_UPPER, LIPS_INNER, LIPS_OUTER } from './face-regions.ts';
 import { boxBlur } from './still-hair.ts';
 
 export type P = { x: number; y: number };
@@ -140,6 +140,31 @@ export function swapFace(
     // → 얇은 틈(둘레에 내 피부가 충분)은 둘레 내 피부로 메우고 내 피부로 친다. 넓게 가린 곳(이마 전체 앞머리)은 그대로 고른 사진
     const valid = new Float32Array(W * H);
     for (let i = 0; i < valid.length; i++) valid[i] = cover[i] && wSkin[i] > 0.6 ? 1 : 0;
+    // 분할이 못 잡은 아주 가는 머리카락(얼굴을 가로지른 1~2px 가닥)도 틈으로: 밝기의 '어두운 능선'(헤시안 한 방향만 큼)
+    // 눈·눈썹·입술·콧구멍 둘레는 이목구비 선이라 뺀다
+    if (N >= 468) {
+      const feat = new Float32Array(W * H);
+      for (const ids of [[...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)], [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)], [...BROW_R_LOWER, ...BROW_R_UPPER], [...BROW_L_LOWER, ...BROW_L_UPPER], LIPS_OUTER, [64, 98, 240, 2, 460, 327, 294, 4]]) {
+        const m = fillPoly(ids.map((i) => dp[i]), W, H);
+        for (let i = 0; i < m.length; i++) if (m[i]) feat[i] = 1;
+      }
+      const featB = boxBlur(feat, W, H, Math.max(2, Math.round(fw0 * 0.04)));
+      const Lw = new Float32Array(W * H);
+      for (let i = 0; i < Lw.length; i++) Lw[i] = 0.299 * warped[i * 3] + 0.587 * warped[i * 3 + 1] + 0.114 * warped[i * 3 + 2];
+      const S = boxBlur(boxBlur(Lw, W, H, 1), W, H, 1);
+      const line = new Float32Array(W * H);
+      for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
+        const i = y * W + x;
+        if (!valid[i] || featB[i] > 0) continue;
+        const hxx = S[i + 2] - 2 * S[i] + S[i - 2], hyy = S[i + 2 * W] - 2 * S[i] + S[i - 2 * W];
+        const hxy = (S[i + 2 + 2 * W] - S[i + 2 - 2 * W] - S[i - 2 + 2 * W] + S[i - 2 - 2 * W]) / 4;
+        const tr = hxx + hyy, dd = Math.sqrt((hxx - hyy) ** 2 + 4 * hxy * hxy);
+        const l1 = (tr + dd) / 2, l2 = (tr - dd) / 2;
+        if (l1 > 8 && Math.abs(l2) < l1 * 0.35) line[i] = 1;
+      }
+      const lineB = boxBlur(line, W, H, 1);
+      for (let i = 0; i < valid.length; i++) if (lineB[i] > 0.1) valid[i] = 0;
+    }
     const r = Math.max(2, Math.round(fw0 * 0.035));
     const den = boxBlur(valid, W, H, r);
     const num = [0, 1, 2].map((c) => {
