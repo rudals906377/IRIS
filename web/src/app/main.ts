@@ -1559,8 +1559,15 @@ async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Pr
   const avg = area / myNails.length, side = Math.sqrt(avg);
   const boxes = hands.map((hp) => {
     const xs = hp.p.map((q) => q.x), ys = hp.p.map((q) => q.y);
-    const m = Math.hypot(hp.p[9].x - hp.p[0].x, hp.p[9].y - hp.p[0].y) * 0.5;
+    // 서로 낀 손은 손 점이 한 손만·어긋나게 잡혀 다른 손 손톱이 둘레 밖이다: 넓게(손 크기 80%), 대신 색을 엄격히
+    const m = Math.hypot(hp.p[9].x - hp.p[0].x, hp.p[9].y - hp.p[0].y) * 0.8;
     return { x0: Math.min(...xs) - m, y0: Math.min(...ys) - m, x1: Math.max(...xs) + m, y1: Math.max(...ys) + m };
+  });
+  const hs = Math.max(0, ...hands.map((hp) => Math.hypot(hp.p[9].x - hp.p[0].x, hp.p[9].y - hp.p[0].y)));
+  const centers = myNails.map((m) => {
+    let n = 0, sx = 0, sy = 0;
+    for (let i = 0; i < m.mask.length; i++) if (m.mask[i]) { n++; sx += i % w; sy += (i / w) | 0; }
+    return { x: sx / Math.max(1, n), y: sy / Math.max(1, n) };
   });
   const G = 3, gw = Math.floor(w / G), gh = Math.floor(h / G);
   const hit = new Uint8Array(gw * gh);
@@ -1569,7 +1576,8 @@ async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Pr
     if (boxes.length && !boxes.some((b) => px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1)) continue;
     if (myNails.some((m) => m.mask[i])) continue;
     rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
-    if (seeds.some((s) => Math.hypot((lab[0] - s[0]) * 0.5, lab[1] - s[1], lab[2] - s[2]) < 14)) hit[y * gw + x] = 1;
+    // 밝기도 온전히 본다: 손가락 사이 그늘(손톱보다 어둡고 색이 비슷)이 손톱으로 잡혔다
+    if (seeds.some((s) => Math.hypot(lab[0] - s[0], lab[1] - s[1], lab[2] - s[2]) < 12)) hit[y * gw + x] = 1;
   }
   const seen = new Uint8Array(gw * gh);
   const cands: { x: number; y: number; a: number }[] = [];
@@ -1589,7 +1597,10 @@ async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Pr
     const a = c * G * G;
     // 찾은 손톱 넓이의 0.1~2배만(겹쳐 끝만 보이는 손톱부터 가까운 손톱까지). 작은 덩어리는 SAM 이 손톱 전체로 넓힌다
     if (a < Math.max(150, avg * 0.1) || a > avg * 2) continue;
-    cands.push({ x: (sx / c) * G + 1, y: (sy / c) * G + 1, a });
+    const cx = (sx / c) * G + 1, cy = (sy / c) * G + 1;
+    // 손톱은 손 하나 크기 안에 모여 있다: 이미 찾은 손톱에서 손 크기보다 먼 덩어리(다른 손가락 그늘·소매)는 뺀다
+    if (hs > 0 && !centers.some((q) => Math.hypot(q.x - cx, q.y - cy) <= hs)) continue;
+    cands.push({ x: cx, y: cy, a });
   }
   if (!cands.length) return;
   const sam = await mySamImage();
