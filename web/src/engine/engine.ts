@@ -180,7 +180,7 @@ export class BeautyEngine {
       const mesh = tattooMesh(tat.place, pose, { size: tat.size, aspect: tat.design.aspect, width, along: tat.along, across: tat.across });
       if (mesh) {
         this.tattooFx.setDesign(tat.design.canvas);
-        effects.push((t) => this.tattooFx.draw(mesh, t, tat.amount, tat.ink, tat.design.multiply));
+        effects.push((t) => this.tattooFx.draw(mesh, t, tat.amount, tat.ink, tat.design.multiply, this.source.kind === 'image' ? 0 : 0.35));
       }
     }
     const hair = this.hair;

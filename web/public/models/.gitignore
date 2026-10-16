@@ -1,2 +1,3 @@
 *.onnx
 !hair-matte-256.onnx
+!face-parse-512.onnx

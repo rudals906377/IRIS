@@ -541,9 +541,37 @@ function inkSource(px: Pixels, seg: SegMasks): InkSource {
   return { w, h, d: px.d, skin, avoid };
 }
 
+/**
+ * 사진 모드: 분석 해상도(768)로 만든 도안 입력을 원본 사진으로 다시 만든다(긴 변 maxSide). 피부·피할 곳 확률은 늘여 쓴다.
+ * 가는 선·점묘가 살아 있는 도안을 뽑기 위해.
+ */
+export function upscaleInkSource(src: InkSource, full: CanvasImageSource & { width: number; height: number }, maxSide = 1600): { src: InkSource; scale: number } {
+  // 원본보다 키우지는 않는다(픽셀만 늘고 디테일은 그대로)
+  const s = Math.min(maxSide / Math.max(full.width, full.height), 1);
+  const w = Math.max(1, Math.round(full.width * s)), h = Math.max(1, Math.round(full.height * s));
+  if (w <= src.w) return { src, scale: 1 };
+  const cv = document.createElement('canvas');
+  cv.width = w;
+  cv.height = h;
+  const cx = cv.getContext('2d', { willReadFrequently: true })!;
+  cx.drawImage(full, 0, 0, w, h);
+  const d = cx.getImageData(0, 0, w, h).data;
+  const skin = new Float32Array(w * h);
+  const avoid = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const sy = Math.min(src.h - 1, Math.floor((y * src.h) / h));
+    for (let x = 0; x < w; x++) {
+      const si = sy * src.w + Math.min(src.w - 1, Math.floor((x * src.w) / w));
+      skin[y * w + x] = src.skin[si];
+      if (src.avoid) avoid[y * w + x] = src.avoid[si];
+    }
+  }
+  return { src: { w, h, d, skin, avoid }, scale: w / src.w };
+}
+
 /** 도안 뽑기 결과를 캔버스 도안으로. rect 가 없으면 자동으로 영역을 고른다 */
-export function tattooFromSource(src: InkSource, rect: Rect | null): { design: TattooDesign; rect: Rect; inkMask: Float32Array } | null {
-  const r = extractDesign(src, rect);
+export function tattooFromSource(src: InkSource, rect: Rect | null, maxSide = 512): { design: TattooDesign; rect: Rect; inkMask: Float32Array } | null {
+  const r = extractDesign(src, rect, maxSide);
   if (!r) return null;
   let ink = 0;
   for (let i = 3; i < r.rgba.length; i += 4) if (r.rgba[i] > 64) ink++;

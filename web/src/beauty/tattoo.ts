@@ -29,6 +29,7 @@ uniform vec2 uSize;
 uniform float uAmount;
 uniform vec3 uInk;      // 도안이 검은색일 때 쓰는 잉크 색
 uniform float uMultiply; // 1: 사진에서 뽑은 도안(RGB = 피부에 곱할 투과율)
+uniform float uSoft;     // 도안을 살짝 흐려 섞는 정도(웹캠은 떨림 줄이기 0.35, 사진은 0: 가는 선 그대로)
 in vec2 vUv;
 in float vVis;
 out vec4 o;
@@ -45,7 +46,7 @@ void main() {
   // 가까이 찍힌 목은 분할이 '얼굴 피부'로 판단하기도 한다. 위치는 턱 아래로 정해지므로 얼굴 피부도 피부로 본다
   skin = smoothstep(0.35, 0.8, max(skin, seg.b));
   // 잉크가 살짝 번진 느낌: 밉맵 한 단계 섞기
-  vec4 d = mix(texture(uDesign, vUv), textureLod(uDesign, vUv, 1.5), 0.35);
+  vec4 d = mix(texture(uDesign, vUv), textureLod(uDesign, vUv, 1.5), uSoft);
   float ink = d.a * smoothstep(0.05, 0.45, vVis) * skin * uAmount;
   if (ink < 0.004) discard;
   // 검은 도안은 지정 잉크색, 색 도안은 그 색(너무 밝은 색은 피부에서 잘 안 보이므로 조금 진하게)
@@ -103,7 +104,7 @@ export class TattooRenderer {
     gl.generateMipmap(gl.TEXTURE_2D);
   }
 
-  draw(mesh: TattooMesh, t: FrameTextures, amount: number, ink: [number, number, number], multiply = false): void {
+  draw(mesh: TattooMesh, t: FrameTextures, amount: number, ink: [number, number, number], multiply = false, soft = 0.35): void {
     if (!this.designSource) return;
     const gl = this.gl;
     const u = this.prog.u;
@@ -123,6 +124,7 @@ export class TattooRenderer {
     gl.uniform1f(u.uAmount, amount * mesh.confidence);
     gl.uniform3f(u.uInk, ...ink);
     gl.uniform1f(u.uMultiply, multiply ? 1 : 0);
+    gl.uniform1f(u.uSoft, soft);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
     gl.bufferData(gl.ARRAY_BUFFER, mesh.data, gl.DYNAMIC_DRAW);
