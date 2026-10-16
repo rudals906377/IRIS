@@ -804,6 +804,7 @@ async function updateStillHair(): Promise<void> {
     await stillHairBusy;
     return updateStillHair();
   }
+  const orig = photoOriginal;
   const h = chosen.hair;
   // 분포를 그대로 옮기므로 진하기 1 이 '고른 사진 그대로'(분석의 amount 는 셰이더용이라 쓰지 않는다)
   const amount = h.color && !off.has('hair') && lastSource ? strength : 0;
@@ -817,8 +818,11 @@ async function updateStillHair(): Promise<void> {
   const key = `${mkp ? `${mk.lip}:${mk.eye}:${mk.skin}` : 0}|${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen : 0}|${plan ? strength.toFixed(2) : 0}`;
   if (key === stillHairKey && refHair?.src === lastSource) return;
   // 작업이 곧바로 끝나는 경우(할 일 없음)에도 표시가 남지 않게, 끝난 뒤 '그 작업이면' 지운다
+  // 굽는 사이(화장·타투 준비는 수십 초) 얼굴 바꾸기를 켰거나 내 사진을 바꿨으면 결과를 버린다
+  const stale = () => swapMode || photoOriginal !== orig || engine.source.kind !== 'image';
   const job = (async () => {
     try {
+      if (stale()) return;
       if (amount <= 0 && !nailOn && !plan && !mkp) {
         engine.source.replaceStill(photoOriginal!);
         stillHairKey = key;
@@ -855,6 +859,7 @@ async function updateStillHair(): Promise<void> {
         out = transferArmInk(out, base.w, base.h, plan.dst, plan.skin, plan.ink, plan.src, false, Math.min(1, strength));
       }
       const bmp = await createImageBitmap(new ImageData(out as unknown as Uint8ClampedArray<ArrayBuffer>, base.w, base.h));
+      if (stale()) return;
       engine.source.replaceStill(bmp);
       stillHairKey = key;
       setStatus('');
