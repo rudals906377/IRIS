@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, guidedFilter, hairDist, quantilePos, recolorHair } from '../src/beauty/still-hair.ts';
+import { Q, flyaways, guidedFilter, hairDist, quantilePos, recolorHair } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -165,4 +165,27 @@ test('사진 염색: 새까만 점이 섞인 어두운 머리를 밝게 바꿔�
   let mn = 255;
   for (let y = 5; y < h - 5; y++) for (let x = 5; x < w - 5; x++) mn = Math.min(mn, out[(y * w + x) * 4]);
   assert.ok(mn > 140, `가장 어두운 값 ${mn}`);
+});
+
+test('잔머리: 머리 밖 가는 어두운 가닥은 알파를 얻고, 가닥 사이 벽은 알파를 잃는다', () => {
+  // 80×60: 왼쪽 30칸 검은 머리(알파 1), 그 오른쪽 밝은 벽. x=34 에 1px 가닥(분할 0), x=26~27 은 머리 안으로 비친 벽(알파 1)
+  const w = 80, h = 60;
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  const alpha = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    let v = 220;
+    if (x < 30) { v = 30; alpha[i] = 1; }
+    if (x === 26 || x === 27) v = 218;
+    if (x === 34) v = 60;
+    if (x === 70) v = 60; // 머리에서 먼 벽의 줄(전선 등): 건드리지 않는다
+    rgba.set([v, v, v, 255], i * 4);
+  }
+  flyaways(rgba, w, h, alpha, 12);
+  const y = 30;
+  assert.ok(alpha[y * w + 34] > 0.6, `가닥 ${alpha[y * w + 34]}`);
+  assert.ok(alpha[y * w + 26] < 0.2, `비친 벽 ${alpha[y * w + 26]}`);
+  assert.ok(alpha[y * w + 10] > 0.99, `머리 안 ${alpha[y * w + 10]}`);
+  assert.equal(alpha[y * w + 70], 0);
+  assert.equal(alpha[y * w + 50], 0);
 });

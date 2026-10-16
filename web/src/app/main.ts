@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { boxBlur, closeHoles, colorGate, guidedFilter, hairBands, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, flyaways, guidedFilter, hairBands, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { hullFill, maskContrast, nailFrame, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
@@ -602,6 +602,7 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   const rgba = cx.getImageData(0, 0, W, H).data;
   // 512 확률 → 처리 해상도(상자 밖은 0) → 내 사진 밝기로 가이디드 필터
   const coarse = new Float32Array(W * H);
+  const faceP = new Float32Array(W * H);
   const N = p.size;
   for (let y = Math.max(0, Math.floor(rect.y)); y < Math.min(H, Math.ceil(rect.y + rect.size)); y++) {
     const v = ((y - rect.y) / rect.size) * N - 0.5;
@@ -613,6 +614,9 @@ async function mineHairMatte(): Promise<typeof mineHair> {
       const tx = Math.max(0, Math.min(1, u - x0));
       const h = p.hair;
       coarse[y * W + x] = ((h[y0 * N + x0] * (1 - tx) + h[y0 * N + x0 + 1] * tx) * (1 - ty) + (h[(y0 + 1) * N + x0] * (1 - tx) + h[(y0 + 1) * N + x0 + 1] * tx) * ty) / 255;
+      const f = p.face, b = p.body;
+      const j = y0 * N + x0;
+      faceP[y * W + x] = Math.max(f[j], b[j], f[j + 1], b[j + 1], f[j + N], b[j + N], f[j + N + 1], b[j + N + 1]) / 255;
     }
   }
   // 긴 머리는 머리 상자 밖(어깨 아래)까지 내려온다: 상자 밖은 사진 전체 머리카락 분할로, 상자 아래쪽 가장자리는 둘을 섞는다
@@ -647,6 +651,8 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   for (let i = 0; i < alpha.length; i++) alpha[i] = closed[i];
   // 가장자리에서 내 머리색과 다른 픽셀(어두운 배경)은 뺀다
   colorGate(rgba, alpha, coarse);
+  // 밖으로 날린 가는 잔머리도 같이 물들인다(안 하면 밝은 염색에서 머리 둘레가 검은 테두리처럼 남는다)
+  flyaways(rgba, W, H, alpha, rect.size / 20, faceP);
   const dist = hairDist(rgba, alpha);
   if (!dist) return null;
   mineHair = { alpha, rgba, w: W, h: H, dist };

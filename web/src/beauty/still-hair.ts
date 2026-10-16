@@ -462,3 +462,51 @@ export function colorGate(rgba: Uint8ClampedArray, alpha: Float32Array, coarse: 
     alpha[i] *= keep;
   }
 }
+
+/**
+ * 머리 둘레의 잔머리(1~2px 날린 가닥)를 알파에 더한다(제자리 수정).
+ * 분할은 굵은 덩어리만 잡아서, 밖으로 뻗은 가는 가닥은 원래 색으로 남는다 → 밝게 염색하면 머리 둘레에 검은 테두리처럼 보인다.
+ * 가닥은 가늘어서 둘레 배경 평균 밝기와 머리 밝기 사이 어디쯤이다: 배경 → 머리 쪽으로 간 비율을 알파로 쓴다(어두운 머리·밝은 배경, 반대도).
+ * 덩어리 머리에서 reach 안쪽만, block(얼굴·목 확률 0~1)이 높은 곳은 건드리지 않는다(눈썹·눈가 그늘).
+ */
+export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: Float32Array, reach: number, block: Float32Array | null = null): void {
+  const n = w * h;
+  const luma = new Float32Array(n);
+  for (let i = 0; i < n; i++) luma[i] = 0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2];
+  const hs: number[] = [];
+  for (let i = 0; i < n; i += 3) if (alpha[i] >= 0.9) hs.push(luma[i]);
+  if (hs.length < 100) return;
+  hs.sort((a, b) => a - b);
+  const hL = hs[hs.length >> 1];
+  const sol = new Float32Array(n), bgw = new Float32Array(n), bgv = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    if (alpha[i] >= 0.5) sol[i] = 1;
+    else if (alpha[i] < 0.05 && !(block && block[i] > 0.4)) { bgw[i] = 1; bgv[i] = luma[i]; }
+  }
+  const near = boxBlur(sol, w, h, Math.max(2, Math.round(reach)));
+  const r = Math.max(3, Math.round(reach / 3));
+  const num = boxBlur(bgv, w, h, r), den = boxBlur(bgw, w, h, r);
+  // ② 반대로 머리 가장자리 안쪽인데 배경 밝기 그대로인 곳(가닥 사이로 보이는 벽)은 알파를 뺀다
+  //    안 빼면 가장 밝은 분위로 대응돼 머리 둘레에 하얀 줄이 생긴다. 배경이 둘레에 충분히 있는 곳(가장자리)만
+  const r2 = Math.max(4, Math.round(reach / 1.5));
+  const num2 = boxBlur(bgv, w, h, r2), den2 = boxBlur(bgw, w, h, r2);
+  for (let i = 0; i < n; i++) {
+    if (alpha[i] < 0.05 || den2[i] < 0.05 || (block && block[i] > 0.4)) continue;
+    const bg = num2[i] / den2[i];
+    const c = bg - hL;
+    if (Math.abs(c) < 25) continue;
+    const s = (bg - luma[i]) / c;
+    alpha[i] *= Math.max(0, Math.min(1, (s - 0.1) / 0.35));
+  }
+  for (let i = 0; i < n; i++) {
+    if (alpha[i] >= 0.5 || near[i] <= 0 || den[i] < 0.15 || (block && block[i] > 0.4)) continue;
+    const bg = num[i] / den[i];
+    const c = bg - hL;
+    // 배경과 머리 밝기가 비슷하면 가닥과 배경 무늬를 구별할 수 없다
+    if (Math.abs(c) < 25) continue;
+    const s = Math.max(0, Math.min(1, ((bg - luma[i]) / c - 0.25) / 0.55));
+    if (s <= 0) continue;
+    const prox = Math.min(1, near[i] * 20);
+    alpha[i] = Math.max(alpha[i], s * prox);
+  }
+}
