@@ -145,7 +145,8 @@ export class PhotoAnalyzer {
     if (!this.hands) {
       const fs = await this.fs();
       this.hands = await this.make((delegate) =>
-        HandLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: HAND_MODEL, delegate }, runningMode: 'IMAGE', numHands: 2 }),
+        // 손톱만 가까이 찍힌 네일 사진은 손 전체가 안 보여 기본 문턱(0.5)으론 손을 못 찾는다
+        HandLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: HAND_MODEL, delegate }, runningMode: 'IMAGE', numHands: 2, minHandDetectionConfidence: 0.25, minHandPresenceConfidence: 0.25 }),
       );
     }
     return this.hands;
@@ -202,6 +203,13 @@ export class PhotoAnalyzer {
     const lm = r.landmarks[0];
     if (!lm) return null;
     return { p: toPx(lm, canvas.width, canvas.height), vis: lm.map((l) => l.visibility ?? 0) };
+  }
+
+  /** 손 점(픽셀 21점·깊이·왼오른손). 고른 사진에서 손톱 자리를 찾는 데 쓴다 */
+  async handPoints(canvas: HTMLCanvasElement): Promise<{ p: Vec2[]; z: number[]; handed: string }[]> {
+    const hm = await this.handModel();
+    const r = hm.detect(canvas);
+    return r.landmarks.map((lm, i) => ({ p: toPx(lm, canvas.width, canvas.height), z: lm.map((q) => q.z), handed: r.handedness[i]?.[0]?.categoryName ?? 'Right' }));
   }
 
   /** 머리카락 확률(0~1, 캔버스 크기로 늘임). 사진 모드 염색에서 머리 상자 밖(긴 머리 끝)을 잡는 데 쓴다 */

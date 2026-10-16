@@ -1117,16 +1117,70 @@ async function findRefNails(): Promise<void> {
   const cx = cv.getContext('2d', { willReadFrequently: true })!;
   cx.drawImage(src, 0, 0, w, h);
   const rgba = cx.getImageData(0, 0, w, h).data;
+  // ① 손 점이 잡히면 손가락 끝(손톱 자리)마다 SAM 으로 오린다: 색 덩어리로 찾으면 손가락 사이 그늘·배경이 잡히기도 한다
+  photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+  const handsRef = await photoAnalyzer.handPoints(cv).catch(() => []);
+  // 사진은 거울상이 아니라 왼손·오른손 판단이 뒤바뀌기도 한다: 손등 방향 두 가지 중 손톱이 더 잘 보이는 쪽
+  const bestQuads = (hp: (typeof handsRef)[number]) => {
+    const a = nailQuads(hp, 1), b = nailQuads(hp, -1);
+    const sum = (q: typeof a) => q.reduce((t, x) => t + x.vis, 0);
+    return sum(a) >= sum(b) ? a : b;
+  };
+  const quadsRef = handsRef.flatMap(bestQuads).filter((q) => q.vis > 0.3);
+  const dbgN: object[] = [];
+  (window as unknown as { irisNailRefDbg?: object }).irisNailRefDbg = { hands: handsRef.length, quads: quadsRef.length, nails: dbgN };
+  if (quadsRef.length >= 2) {
+    setStatus('고른 사진에서 손톱을 찾는 중…');
+    const samR = await samImage(cv);
+    const got: { mask: Uint8Array; frame: NailFrame }[] = [];
+    for (const q of quadsRef) {
+      const r = await samR.segment(q.c.x, q.c.y);
+      let area = 0;
+      for (let i = 0; i < r.mask.length; i++) area += r.mask[i];
+      // 사진 가장자리에 닿은 양(넓게 닿으면 배경)
+      let edgeN = 0;
+      for (let x = 0; x < w; x++) edgeN += r.mask[x] + r.mask[(h - 1) * w + x];
+      for (let y = 0; y < h; y++) edgeN += r.mask[y * w] + r.mask[y * w + w - 1];
+      // 가까이 찍은 긴 네일은 손 점의 손톱 크기가 실제보다 훨씬 작게 나와 크기로는 못 거른다:
+      // 사진의 8% 이하, 가장자리에 넓게 닿지 않음(배경), 손톱 모양(길쭉함·꽉 참)으로 거른다
+      dbgN.push({ score: +r.score.toFixed(2), area, edgeN });
+      if (r.score < 0.6 || area < 30 || area > w * h * 0.08 || edgeN > Math.sqrt(area) * 0.5) continue;
+      hullFill(r.mask, w, h);
+      const f = nailFrame(r.mask, w, h, q.dir, rgba);
+      if (!f) continue;
+      const len = f.t1 - f.t0, wid = 2 * Math.max(...f.prof);
+      const elong = len / Math.max(1, wid), solid = area / Math.max(1, len * wid);
+      if (elong < 1.1 || elong > 5 || solid < 0.5) continue;
+      got.push({ mask: r.mask, frame: f });
+    }
+    if (got.length >= 2) {
+      refNails = { src, rgba, w, h, nails: got };
+      return;
+    }
+  }
+  // ② 손 점이 없으면(손톱만 가까이 찍힌 사진 등) 색 덩어리로
   const G = 4;
   const gw = Math.floor(w / G), gh = Math.floor(h / G);
   const bin = new Int16Array(gw * gh).fill(-1);
   const counts = new Map<number, number>();
+  const isWhite = (o: number): boolean => {
+    const mx = Math.max(rgba[o], rgba[o + 1], rgba[o + 2]), mn = Math.min(rgba[o], rgba[o + 1], rgba[o + 2]);
+    return mx - mn < 22 && mx > 170;
+  };
+  // 흰·밝은 회색은 바탕이 흰 사진(가장자리에 흰 곳이 많음)에서만 뺀다: 어두운 바탕의 흰·연분홍 네일은 후보로 둔다
+  let edge = 0, edgeWhite = 0;
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    if (x !== 0 && y !== 0 && x !== gw - 1 && y !== gh - 1) continue;
+    edge++;
+    if (isWhite(((y * G + 2) * w + x * G + 2) * 4)) edgeWhite++;
+  }
+  const whiteBg = edgeWhite > edge * 0.25;
   for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
     const o = ((y * G + 2) * w + x * G + 2) * 4;
     const r = rgba[o], g = rgba[o + 1], b = rgba[o + 2];
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    const mx = Math.max(r, g, b);
     if (mx < 35) continue; // 아주 어두움
-    if (mx - mn < 22 && mx > 170) continue; // 흰·밝은 회색 배경
+    if (whiteBg && isWhite(o)) continue; // 흰·밝은 회색 배경
     // 피부(YCbCr): 손가락은 빼고 손톱 후보만
     const Y = 0.299 * r + 0.587 * g + 0.114 * b, Cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b, Cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b;
     if (Y > 60 && Cr > 135 && Cr < 175 && Cb > 85 && Cb < 128 && r > g) continue;
@@ -1217,18 +1271,36 @@ async function ensureNailsOnce(): Promise<void> {
   if (quads.length) {
     setStatus('손톱을 찾는 중…');
     const sam = await mySamImage();
-    for (const q of quads) await addMyNail(sam, q.c.x, q.c.y, q.dir, true);
+    // 손 점으로 정한 손톱 크기(길이·폭)를 넘는 덩어리(손가락·손 전체가 잡힌 것)는 버린다
+    for (const q of quads) await addMyNail(sam, q.c.x, q.c.y, q.dir, true, { c: q.c, size: Math.max(q.len, q.width) });
   }
   setStatus(myNails.length ? '빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요' : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');
   nailGen++;
   applyAll();
 }
-async function addMyNail(sam: SamImage, x: number, y: number, hint: { x: number; y: number } | null, quiet = false): Promise<boolean> {
+async function addMyNail(
+  sam: SamImage, x: number, y: number, hint: { x: number; y: number } | null, quiet = false,
+  expect: { c: { x: number; y: number }; size: number } | null = null,
+): Promise<boolean> {
   const base = stillRGBA();
   const r = await sam.segment(x, y);
-  let area = 0;
-  for (let i = 0; i < r.mask.length; i++) area += r.mask[i];
-  if (r.score < 0.5 || area < base.w * base.h * 0.0003 || area > base.w * base.h * 0.06) {
+  let area = 0, sx = 0, sy = 0, x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < r.mask.length; i++) {
+    if (!r.mask[i]) continue;
+    area++;
+    const px = i % base.w, py = (i - px) / base.w;
+    sx += px; sy += py;
+    if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+  }
+  // 손톱은 작다: 사진의 3% 넘거나, (손 점이 있으면) 예상 손톱 크기보다 훨씬 크거나 가운데가 멀면 손가락·손이 잡힌 것
+  let bad = r.score < 0.5 || area < base.w * base.h * 0.0003 || area > base.w * base.h * 0.03;
+  if (!bad && expect) {
+    const ext = Math.max(x1 - x0, y1 - y0);
+    const cd = Math.hypot(sx / area - expect.c.x, sy / area - expect.c.y);
+    // 손 점의 손톱 크기는 손가락 끝마디 기준이라 긴 네일보다 작다(실제 손톱은 2~4배): 손가락·손 전체(7배 넘게)만 거른다
+    bad = ext > expect.size * 5 || area > expect.size * expect.size * 8 || cd > expect.size * 2.5;
+  }
+  if (bad) {
     if (!quiet) setStatus('손톱을 찾지 못했어요. 손톱 가운데를 눌러 주세요');
     return false;
   }
