@@ -3,6 +3,8 @@
 // 고른 손톱의 같은 (u, v)로 대응시킨다. 모양이 달라도(아몬드 ↔ 스퀘어) 가장자리끼리 맞는다.
 // 내 손톱의 명암(빛 방향·윤기)을 조금 얹어 사진 속 조명과 어울리게 한다. 순수 계산(단위 테스트 대상).
 
+import { rgb2lab } from './still-hair.ts';
+
 const BINS = 24;
 
 export interface NailFrame {
@@ -109,14 +111,16 @@ const hwAt = (f: NailFrame, u: number): number => {
 export function transferNail(dst: Uint8ClampedArray, W: number, H: number, dMask: Uint8Array, dF: NailFrame, src: Uint8ClampedArray, sw: number, sh: number, sF: NailFrame, shadeK = 0.35, amount = 1): void {
   const dnx = -dF.ay, dny = dF.ax;
   const snx = -sF.ay, sny = sF.ax;
-  // 경계 부드럽게: 3×3 평균 알파
+  // 경계 부드럽게: 손톱 폭에 맞춘 반지름(폭의 6%, 1~4px)으로 평균한 알파. 칼로 오린 듯한 테두리가 아니라 실제 손톱처럼 살짝 녹게
+  const fr = Math.max(1, Math.min(4, Math.round(Math.max(...dF.prof) * 2 * 0.06)));
   const alphaAt = (x: number, y: number): number => {
-    let s = 0;
-    for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+    let s = 0, n = 0;
+    for (let j = -fr; j <= fr; j++) for (let i = -fr; i <= fr; i++) {
       const xx = Math.min(W - 1, Math.max(0, x + i)), yy = Math.min(H - 1, Math.max(0, y + j));
       s += dMask[yy * W + xx];
+      n++;
     }
-    return s / 9;
+    return s / n;
   };
   // 내 손톱 평균 밝기(명암 비율 기준)
   let lsum = 0, ln = 0;
@@ -127,8 +131,8 @@ export function transferNail(dst: Uint8ClampedArray, W: number, H: number, dMask
   const R = Math.max(...dF.prof) + 2;
   const xs = [dF.t0, dF.t1].flatMap((t) => [-R, R].map((s) => dF.cx + dF.ax * t + dnx * s));
   const ys = [dF.t0, dF.t1].flatMap((t) => [-R, R].map((s) => dF.cy + dF.ay * t + dny * s));
-  const x0 = Math.max(0, Math.floor(Math.min(...xs)) - 2), x1 = Math.min(W - 1, Math.ceil(Math.max(...xs)) + 2);
-  const y0 = Math.max(0, Math.floor(Math.min(...ys)) - 2), y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)) + 2);
+  const x0 = Math.max(0, Math.floor(Math.min(...xs)) - 2 - fr), x1 = Math.min(W - 1, Math.ceil(Math.max(...xs)) + 2 + fr);
+  const y0 = Math.max(0, Math.floor(Math.min(...ys)) - 2 - fr), y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)) + 2 + fr);
   const sL = sF.t1 - sF.t0;
   const samp = (px: number, py: number, out: number[]): void => {
     const x = Math.max(0, Math.min(sw - 1.001, px)), y = Math.max(0, Math.min(sh - 1.001, py));
@@ -192,4 +196,59 @@ export function hullFill(mask: Uint8Array, w: number, h: number): Uint8Array {
     for (let x = lo; x <= hi; x++) mask[y * w + x] = 1;
   }
   return mask;
+}
+
+/** 마스크 안과 바로 바깥 띠(두께 r)의 평균색 차이(Lab ΔE 근사). 손톱이 아닌 손가락 피부를 잡으면 작다 */
+export function maskContrast(rgba: Uint8ClampedArray, w: number, h: number, mask: Uint8Array, r = 3): number {
+  let x0 = w, y0 = h, x1 = 0, y1 = 0;
+  for (let i = 0; i < mask.length; i++) if (mask[i]) { const x = i % w, y = (i - x) / w; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < x0) return 0;
+  const lab = new Float32Array(3);
+  const inS = [0, 0, 0], outS = [0, 0, 0];
+  let nIn = 0, nOut = 0;
+  for (let y = Math.max(0, y0 - r); y <= Math.min(h - 1, y1 + r); y++) for (let x = Math.max(0, x0 - r); x <= Math.min(w - 1, x1 + r); x++) {
+    const i = y * w + x;
+    let ring = false;
+    if (!mask[i]) {
+      for (let j = -r; j <= r && !ring; j += r) for (let k = -r; k <= r; k += r) {
+        const xx = x + k, yy = y + j;
+        if (xx >= 0 && yy >= 0 && xx < w && yy < h && mask[yy * w + xx]) { ring = true; break; }
+      }
+      if (!ring) continue;
+    }
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    const t = mask[i] ? inS : outS;
+    t[0] += lab[0]; t[1] += lab[1]; t[2] += lab[2];
+    if (mask[i]) nIn++; else nOut++;
+  }
+  if (!nIn || !nOut) return 0;
+  return Math.hypot(inS[0] / nIn - outS[0] / nOut, inS[1] / nIn - outS[1] / nOut, inS[2] / nIn - outS[2] / nOut);
+}
+
+/**
+ * 색만 아는 네일(고른 사진에서 손톱 모양을 못 찾음)용 가상 손톱 그림: 끝이 둥근 손톱 모양에 그 색을 칠하고,
+ * 길이 방향으로 살짝 밝아지는 그러데이션과 가운데 세로 광택 띠를 넣는다. 위가 끝(손끝), 아래가 뿌리.
+ */
+export function syntheticNail(color: [number, number, number], gloss = 0.5): { rgba: Uint8ClampedArray; w: number; h: number; mask: Uint8Array; frame: NailFrame } {
+  const w = 64, h = 112;
+  const rgba = new Uint8ClampedArray(w * h * 4), mask = new Uint8Array(w * h);
+  const cx = w / 2, hw = w * 0.42, top = h * 0.06, bot = h * 0.94;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    // 끝(위)은 반원, 뿌리(아래)는 완만한 곡선
+    const dy = y < top + hw ? (top + hw - y) / hw : 0;
+    const halfW = dy > 0 ? hw * Math.sqrt(Math.max(0, 1 - dy * dy)) : hw * (1 - Math.max(0, (y - (bot - hw * 0.5)) / (hw * 0.5)) ** 2 * 0.35);
+    const inside = y >= top && y <= bot && Math.abs(x - cx) <= halfW;
+    const i = y * w + x;
+    if (!inside) continue;
+    mask[i] = 1;
+    const u = (y - top) / (bot - top); // 0 끝 → 1 뿌리
+    const s = (x - cx) / Math.max(1, halfW); // -1 ~ 1
+    // 둥근 손톱 면: 가장자리로 갈수록 조금 어둡게, 끝 쪽은 조금 밝게, 가운데 왼쪽에 세로 광택
+    const shade = 1 - 0.18 * s * s + 0.06 * (1 - u);
+    const hl = gloss * Math.exp(-(((s + 0.25) / 0.12) ** 2)) * (0.3 + 0.7 * Math.sin(Math.PI * Math.min(1, u * 1.1)));
+    for (let c = 0; c < 3; c++) rgba[i * 4 + c] = Math.min(255, color[c] * shade + (255 - color[c] * shade) * hl * 0.8);
+    rgba[i * 4 + 3] = 255;
+  }
+  const frame = nailFrame(mask, w, h, { x: 0, y: -1 })!;
+  return { rgba, w, h, mask, frame };
 }

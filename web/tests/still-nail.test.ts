@@ -77,3 +77,25 @@ test('볼록 껍질 채우기: 반사광 구멍과 오목한 들쭉날쭉을 메
   assert.ok(m.reduce((s, v) => s + v, 0) > before);
   assert.equal(m[2 * W + 2], 0);
 });
+
+test('가상 손톱 그림: 손톱 모양 마스크·틀(끝이 위)과 광택', async () => {
+  const { syntheticNail } = await import('../src/beauty/still-nail.ts');
+  const n = syntheticNail([200, 30, 40]);
+  let a = 0;
+  for (const v of n.mask) a += v;
+  assert.ok(a > n.w * n.h * 0.5, `면적 ${a}`);
+  assert.ok(n.frame.ay < -0.9, `끝 방향 ${n.frame.ay}`);
+  let maxR = 0;
+  for (let i = 0; i < n.mask.length; i++) if (n.mask[i]) maxR = Math.max(maxR, n.rgba[i * 4 + 1]);
+  assert.ok(maxR > 100, '광택 띠');
+});
+
+test('손톱 대비: 둘레 피부와 같은 색이면 작고, 빨간 매니큐어면 크다', async () => {
+  const { maskContrast } = await import('../src/beauty/still-nail.ts');
+  const w = 40, h = 40, rgba = new Uint8ClampedArray(w * h * 4), mask = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) { rgba[i * 4] = 220; rgba[i * 4 + 1] = 180; rgba[i * 4 + 2] = 160; rgba[i * 4 + 3] = 255; }
+  for (let y = 15; y < 25; y++) for (let x = 15; x < 25; x++) mask[y * w + x] = 1;
+  assert.ok(maskContrast(rgba, w, h, mask) < 1);
+  for (let y = 15; y < 25; y++) for (let x = 15; x < 25; x++) { const o = (y * w + x) * 4; rgba[o] = 200; rgba[o + 1] = 20; rgba[o + 2] = 30; }
+  assert.ok(maskContrast(rgba, w, h, mask) > 30);
+});

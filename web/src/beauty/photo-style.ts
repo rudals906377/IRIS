@@ -208,8 +208,32 @@ export class PhotoAnalyzer {
   /** 손 점(픽셀 21점·깊이·왼오른손). 고른 사진에서 손톱 자리를 찾는 데 쓴다 */
   async handPoints(canvas: HTMLCanvasElement): Promise<{ p: Vec2[]; z: number[]; handed: string }[]> {
     const hm = await this.handModel();
-    const r = hm.detect(canvas);
-    return r.landmarks.map((lm, i) => ({ p: toPx(lm, canvas.width, canvas.height), z: lm.map((q) => q.z), handed: r.handedness[i]?.[0]?.categoryName ?? 'Right' }));
+    // 손바닥 찾기는 크기·여백에 민감해 같은 사진도 가끔 놓친다: 그대로 → 절반 크기 → 둘레에 여백(25%)을 더해 차례로 시도
+    const tries: { c: HTMLCanvasElement; sx: number; ox: number; oy: number }[] = [{ c: canvas, sx: 1, ox: 0, oy: 0 }];
+    const half = document.createElement('canvas');
+    half.width = Math.max(2, Math.round(canvas.width / 2));
+    half.height = Math.max(2, Math.round(canvas.height / 2));
+    half.getContext('2d')!.drawImage(canvas, 0, 0, half.width, half.height);
+    tries.push({ c: half, sx: canvas.width / half.width, ox: 0, oy: 0 });
+    const m = Math.round(Math.max(canvas.width, canvas.height) * 0.25);
+    const pad = document.createElement('canvas');
+    pad.width = canvas.width + 2 * m;
+    pad.height = canvas.height + 2 * m;
+    const pg = pad.getContext('2d')!;
+    pg.fillStyle = '#808080';
+    pg.fillRect(0, 0, pad.width, pad.height);
+    pg.drawImage(canvas, m, m);
+    tries.push({ c: pad, sx: 1, ox: -m, oy: -m });
+    for (const t of tries) {
+      const r = hm.detect(t.c);
+      if (!r.landmarks.length) continue;
+      return r.landmarks.map((lm, i) => ({
+        p: toPx(lm, t.c.width, t.c.height).map((q) => ({ x: q.x * t.sx + t.ox, y: q.y * t.sx + t.oy })),
+        z: lm.map((q) => q.z),
+        handed: r.handedness[i]?.[0]?.categoryName ?? 'Right',
+      }));
+    }
+    return [];
   }
 
   /** 머리카락 확률(0~1, 캔버스 크기로 늘임). 사진 모드 염색에서 머리 상자 밖(긴 머리 끝)을 잡는 데 쓴다 */

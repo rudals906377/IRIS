@@ -54,19 +54,25 @@ export async function samImage(canvas: HTMLCanvasElement): Promise<SamImage> {
       const out = await model({ ...emb, input_points: inputs.input_points, input_labels: inputs.input_labels });
       const masks = await processor.post_process_masks(out.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes);
       const sc = Array.from(out.iou_scores.data as ArrayLike<number>);
-      // 세 후보 중: 점수가 높고, 너무 크지 않은 것(손 전체가 아니라 손톱 하나)
+      // 세 후보(작은 부분 → 큰 덩어리) 중 손톱 하나: 점수가 가장 좋은 것에 가까운(0.08 안) 것 가운데 가장 작은 것.
+      // 가장 좋은 점수만 고르면 손톱+손가락 전체 같은 큰 덩어리가 자주 이긴다. 사진의 8% 넘는 덩어리는 깎는다
       const m = masks[0].data;
       const n = w * h;
-      let best = -1;
-      let bestScore = -1;
+      const cand: { k: number; area: number; s: number }[] = [];
       for (let k = 0; k < sc.length; k++) {
         let area = 0;
         for (let i = 0; i < n; i++) if (m[k * n + i]) area++;
-        const frac = area / n;
-        const s = sc[k] - (frac > 0.08 ? 0.5 : 0);
-        if (area > 20 && s > bestScore) {
-          bestScore = s;
-          best = k;
+        if (area > 20) cand.push({ k, area, s: sc[k] - (area / n > 0.08 ? 0.5 : 0) });
+      }
+      const top = Math.max(-1, ...cand.map((c) => c.s));
+      let best = -1;
+      let bestScore = -1;
+      let bestArea = Infinity;
+      for (const c of cand) {
+        if (c.s >= top - 0.08 && c.area < bestArea) {
+          best = c.k;
+          bestScore = c.s;
+          bestArea = c.area;
         }
       }
       const mask = new Uint8Array(n);
