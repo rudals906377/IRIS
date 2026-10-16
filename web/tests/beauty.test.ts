@@ -334,6 +334,20 @@ test('타투 도안 뽑기: 피부 위 선은 잡고, 피부 위 새까만 큰 �
   assert.ok(r.rgba[i * 4] < 140);
 });
 
+test('타투 도안 뽑기: 배율을 곱해 소수가 된 영역도 잉크를 그대로 뽑는다(빈 도안이 되지 않게)', () => {
+  const w = 200, h = 200;
+  const d = new Uint8ClampedArray(w * h * 4);
+  const skin = new Float32Array(w * h).fill(1);
+  for (let i = 0; i < w * h; i++) d.set([220, 170, 150, 255], i * 4);
+  for (let k = 60; k <= 100; k++) for (const [x, y] of [[80, k], [k, 80]]) d.set([60, 50, 50, 255], (y * w + x) * 4);
+  const r = extractDesign({ w, h, d, skin }, { x: 50.37, y: 49.81, w: 60.5, h: 61.26 })!;
+  assert.ok(r);
+  assert.ok(Number.isInteger(r.rect.x) && Number.isInteger(r.rect.w));
+  let ink = 0;
+  for (let i = 3; i < r.rgba.length; i += 4) if (r.rgba[i] > 128) ink++;
+  assert.ok(ink > 40, `잉크 ${ink}`);
+});
+
 test('두 색 아이섀도: 바깥 가중치 망은 눈꼬리 1 → 앞머리 0, 섀도 망과 같은 크기', () => {
   const p = Array.from({ length: 478 }, (_, i) => ({ x: 200 + 80 * Math.cos(i), y: 200 + 100 * Math.sin(i * 1.3) }));
   p[234] = { x: 100, y: 200 };

@@ -201,8 +201,12 @@ export function extractDesign(src: InkSource, rect?: Rect | null, maxSide = 512)
   const n = w * h;
   const short = Math.min(w, h);
   const found = findInk(src);
-  const R = rect ?? proposeRect(src, found);
-  if (!R || R.w < 4 || R.h < 4) return null;
+  const R0 = rect ?? proposeRect(src, found);
+  if (!R0) return null;
+  // 정수 칸으로(배율을 곱한 영역은 소수라 배열 번호가 소수가 되어 도안 전체가 빈칸이 되던 것) + 그림 안으로
+  const rx = Math.max(0, Math.round(R0.x)), ry = Math.max(0, Math.round(R0.y));
+  const R = { x: rx, y: ry, w: Math.min(w - rx, Math.round(R0.x + R0.w) - rx), h: Math.min(h - ry, Math.round(R0.y + R0.h) - ry) };
+  if (R.w < 4 || R.h < 4) return null;
   // 잉크 아래 피부색 추정: 잉크(조금 넓힘)가 아닌 피부 픽셀만 넓게 흐려 평균
   const inkF = new Float32Array(n);
   for (let i = 0; i < n; i++) inkF[i] = found.ink[i];
