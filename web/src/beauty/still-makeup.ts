@@ -85,12 +85,13 @@ export function transferMakeup(
   const browB = boxBlur(browM0, w, h, rf(0.015));
   const lipM = new Float32Array(n), eyeM = new Float32Array(n), browM = new Float32Array(n), faceM = new Float32Array(n);
   const lipB = boxBlur(lipO, w, h, rf(0.008)), innB = boxBlur(lipI, w, h, rf(0.006));
-  const faceB = boxBlur(face, w, h, rf(0.03));
+  // 얼굴 가장자리는 넓게(얼굴 폭 6%) 녹인다: 좁으면 턱선·이마 둘레에 화장한 얼굴과 귀·목의 경계가 선처럼 보인다
+  const faceB = boxBlur(boxBlur(face, w, h, rf(0.03)), w, h, rf(0.03));
   for (let i = 0; i < n; i++) {
     lipM[i] = lipB[i] * (1 - ramp(innB[i], 0.3, 0.8));
     eyeM[i] = ramp(zoneB[i], 0.02, 0.15) * (1 - ramp(openB[i], 0.55, 0.9));
     browM[i] = ramp(browB[i], 0.05, 0.4);
-    faceM[i] = ramp(faceB[i], 0.5, 0.95);
+    faceM[i] = ramp(faceB[i], 0.35, 0.95);
   }
   // ③ 믿을 수 있는 곳: 휜 곳 ∩ 두 사진 모두 얼굴 피부(앞머리 아님) ∩ 고른 사진 손 아님
   const V = new Float32Array(n);
