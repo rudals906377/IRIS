@@ -139,7 +139,8 @@ export function transferMakeup(
     const [lo, hi] = LIMIT[c];
     for (let i = 0; i < n; i++) {
       const wm = 0.5 + 0.5 * Math.max(lipM[i], eyeM[i]);
-      const v = (rfLow[c][i] - rfBase[c][i]) - wm * (myLow[c][i] - myBase[c][i]) + g * (rfBase[c][i] - myBase[c][i]);
+      // 바탕색 차이 몫은 ±3 까지만: 얼굴에만 입히므로 크면 귀·목과 갈려 가면처럼 보인다(빨간 조명 사진은 피부가 붉게 찍힌다)
+      const v = (rfLow[c][i] - rfBase[c][i]) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
       d[i] = Math.max(lo, Math.min(hi, v));
     }
     return d;
