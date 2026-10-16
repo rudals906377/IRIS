@@ -231,7 +231,9 @@ export function recolorHair(
       // 리본 위쪽 일부만 밝은 가닥으로(위로만 민다: 어둡게 누르면 단색 머리에 검은 얼룩이 생긴다)
       const r = Math.max(0, Math.min(1, (ribbons[i] - 0.15) / 0.4));
       const sm = r * r * (3 - 2 * r);
-      U[i] += wr * sm * (1 - U[i]);
+      // 리본 안을 가는 올 무늬로 끊는다: 한 덩어리로 밝히면 물감으로 칠한 띠처럼 평평하다(실제 하이라이트는 밝은 올 묶음)
+      const tex = strands ? Math.max(0.3, Math.min(1, 0.65 + strands[i] * 0.7)) : 1;
+      U[i] += wr * sm * tex * (1 - U[i]);
     }
   }
   // ①' 아주 어두운 곳(원본 루마 24 아래: 정보가 거의 없는 검정)은 가장 어두운 분위로 몰려 밝게 바꿀 때 검은 점·얼룩이 된다
