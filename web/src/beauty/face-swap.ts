@@ -230,5 +230,22 @@ export function swapFace(
       out[i * 4 + c] = d0 + (Math.max(0, Math.min(255, v * r)) - d0) * m;
     }
   }
+  // 크게 늘린 얼굴(내 사진 얼굴이 작음)은 피부결이 없어 매끈한 인형처럼 보인다 → 고른 사진 피부의 아주 작은 결(밝기 잔무늬)만 얹는다.
+  // 결은 작은 값(±5)만: 눈·입술·눈썹 가장자리처럼 큰 차이는 빼서 고른 사진 이목구비가 비치지 않게
+  if (up > 1.4) {
+    const k = Math.min(1, (up - 1.4) / 1.5);
+    const Ld = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) Ld[i] = 0.299 * dst[i * 4] + 0.587 * dst[i * 4 + 1] + 0.114 * dst[i * 4 + 2];
+    const Lb = boxBlur(Ld, W, H, 1);
+    for (let i = 0; i < W * H; i++) {
+      const m = mask[i] * wt[i];
+      if (m <= 0.01) continue;
+      const hp = Ld[i] - Lb[i], ah = Math.abs(hp);
+      const g = ah < 5 ? 1 : Math.max(0, 1 - (ah - 5) / 5);
+      if (g <= 0) continue;
+      const add = hp * g * k * m;
+      for (let c = 0; c < 3; c++) out[i * 4 + c] = Math.max(0, Math.min(255, out[i * 4 + c] + add));
+    }
+  }
   return out;
 }
