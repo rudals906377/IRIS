@@ -175,6 +175,23 @@ export function transferMakeup(
       for (let x = Math.max(0, Math.floor(nx0 - mg)); x <= Math.min(w - 1, Math.ceil(nx1 + mg)); x++) dots[y * w + x] = 0;
     }
   }
+  // 아래 눈가 아이라인은 내 눈 선에 붙은 가는 띠만: 고른 사진 눈이 더 둥글면 그 아래 속눈썹 선·애교살 그늘이
+  // 내 아래 눈꺼풀보다 아래로 와서 따로 떨어진 어두운 띠(다크서클처럼)가 된다. 위쪽(아이라인·날개)은 그대로
+  const nearB = boxBlur(eyeOpen, w, h, rf(0.022));
+  const lowerOK = new Float32Array(n).fill(1);
+  for (const [ia, ib] of [[33, 133], [362, 263]]) {
+    const A = dp[ia], B = dp[ib];
+    const xa = Math.min(A.x, B.x) - fw * 0.06, xb = Math.max(A.x, B.x) + fw * 0.06;
+    for (let y = 0; y < h; y++) for (let x = Math.max(0, Math.floor(xa)); x < Math.min(w, Math.ceil(xb)); x++) {
+      const t = Math.max(0, Math.min(1, (x - A.x) / (B.x - A.x || 1)));
+      const below = ramp(y - (A.y + (B.y - A.y) * t), 0, fw * 0.015);
+      if (below <= 0) continue;
+      const i = y * w + x;
+      lowerOK[i] = Math.min(lowerOK[i], 1 - below * (1 - ramp(nearB[i], 0.02, 0.12)));
+    }
+  }
+  // 그 아래는 가는 선(그린 아래 속눈썹)만: 얼굴 폭 1.2% 흐림보다 어두운 정도
+  const rfThin = wblur(rfL[0], V, w, h, rf(0.012));
   // ⑤ 옮기기
   const o = new Uint8ClampedArray(4);
   for (let i = 0; i < n; i++) {
@@ -191,8 +208,9 @@ export function transferMakeup(
     L += amt.lip * lipM[i] * Math.max(0, det) * 0.6;
     // 아이라인: 고른 사진의 '눈두덩보다 어두운 정도'를 내 눈두덩에(어둡게만)
     const liner = myLid[i] + Math.min(0, rfL[0][i] - rfLid[i]);
-    const we = amt.eye * eyeM[i] * keep * Vb[i];
+    const we = amt.eye * eyeM[i] * keep * Vb[i] * lowerOK[i];
     if (we > 0.002 && liner < L) L += (liner - L) * we;
+    if (lowerOK[i] < 1) L += Math.min(0, rfL[0][i] - rfThin[i]) * amt.eye * eyeM[i] * keep * Vb[i] * (1 - lowerOK[i]);
     // 주근깨·점: 피부(눈가·입술 밖)에서 뚜렷한 작은 어두운 점
     const fr = rfL[0][i] - rfSkinMean[i] + 2.5;
     if (fr < 0 && dots[i] > 0) L += fr * 2 * dots[i] * amt.skin * keep * Vb[i] * (1 - eyeM[i]) * (1 - lipM[i]);
