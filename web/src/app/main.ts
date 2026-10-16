@@ -33,9 +33,10 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { closeHoles, colorGate, guidedFilter, hairDist, recolorHair, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, guidedFilter, hairDist, recolorHair, type HairDist } from '../beauty/still-hair.ts';
 import { hullFill, nailFrame, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
+import { swapFace } from '../beauty/face-swap.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
 
@@ -184,7 +185,7 @@ function applyLookToEngine(): void {
   const h = chosen.hair;
   engine.hair = h.color && !off.has('hair') ? { color: h.color, amount: amt(h.amount), tip: hairTip ?? undefined } : null;
   // 사진 모드: 염색은 셰이더 대신 고른 사진의 실제 머리색 분포를 올마다 옮겨 사진에 굽는다(still-hair.ts)
-  if (PHOTO_MODE && engine.source.kind === 'image') {
+  if (PHOTO_MODE && engine.source.kind === 'image' && !swapMode) {
     engine.hair = null;
     // 네일도 사진에 굽는다(찾은 손톱이 있을 때). 아직 없으면 실시간 네일을 미리보기로 둔다
     if (myNails.length && refNailArt()) engine.nail = null;
@@ -625,7 +626,7 @@ async function refHairDist(): Promise<HairDist | null> {
   return refHair.dist;
 }
 async function updateStillHair(): Promise<void> {
-  if (!PHOTO_MODE || !photoOriginal || engine.source.kind !== 'image') return;
+  if (!PHOTO_MODE || !photoOriginal || engine.source.kind !== 'image' || swapMode) return;
   if (stillHairBusy) {
     await stillHairBusy;
     return updateStillHair();
@@ -820,7 +821,7 @@ function ensureNails(): Promise<void> {
   return nailsEnsuring;
 }
 async function ensureNailsOnce(): Promise<void> {
-  if (!PHOTO_MODE || !photoOriginal) return;
+  if (!PHOTO_MODE || !photoOriginal || swapMode) return;
   if (!refNailsBusy) refNailsBusy = findRefNails().finally(() => (refNailsBusy = null));
   await refNailsBusy;
   if (!refNailArt()) {
@@ -861,7 +862,7 @@ async function addMyNail(sam: SamImage, x: number, y: number, hint: { x: number;
 }
 // 사진 모드에서 네일을 켰을 때 화면을 누르면: 손톱 더하기(이미 잡힌 손톱이면 빼기)
 viewEl.addEventListener('pointerdown', (ev) => {
-  if (!PHOTO_MODE || tattooPicking || !photoOriginal || !chosen.nail.color || off.has('nail') || !refNailArt()) return;
+  if (!PHOTO_MODE || swapMode || tattooPicking || !photoOriginal || !chosen.nail.color || off.has('nail') || !refNailArt()) return;
   const cv = viewEl.querySelector('canvas')!;
   const r = cv.getBoundingClientRect();
   // object-fit: contain 으로 그려지므로 실제 그림이 차지하는 상자를 구한다
@@ -891,6 +892,115 @@ viewEl.addEventListener('pointerdown', (ev) => {
 // 자동 시험용: 사진 모드 손톱 상태
 (window as unknown as { irisNail: unknown }).irisNail = { get ref() { return refNails; }, get mine() { return myNails; } };
 
+// ---- 사진 속에 내 얼굴(face-swap.ts): 고른 사진은 그대로, 얼굴만 내 얼굴로 바꾼 뒤 그 사진의 화장을 다시 입힌다 ----
+const btnSwapEl = $<HTMLButtonElement>('btn-swap');
+let swapMode = false;
+let swapSmall = false;
+let swapCache: { mine: ImageBitmap; ref: ImageBitmap; bmp: ImageBitmap } | null = null;
+/** 그림을 긴 변 maxSide 이하 캔버스로 */
+function toCanvas(img: ImageBitmap, maxSide: number): HTMLCanvasElement {
+  const s = Math.min(1, maxSide / Math.max(img.width, img.height));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(img.width * s);
+  cv.height = Math.round(img.height * s);
+  cv.getContext('2d')!.drawImage(img, 0, 0, cv.width, cv.height);
+  return cv;
+}
+async function makeSwap(mine: ImageBitmap, ref: ImageBitmap): Promise<ImageBitmap | string> {
+  if (swapCache?.mine === mine && swapCache.ref === ref) return swapCache.bmp;
+  photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+  setStatus('두 사진의 얼굴을 찾는 중…');
+  const mc = toCanvas(mine, 1600), rc = toCanvas(ref, 2400);
+  const [mp, rp] = [await photoAnalyzer.faceLandmarks(mc), await photoAnalyzer.faceLandmarks(rc)];
+  if (!mp) return '내 사진에서 얼굴을 찾지 못했어요';
+  if (!rp) return '고른 사진에서 얼굴을 찾지 못했어요(얼굴이 보이는 사진이어야 해요)';
+  // 두 사진 얼굴 주변을 정밀 분할: 고른 사진의 앞머리·안경은 그대로 두고, 내 앞머리는 옮기지 않으려고
+  setStatus('얼굴 자리를 나누는 중…');
+  const fw = Math.hypot(rp[454].x - rp[234].x, rp[454].y - rp[234].y);
+  // hairPad: 머리카락 둘레를 이만큼(분할 칸) 넓혀 뺀다. 이마에 걸친 가는 가닥이 금처럼 옮겨지지 않게
+  const skinOf = async (c: HTMLCanvasElement, pts: { x: number; y: number }[], hairPad = 0): Promise<Float32Array | null> => {
+    const w = Math.hypot(pts[454].x - pts[234].x, pts[454].y - pts[234].y);
+    const cx = (pts[234].x + pts[454].x) / 2, cy = (pts[10].y + pts[152].y) / 2;
+    const size = w * 2.2;
+    const rect = { x: cx - size / 2, y: cy - size / 2, size };
+    try {
+      const p = await parseFace(c, rect, setStatus);
+      const face = new Float32Array(p.size * p.size);
+      for (let i = 0; i < face.length; i++) face[i] = p.face[i] / 255;
+      if (hairPad > 0) {
+        const hair = new Float32Array(p.size * p.size);
+        for (let i = 0; i < hair.length; i++) hair[i] = p.hair[i] / 255;
+        const hb = boxBlur(hair, p.size, p.size, hairPad);
+        for (let i = 0; i < face.length; i++) face[i] *= 1 - Math.min(1, hb[i] * 4);
+      }
+      const m = new Float32Array(c.width * c.height);
+      for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+        const u = Math.floor(((x - rect.x) / rect.size) * p.size), v = Math.floor(((y - rect.y) / rect.size) * p.size);
+        if (u >= 0 && v >= 0 && u < p.size && v < p.size) m[y * c.width + x] = face[v * p.size + u];
+      }
+      return m;
+    } catch (err) {
+      console.warn('얼굴 분할 실패(윤곽만 사용)', err);
+      return null;
+    }
+  };
+  const skin = await skinOf(rc, rp);
+  const mySkin = await skinOf(mc, mp, 5);
+  const hands = await photoAnalyzer.bodySkin(rc).catch(() => null);
+  setStatus('얼굴을 바꾸는 중…');
+  await new Promise((r) => setTimeout(r, 30));
+  const md = mc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, mc.width, mc.height).data;
+  const rd = rc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, rc.width, rc.height).data;
+  const out = swapFace(rd, rc.width, rc.height, rp, md, mc.width, mc.height, mp, FACE_OVAL, skin, hands, mySkin);
+  const bmp = await createImageBitmap(new ImageData(out as unknown as Uint8ClampedArray<ArrayBuffer>, rc.width, rc.height));
+  const myW = Math.hypot(mp[454].x - mp[234].x, mp[454].y - mp[234].y);
+  swapSmall = fw / Math.max(1, myW) > 2;
+  swapCache = { mine, ref, bmp };
+  return bmp;
+}
+async function setSwap(on: boolean): Promise<void> {
+  if (!PHOTO_MODE || !photoOriginal) return;
+  if (on) {
+    if (!lastSource) {
+      setStatus('먼저 📷 사진 고르기로 얼굴이 보이는 사진을 골라 주세요');
+      return;
+    }
+    btnSwapEl.disabled = true;
+    try {
+      const r = await makeSwap(photoOriginal, lastSource);
+      if (typeof r === 'string') {
+        setStatus(r);
+        return;
+      }
+      swapMode = true;
+      // 고른 사진의 머리·네일·타투는 이미 그 사진에 있으므로 끈다. 화장은 바뀐 내 얼굴에 다시 입힌다
+      engine.tracker.setStill(null);
+      engine.tracker.hiW = 1024;
+      await begin(() => engine.source.openImage(r, 2400));
+      for (const k of ['hair', 'nail', 'tattoo', 'hairgen'] as Chip[]) off.add(k);
+      applyAll();
+      renderChips();
+      // 내 사진 얼굴이 작으면(전신 사진 등) 크게 늘려 흐려진다 → 안내
+      setStatus(swapSmall ? '고른 사진 속에 내 얼굴을 넣었어요. 내 사진 얼굴이 작아 흐릴 수 있어요: 얼굴이 크게 나온 사진을 쓰면 선명해요' : '고른 사진 속에 내 얼굴을 넣고 그 사진의 화장을 입혔어요');
+    } finally {
+      btnSwapEl.disabled = false;
+    }
+  } else {
+    swapMode = false;
+    engine.tracker.setStill(null);
+    mineHair = null;
+    stillHairKey = '';
+    await begin(() => engine.source.openImage(photoOriginal!, 2400));
+    for (const k of ['hair', 'nail', 'tattoo'] as Chip[]) off.delete(k);
+    applyAll();
+    renderChips();
+    setStatus('');
+  }
+  btnSwapEl.textContent = swapMode ? '↩ 내 사진에 입히기' : '🔁 사진 속에 내 얼굴';
+  btnSwapEl.title = swapMode ? '내 사진에 고른 사진의 스타일을 입히는 방식으로' : '고른 사진(머리·화장·옷·배경)은 그대로 두고 얼굴만 내 얼굴로';
+}
+btnSwapEl.addEventListener('click', () => void setSwap(!swapMode));
+
 async function openMyPhoto(f: File): Promise<void> {
   if (!f.type.startsWith('image/')) {
     setStatus('사진 파일(JPG·PNG)을 골라 주세요');
@@ -908,6 +1018,8 @@ async function openMyPhoto(f: File): Promise<void> {
   applyView();
   engine.tracker.setStill(null);
   photoOriginal = bmp;
+  swapMode = false;
+  btnSwapEl.textContent = '🔁 사진 속에 내 얼굴';
   mineHair = null;
   myNails = [];
   nailsAuto = null;
@@ -918,6 +1030,7 @@ async function openMyPhoto(f: File): Promise<void> {
   applyAll();
   if (!running) return;
   btnMyPhotoEl.hidden = false;
+  btnSwapEl.hidden = false;
   setStatus(lastStyle ? '' : '이제 📷 사진 고르기로 입히고 싶은 사진을 골라 주세요');
 }
 myPhotoFileEl.addEventListener('change', () => {
@@ -1055,7 +1168,12 @@ async function captureNatural(): Promise<ImageData> {
     cv.width = engine.source.width;
     cv.height = engine.source.height;
     const cx = cv.getContext('2d')!;
-    cx.drawImage(photoOriginal, 0, 0, cv.width, cv.height);
+    // 비율을 지켜 가운데에(얼굴 바꾸기 모드는 화면이 고른 사진 크기라 내 사진과 비율이 다르다)
+    const s = Math.min(cv.width / photoOriginal.width, cv.height / photoOriginal.height);
+    const dw = photoOriginal.width * s, dh = photoOriginal.height * s;
+    cx.fillStyle = '#111';
+    cx.fillRect(0, 0, cv.width, cv.height);
+    cx.drawImage(photoOriginal, (cv.width - dw) / 2, (cv.height - dh) / 2, dw, dh);
     return cx.getImageData(0, 0, cv.width, cv.height);
   }
   const saved = { look: engine.look, hair: engine.hair, nail: engine.nail, tattoo: engine.tattoo };

@@ -149,6 +149,36 @@ export class PhotoAnalyzer {
   /**
    * 사진을 분석한다. mode가 auto면 얼굴·손·머리카락이 보이는 정도로 무엇을 가져올지 정한다.
    */
+  /** 몸 피부(손·팔·목) 확률(0~1, 캔버스 크기로 늘임). 얼굴 바꾸기에서 얼굴을 가린 손을 빼는 데 쓴다 */
+  async bodySkin(canvas: HTMLCanvasElement): Promise<Float32Array | null> {
+    const sm = await this.segModel();
+    let out: Float32Array | null = null;
+    sm.segment(canvas, (res) => {
+      const m = res.confidenceMasks;
+      if (!m || m.length < 4) return;
+      const b = m[CLS.bodySkin].getAsFloat32Array();
+      const w = m[0].width, h = m[0].height;
+      const W = canvas.width, H = canvas.height;
+      const o = new Float32Array(W * H);
+      for (let y = 0; y < H; y++) {
+        const sy = Math.min(h - 1, Math.floor((y * h) / H));
+        for (let x = 0; x < W; x++) o[y * W + x] = b[sy * w + Math.min(w - 1, Math.floor((x * w) / W))];
+      }
+      out = o;
+    });
+    return out;
+  }
+
+  /** 그림(캔버스)에서 가장 큰 얼굴의 점 478개(픽셀). 없으면 null. 사진 속에 내 얼굴(face-swap)에 쓴다 */
+  async faceLandmarks(canvas: HTMLCanvasElement): Promise<Vec2[] | null> {
+    const fm = await this.faceModel();
+    const r = fm.detect(canvas);
+    const all = r.faceLandmarks.map((lm) => toPx(lm, canvas.width, canvas.height));
+    const widthOf = (q: Vec2[]): number => Math.hypot(q[234].x - q[454].x, q[234].y - q[454].y);
+    all.sort((a, b) => widthOf(b) - widthOf(a));
+    return all[0] ?? null;
+  }
+
   async analyze(source: ImageBitmap | HTMLImageElement, mode: PhotoMode, onStatus?: (s: string) => void): Promise<StyleResult> {
     const canvas = document.createElement('canvas');
     const scale = Math.min(1, MAX_SIDE / Math.max(source.width, source.height));
