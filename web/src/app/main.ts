@@ -45,6 +45,8 @@ const statusEl = $<HTMLDivElement>('status');
 const hudEl = $<HTMLPreElement>('hud');
 const guideEl = $<HTMLDivElement>('guide');
 const startEl = $<HTMLDivElement>('start');
+/** 사진 + 사진 합성(웹캠 없이): 주소에 ?mode=photo. 내 사진을 '멈춘 카메라'로 열어 나머지는 웹캠과 똑같이 처리한다 */
+const PHOTO_MODE = params.get('mode') === 'photo';
 const dropEl = $<HTMLDivElement>('drop');
 const viewEl = $<HTMLDivElement>('view');
 const panelEl = $<HTMLElement>('panel');
@@ -379,7 +381,7 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   refImgEl.src = r.thumb.toDataURL('image/jpeg', 0.8);
   refTextEl.textContent = (r.ai?.headline ? `${r.summary} · ${r.ai.headline}` : r.summary) + (r.faces && r.faces > 1 ? ` · 얼굴 ${r.faces}명 중 큰 얼굴(다른 사람은 ✂️ 영역)` : '');
   refEl.hidden = false;
-  setStatus(running ? '' : '카메라를 시작하면 바로 입혀져요');
+  setStatus(running ? '' : PHOTO_MODE ? '내 사진을 올리면 바로 합쳐져요' : '카메라를 시작하면 바로 입혀져요');
   if (r.makeup && r.measure && !off.has('lip')) {
     // 영상이 아직 시작 전이면(사진 분석이 먼저 끝난 경우) 잠시 기다린다
     for (let i = 0; i < 100 && !running; i++) await new Promise((res) => setTimeout(res, 100));
@@ -490,13 +492,60 @@ document.addEventListener('drop', (e) => {
   const f = e.dataTransfer?.files?.[0];
   if (!f) return;
   e.preventDefault();
-  void pickFile(f);
+  // 사진 합성 모드에서 아직 내 사진이 없으면 놓은 사진이 내 사진
+  if (PHOTO_MODE && !running) void openMyPhoto(f);
+  else void pickFile(f);
 });
 document.addEventListener('paste', (e) => {
   const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'));
   const f = item?.getAsFile();
-  if (f) void pickFile(f);
+  if (!f) return;
+  if (PHOTO_MODE && !running) void openMyPhoto(f);
+  else void pickFile(f);
 });
+
+// ---- 사진 + 사진 합성: 내 사진 ----
+const myPhotoFileEl = $<HTMLInputElement>('myphoto-file');
+const btnMyPhotoEl = $<HTMLButtonElement>('btn-myphoto');
+async function openMyPhoto(f: File): Promise<void> {
+  if (!f.type.startsWith('image/')) {
+    setStatus('사진 파일(JPG·PNG)을 골라 주세요');
+    return;
+  }
+  let bmp: ImageBitmap;
+  try {
+    bmp = await createImageBitmap(f, { imageOrientation: 'from-image' });
+  } catch (err) {
+    setStatus(`사진을 읽지 못했어요: ${(err as Error).message}`);
+    return;
+  }
+  // 사진은 거울처럼 뒤집지 않는다
+  $<HTMLInputElement>('opt-mirror').checked = false;
+  applyView();
+  await begin(() => engine.source.openImage(bmp));
+  if (!running) return;
+  btnMyPhotoEl.hidden = false;
+  setStatus(lastStyle ? '' : '이제 📷 사진 고르기로 입히고 싶은 사진을 골라 주세요');
+}
+myPhotoFileEl.addEventListener('change', () => {
+  const f = myPhotoFileEl.files?.[0];
+  myPhotoFileEl.value = '';
+  if (f) void openMyPhoto(f);
+});
+$('btn-myphoto-pick').addEventListener('click', () => myPhotoFileEl.click());
+btnMyPhotoEl.addEventListener('click', () => myPhotoFileEl.click());
+if (PHOTO_MODE) {
+  document.title = 'IRIS 사진 합성';
+  $('start-title').textContent = '내 사진 + 스타일 사진 합성';
+  $('start-desc').textContent = '① 내 얼굴 사진을 올리고 ② 마음에 드는 메이크업 · 헤어 · 네일 · 타투 사진을 고르면 내 사진에 합쳐 줍니다. AI 생성 서버가 켜져 있으면 ✨ AI 생성으로 머리 모양까지 사진처럼 바꿀 수 있어요. 사진은 끌어다 놓거나 붙여 넣어도 됩니다.';
+  $('start-cam').hidden = true;
+  $('start-photo').hidden = false;
+  const link = $<HTMLAnchorElement>('mode-link').querySelector('a')!;
+  link.href = './';
+  link.textContent = '📷 웹캠으로 하기 →';
+  $('pick-hint').textContent = '입히고 싶은 메이크업 · 헤어 · 네일 · 타투 사진을 골라 주세요';
+  $('gen-live').textContent = '▶ 내 사진에 입히기';
+}
 
 // ---- AI 생성(사진 한 장): 생성 서버가 켜져 있을 때만 단추가 보인다 ----
 const genEl = $<HTMLElement>('gen');
@@ -862,7 +911,7 @@ genLiveEl.addEventListener('click', () => void applyGenLive());
 
 async function runGen(): Promise<void> {
   if (!running) {
-    setStatus('먼저 카메라를 시작해 주세요');
+    setStatus(PHOTO_MODE ? '먼저 내 사진을 올려 주세요' : '먼저 카메라를 시작해 주세요');
     return;
   }
   const cat = genCatEl.value as GenCategory;

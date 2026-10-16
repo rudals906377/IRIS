@@ -11,7 +11,7 @@ export interface FrameInfo {
   mediaTime: number;
 }
 
-export type SourceKind = 'camera' | 'file';
+export type SourceKind = 'camera' | 'file' | 'image';
 
 export interface CameraRequest {
   width: number;
@@ -27,6 +27,9 @@ export class VideoSource {
   private stream: MediaStream | null = null;
   private stopLoop: (() => void) | null = null;
   private objectUrl: string | null = null;
+  private stillTimer = 0;
+  /** 사진(정지 영상)을 열었을 때 그 원본(최대 변 제한 전) */
+  still: ImageBitmap | null = null;
 
   constructor(video: HTMLVideoElement) {
     this.video = video;
@@ -77,6 +80,31 @@ export class VideoSource {
     }
     this.video.loop = true;
     this.kind = 'file';
+    await this.video.play();
+    await this.waitForSize();
+  }
+
+  /**
+   * 사진 한 장을 '움직이지 않는 카메라'처럼 연다: 캔버스에 그려 스트림으로 내보낸다.
+   * 그러면 얼굴 찾기·분할·화장·생성 등 영상용 처리가 모두 그대로 사진에 적용된다.
+   * maxSide: 처리 속도를 위해 긴 변을 줄인다(원본은 still 에 남김).
+   */
+  async openImage(img: ImageBitmap, maxSide = 1600): Promise<void> {
+    this.close();
+    const s = Math.min(1, maxSide / Math.max(img.width, img.height));
+    const w = Math.max(2, Math.round((img.width * s) / 2) * 2);
+    const h = Math.max(2, Math.round((img.height * s) / 2) * 2);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, w, h);
+    this.stream = canvas.captureStream(15);
+    // 그림이 그대로면 새 프레임이 안 나오는 브라우저가 있어 주기적으로 다시 그린다
+    this.stillTimer = window.setInterval(() => ctx.drawImage(img, 0, 0, w, h), 66);
+    this.still = img;
+    this.video.srcObject = this.stream;
+    this.kind = 'image';
     await this.video.play();
     await this.waitForSize();
   }
@@ -132,6 +160,9 @@ export class VideoSource {
   close(): void {
     this.stopLoop?.();
     this.stopLoop = null;
+    if (this.stillTimer) clearInterval(this.stillTimer);
+    this.stillTimer = 0;
+    this.still = null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.video.pause();

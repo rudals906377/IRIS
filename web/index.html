@@ -18,6 +18,7 @@
         <div class="status" id="status" role="status" aria-live="polite"></div>
         <div class="actions">
           <button id="btn-flip" class="ghost" hidden title="앞·뒤 카메라 바꾸기">🔄</button>
+          <button id="btn-myphoto" class="ghost" hidden title="합성할 내 사진을 다른 것으로">🖼 내 사진 바꾸기</button>
           <button id="btn-snap" class="ghost" hidden title="지금 화면을 사진으로 저장(사진을 골랐으면 전후 비교로)">📸 저장</button>
           <button id="btn-settings" class="ghost" title="설정">⚙</button>
         </div>
@@ -33,13 +34,17 @@
         <div class="guide" id="guide" hidden>얼굴이 화면 가운데에 보이게 해 주세요</div>
 
         <div class="start" id="start">
-          <h1>사진 속 스타일을 내 모습에</h1>
-          <p>마음에 드는 사진을 고르면 그 메이크업 · 헤어 컬러 · 네일 · 타투가 웹캠 속 내 모습에 바로 입혀집니다.</p>
-          <div class="start-buttons">
+          <h1 id="start-title">사진 속 스타일을 내 모습에</h1>
+          <p id="start-desc">마음에 드는 사진을 고르면 그 메이크업 · 헤어 컬러 · 네일 · 타투가 웹캠 속 내 모습에 바로 입혀집니다.</p>
+          <div class="start-buttons" id="start-cam">
             <button id="btn-camera" class="primary big">카메라로 시작</button>
             <button id="btn-sample">예시 영상으로 체험</button>
             <label class="file-btn">내 동영상<input type="file" id="file-video" accept="video/*" hidden /></label>
           </div>
+          <div class="start-buttons" id="start-photo" hidden>
+            <button id="btn-myphoto-pick" class="primary big">📁 내 사진 올리기</button>
+          </div>
+          <p class="ext-link" id="mode-link"><a href="?mode=photo">🖼 웹캠 없이 사진 + 사진으로 합성하기 →</a></p>
           <p class="privacy">🔒 영상과 사진은 이 기기 안에서만 처리되고 어디에도 보내지 않습니다.</p>
           <p class="credit">예시 영상: Intel IoT DevKit sample-videos (CC BY 4.0)</p>
         </div>
@@ -94,6 +99,7 @@
           </div>
         </div>
         <input type="file" id="style-file" accept="image/*" hidden />
+        <input type="file" id="myphoto-file" accept="image/*" hidden />
       </nav>
 
       <aside class="panel" id="panel" hidden>
