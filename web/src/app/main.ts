@@ -181,8 +181,8 @@ function applyLookToEngine(): void {
   for (const part of Object.keys(chosen) as PartName[]) {
     const c = chosen[part];
     if (!c.color || off.has(part) || part === 'hair' || part === 'nail') continue;
-    // 사진 모드: 고른 사진 화장을 그대로 옮겨 구웠으면 실시간 화장은 눈썹만
-    if (mkBaked() && part !== 'brow') continue;
+    // 사진 모드: 고른 사진 화장을 그대로 옮겨 구웠으면(얼굴 바꾸기 포함) 실시간 화장은 눈썹만
+    if ((mkBaked() || (PHOTO_MODE && swapMode)) && part !== 'brow') continue;
     if (part === 'lip') look.lip = { color: c.color, amount: amt(c.amount), gloss, over: overlip, style: lipStyle };
     else if (part === 'blush') look.blush = { color: c.color, amount: amt(c.amount), pos: blushPos, size: blushSize };
     else if (part === 'shadow') look.shadow = { color: c.color, amount: amt(c.amount), pearl, colorOut: shadowOut ?? undefined };
@@ -1478,7 +1478,12 @@ async function makeSwap(mine: ImageBitmap, ref: ImageBitmap): Promise<ImageBitma
   await new Promise((r) => setTimeout(r, 30));
   const md = mc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, mc.width, mc.height).data;
   const rd = rc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, rc.width, rc.height).data;
-  const out = swapFace(rd, rc.width, rc.height, rp, md, mc.width, mc.height, mp, FACE_OVAL, skin, hands, mySkin);
+  let out = swapFace(rd, rc.width, rc.height, rp, md, mc.width, mc.height, mp, FACE_OVAL, skin, hands, mySkin);
+  // 바뀐 얼굴은 고른 사진 얼굴 자리 그대로라, 고른 사진 화장(립 색·아이라인·블러셔 모양)을 같은 점으로 바로 옮긴다
+  // (실시간 화장을 얹으면 고른 사진 화장 위에 둥근 블러셔가 겹쳐 무거워진다)
+  setStatus('그 사진의 화장을 바뀐 얼굴에 옮기는 중…');
+  await new Promise((r) => setTimeout(r, 30));
+  out = transferMakeup(out, rc.width, rc.height, rp, rd, rc.width, rc.height, rp, FACE_OVAL, mkAmounts(), skin, skin, hands);
   const bmp = await createImageBitmap(new ImageData(out as unknown as Uint8ClampedArray<ArrayBuffer>, rc.width, rc.height));
   const myW = Math.hypot(mp[454].x - mp[234].x, mp[454].y - mp[234].y);
   swapSmall = fw / Math.max(1, myW) > 2;
