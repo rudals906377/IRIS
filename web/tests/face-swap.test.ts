@@ -2,7 +2,7 @@
 // 사진 속에 내 얼굴(삼각분할·휘기·섞기) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { delaunay, fillPoly, swapFace } from '../src/beauty/face-swap.ts';
+import { delaunay, fillPoly, swapFace, warpTriangles } from '../src/beauty/face-swap.ts';
 
 test('들로네: 격자 점 9개 → 삼각형 8개, 모든 점 사용', () => {
   const pts = [];
@@ -68,4 +68,15 @@ test('얼굴 바꾸기: 내 사진에서 피부가 아닌 곳(앞머리)은 옮�
   assert.ok(out[(35 * W + 60) * 4] > 150, `이마 ${out[(35 * W + 60) * 4]}`);
   // 피부끼리 조명 비를 맞추므로 볼은 고른 사진 밝기 근처(앞머리 때문에 하얗게 뜨지 않음)
   assert.ok(Math.abs(out[(75 * W + 60) * 4] - 180) < 12, `볼 ${out[(75 * W + 60) * 4]}`);
+});
+
+test('휘기: 내 쪽 삼각형이 뒤집히면(고개 돌린 사진에서 가려진 자리) fold 로 표시', () => {
+  const dp = [{ x: 10, y: 10 }, { x: 50, y: 10 }, { x: 10, y: 50 }, { x: 50, y: 50 }];
+  const src = new Uint8ClampedArray(60 * 60 * 4).fill(100);
+  const same = warpTriangles(dp, 60, 60, src, 60, 60, dp);
+  const mirror = warpTriangles(dp, 60, 60, src, 60, 60, dp.map((p) => ({ x: 60 - p.x, y: p.y })));
+  const i = 30 * 60 + 30;
+  assert.equal(same.cover[i], 1);
+  assert.equal(same.fold[i], 0);
+  assert.equal(mirror.fold[i], 1);
 });
