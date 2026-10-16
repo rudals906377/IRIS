@@ -230,30 +230,41 @@ export function extractDesign(src: InkSource, rect?: Rect | null, maxSide = 512)
   }
   if (!gn) return null;
   const glob = gs.map((v) => v / gn);
+  // 잉크로 찾은 곳 둘레(짧은 변 1.5%)만 도안: 영역 가장자리에 걸린 옷 밑단 그늘·니트 결처럼 '피부보다 어둡기만 한' 곳은 뺀다
+  // (선 사이 명암·색 채움은 선 둘레라 남는다)
+  const inkNear = boxBlur(inkF, w, h, Math.max(2, short * 0.015));
   const ow = R.w;
   const oh = R.h;
   const inkMask = new Float32Array(n);
   const full = new Float32Array(ow * oh * 4);
-  for (let y = 0; y < oh; y++) {
-    for (let x = 0; x < ow; x++) {
-      const i = (R.y + y) * w + (R.x + x);
-      const o = (y * ow + x) * 4;
-      // 주변 피부 정보가 적으면 전체 피부 평균 쪽으로
-      const conf = Math.min(1, den[i] / 0.15);
-      const bg = [0, 1, 2].map((c) => (den[i] > 1e-4 ? ch[c][i] / den[i] : glob[c]) * conf + glob[c] * (1 - conf));
-      const T = [0, 1, 2].map((c) => Math.min(1, (d[i * 4 + c] / 255 + 0.01) / (bg[c] + 0.01)));
-      const lumT = 0.299 * T[0] + 0.587 * T[1] + 0.114 * T[2];
-      const dark = smooth(0.06, 0.3, 1 - lumT);
-      const tint = smooth(0.08, 0.22, Math.max(Math.abs(T[0] - lumT), Math.abs(T[1] - lumT), Math.abs(T[2] - lumT)));
-      // 피부가 아닌 곳(옷·머리카락·배경)은 도안이 아니다
-      const onSkin = src.avoid ? 1 - smooth(0.3, 0.6, src.avoid[i]) : 1;
-      const a = Math.max(dark, tint * 0.8) * onSkin;
-      inkMask[i] = a;
-      // 다 덮였을 때의 잉크 색: 섞인 비율만큼 되돌린다
-      const k = Math.max(a, 0.25);
-      for (let c = 0; c < 3; c++) full[o + c] = Math.min(1, Math.max(0, 1 - (1 - T[c]) / k));
-      full[o + 3] = a;
+  // 잉크 찾기가 옅은 타투를 거의 못 잡았으면(거른 양이 30% 미만) 거르지 않고 다시
+  for (let gate = 1; gate >= 0; gate--) {
+    let sumG = 0, sumR = 0;
+    for (let y = 0; y < oh; y++) {
+      for (let x = 0; x < ow; x++) {
+        const i = (R.y + y) * w + (R.x + x);
+        const o = (y * ow + x) * 4;
+        // 주변 피부 정보가 적으면 전체 피부 평균 쪽으로
+        const conf = Math.min(1, den[i] / 0.15);
+        const bg = [0, 1, 2].map((c) => (den[i] > 1e-4 ? ch[c][i] / den[i] : glob[c]) * conf + glob[c] * (1 - conf));
+        const T = [0, 1, 2].map((c) => Math.min(1, (d[i * 4 + c] / 255 + 0.01) / (bg[c] + 0.01)));
+        const lumT = 0.299 * T[0] + 0.587 * T[1] + 0.114 * T[2];
+        const dark = smooth(0.06, 0.3, 1 - lumT);
+        const tint = smooth(0.08, 0.22, Math.max(Math.abs(T[0] - lumT), Math.abs(T[1] - lumT), Math.abs(T[2] - lumT)));
+        // 피부가 아닌 곳(옷·머리카락·배경)은 도안이 아니다
+        const onSkin = src.avoid ? 1 - smooth(0.3, 0.6, src.avoid[i]) : 1;
+        const a0 = Math.max(dark, tint * 0.8) * onSkin;
+        const a = gate ? a0 * smooth(0, 0.04, inkNear[i]) : a0;
+        sumG += a;
+        sumR += a0;
+        inkMask[i] = a;
+        // 다 덮였을 때의 잉크 색: 섞인 비율만큼 되돌린다
+        const k = Math.max(a, 0.25);
+        for (let c = 0; c < 3; c++) full[o + c] = Math.min(1, Math.max(0, 1 - (1 - T[c]) / k));
+        full[o + 3] = a;
+      }
     }
+    if (sumG >= sumR * 0.3) break;
   }
   const s = Math.min(1, maxSide / Math.max(ow, oh));
   const tw = Math.max(1, Math.round(ow * s));
