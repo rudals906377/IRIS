@@ -32,6 +32,8 @@ import { BeautyEngine } from '../engine/engine.ts';
 import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
+import { parseFace } from '../beauty/face-parse.ts';
+import { closeHoles, guidedFilter, hairDist, recolorHair, type HairDist } from '../beauty/still-hair.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -178,6 +180,11 @@ function applyLookToEngine(): void {
   engine.look = look;
   const h = chosen.hair;
   engine.hair = h.color && !off.has('hair') ? { color: h.color, amount: amt(h.amount), tip: hairTip ?? undefined } : null;
+  // 사진 모드: 염색은 셰이더 대신 고른 사진의 실제 머리색 분포를 올마다 옮겨 사진에 굽는다(still-hair.ts)
+  if (PHOTO_MODE && engine.source.kind === 'image') {
+    engine.hair = null;
+    scheduleStillHair();
+  }
   const n = chosen.nail;
   engine.nail = n.color && !off.has('nail') ? { color: n.color, color2: NAIL_COLOR2[nailStyle], style: nailStyle, amount: amt(n.amount), length: nailLength } : null;
   // 네일은 손 점이 필요하다: 처음 켤 때 손 추적을 켠다
@@ -507,6 +514,140 @@ document.addEventListener('paste', (e) => {
 // ---- 사진 + 사진 합성: 내 사진 ----
 const myPhotoFileEl = $<HTMLInputElement>('myphoto-file');
 const btnMyPhotoEl = $<HTMLButtonElement>('btn-myphoto');
+/**
+ * 사진 모드 염색: ① 내 사진 머리 주변을 정밀 얼굴 분할(한 번) → 원본 해상도 알파(가이디드 필터)
+ * ② 고른 사진 머리카락의 밝기 분위별 색(한 번) ③ 내 머리카락 밝기 순위를 그 색으로 → 사진에 구워 엔진에 넣는다.
+ * 화장·네일·타투는 엔진이 그 위에 그대로 그린다.
+ */
+let photoOriginal: ImageBitmap | null = null;
+let mineHair: { alpha: Float32Array; rgba: Uint8ClampedArray; w: number; h: number; dist: HairDist } | null = null;
+let refHair: { src: ImageBitmap; dist: HairDist | null } | null = null;
+let stillHairTimer = 0;
+let stillHairBusy: Promise<void> | null = null;
+let stillHairKey = '';
+function scheduleStillHair(): void {
+  clearTimeout(stillHairTimer);
+  stillHairTimer = window.setTimeout(() => void updateStillHair(), 200);
+}
+async function mineHairMatte(): Promise<typeof mineHair> {
+  const orig = photoOriginal;
+  if (!orig) return null;
+  if (mineHair) return mineHair;
+  // 얼굴 점이 잡힐 때까지 잠깐 기다린다
+  let r: { x: number; y: number; size: number } | null = null;
+  for (let i = 0; i < 80 && !(r = engine.tracker.headRect(engine.source.width, engine.source.height)); i++) await new Promise((res) => setTimeout(res, 100));
+  if (!r || photoOriginal !== orig) return null;
+  const W = engine.source.width, H = engine.source.height;
+  // 긴 머리까지 들어오게 머리 상자를 키우고 조금 아래로
+  const size = Math.min(Math.max(W, H), r.size * 1.45);
+  const rect = { x: r.x + r.size / 2 - size / 2, y: r.y + r.size * 0.62 - size / 2, size };
+  const s = orig.width / W;
+  setStatus('머리카락을 정밀하게 나누는 중…');
+  await new Promise((res) => setTimeout(res, 30)); // 안내 문구가 먼저 보이게
+  const p = await parseFace(orig, { x: rect.x * s, y: rect.y * s, size: rect.size * s }, setStatus);
+  if (photoOriginal !== orig) return null;
+  engine.tracker.setStill({ ...p, rect });
+  // 처리 해상도의 내 사진
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const cx = cv.getContext('2d', { willReadFrequently: true })!;
+  cx.drawImage(orig, 0, 0, W, H);
+  const rgba = cx.getImageData(0, 0, W, H).data;
+  // 512 확률 → 처리 해상도(상자 밖은 0) → 내 사진 밝기로 가이디드 필터
+  const coarse = new Float32Array(W * H);
+  const N = p.size;
+  for (let y = Math.max(0, Math.floor(rect.y)); y < Math.min(H, Math.ceil(rect.y + rect.size)); y++) {
+    const v = ((y - rect.y) / rect.size) * N - 0.5;
+    const y0 = Math.max(0, Math.min(N - 2, Math.floor(v)));
+    const ty = Math.max(0, Math.min(1, v - y0));
+    for (let x = Math.max(0, Math.floor(rect.x)); x < Math.min(W, Math.ceil(rect.x + rect.size)); x++) {
+      const u = ((x - rect.x) / rect.size) * N - 0.5;
+      const x0 = Math.max(0, Math.min(N - 2, Math.floor(u)));
+      const tx = Math.max(0, Math.min(1, u - x0));
+      const h = p.hair;
+      coarse[y * W + x] = ((h[y0 * N + x0] * (1 - tx) + h[y0 * N + x0 + 1] * tx) * (1 - ty) + (h[(y0 + 1) * N + x0] * (1 - tx) + h[(y0 + 1) * N + x0 + 1] * tx) * ty) / 255;
+    }
+  }
+  const guide = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) guide[i] = (0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2]) / 255;
+  const px = Math.max(2, Math.round(rect.size / 300));
+  const alpha = guidedFilter(guide, coarse, W, H, px, 2e-3);
+  // 확실하지 않은 낮은 값은 지운다(배경·피부로 번지는 옅은 띠 방지), 높은 값은 1 로.
+  // 가이디드 필터는 어두운 머리 + 어두운 배경에서 밖으로 번진다 → 분할이 머리카락이라고 본 곳(조금 넓혀서) 밖은 쓰지 않는다
+  // 배경(어두운 나무·벽)이 머리카락으로 읽힌 곳은 실시간 분할의 '사람' 밖이면 지운다
+  const person = engine.tracker.personMask(W, H);
+  for (let i = 0; i < alpha.length; i++) {
+    let gate = Math.max(0, Math.min(1, (coarse[i] - 0.25) / 0.35));
+    if (person) gate = Math.min(gate, Math.max(0, Math.min(1, (person[i] - 0.3) / 0.4)));
+    alpha[i] = Math.min(Math.max(0, Math.min(1, (alpha[i] - 0.15) / 0.7)), gate);
+  }
+  // 아주 어두운 머리카락 덩어리는 분할·필터가 놓쳐 작은 구멍(원래 색 얼룩)이 된다 → 머리 크기에 맞춰 닫기
+  const closed = closeHoles(alpha, W, H, Math.max(3, Math.round(rect.size / 90)));
+  for (let i = 0; i < alpha.length; i++) alpha[i] = closed[i];
+  const dist = hairDist(rgba, alpha);
+  if (!dist) return null;
+  mineHair = { alpha, rgba, w: W, h: H, dist };
+  return mineHair;
+}
+async function refHairDist(): Promise<HairDist | null> {
+  const src = lastSource;
+  if (!src) return null;
+  if (refHair?.src === src) return refHair.dist;
+  // 고른 사진 전체를 정사각형으로(남는 곳은 검게) 나눠 머리카락 픽셀의 색 분포만 쓴다
+  const size = Math.max(src.width, src.height);
+  const p = await parseFace(src, { x: (src.width - size) / 2, y: (src.height - size) / 2, size });
+  const a = new Float32Array(p.size * p.size);
+  for (let i = 0; i < a.length; i++) a[i] = p.hair[i] / 255;
+  refHair = { src, dist: hairDist(p.rgba, a, 0.7, 200) };
+  return refHair.dist;
+}
+async function updateStillHair(): Promise<void> {
+  if (!PHOTO_MODE || !photoOriginal || engine.source.kind !== 'image') return;
+  if (stillHairBusy) {
+    await stillHairBusy;
+    return updateStillHair();
+  }
+  const h = chosen.hair;
+  // 분포를 그대로 옮기므로 진하기 1 이 '고른 사진 그대로'(분석의 amount 는 셰이더용이라 쓰지 않는다)
+  const amount = h.color && !off.has('hair') && lastSource ? strength : 0;
+  const key = `${amount.toFixed(3)}|${lastSource ? 1 : 0}`;
+  if (key === stillHairKey && refHair?.src === lastSource) return;
+  // 작업이 곧바로 끝나는 경우(할 일 없음)에도 표시가 남지 않게, 끝난 뒤 '그 작업이면' 지운다
+  const job = (async () => {
+    try {
+      if (amount <= 0) {
+        engine.source.replaceStill(photoOriginal!);
+        stillHairKey = key;
+        return;
+      }
+      const mine = await mineHairMatte();
+      const ref = await refHairDist();
+      if (!mine || !ref) {
+        // 정밀 방식이 안 되면(얼굴·머리카락을 못 찾음) 실시간 염색으로
+        engine.hair = { color: h.color!, amount: amt(h.amount), tip: hairTip ?? undefined };
+        setStatus(mine ? '고른 사진에서 머리카락을 찾지 못해 머리색만 옮겼어요' : '');
+        return;
+      }
+      setStatus('머리카락 색을 올마다 옮기는 중…');
+      const out = recolorHair(mine.rgba, mine.w, mine.h, mine.alpha, mine.dist, ref, Math.min(1, amount));
+      const bmp = await createImageBitmap(new ImageData(out as unknown as Uint8ClampedArray<ArrayBuffer>, mine.w, mine.h));
+      engine.source.replaceStill(bmp);
+      stillHairKey = key;
+      setStatus('');
+    } catch (err) {
+      console.warn('사진 염색 실패', err);
+      setStatus('');
+    }
+  })();
+  stillHairBusy = job;
+  try {
+    await job;
+  } finally {
+    if (stillHairBusy === job) stillHairBusy = null;
+  }
+}
+
 async function openMyPhoto(f: File): Promise<void> {
   if (!f.type.startsWith('image/')) {
     setStatus('사진 파일(JPG·PNG)을 골라 주세요');
@@ -522,7 +663,14 @@ async function openMyPhoto(f: File): Promise<void> {
   // 사진은 거울처럼 뒤집지 않는다
   $<HTMLInputElement>('opt-mirror').checked = false;
   applyView();
-  await begin(() => engine.source.openImage(bmp));
+  engine.tracker.setStill(null);
+  photoOriginal = bmp;
+  mineHair = null;
+  stillHairKey = '';
+  // 사진은 시간이 넉넉하므로 크게 처리한다(분할 합성 1024, 원본 긴 변 2400 까지)
+  engine.tracker.hiW = 1024;
+  await begin(() => engine.source.openImage(bmp, 2400));
+  applyAll();
   if (!running) return;
   btnMyPhotoEl.hidden = false;
   setStatus(lastStyle ? '' : '이제 📷 사진 고르기로 입히고 싶은 사진을 골라 주세요');
@@ -656,6 +804,15 @@ $('gen-close').addEventListener('click', () => {
 // ---- 지금 화면을 사진으로 저장: 사진을 골랐으면 [고른 사진 | 원래 나 | 적용된 나] 비교 한 장 ----
 /** 효과를 잠시 모두 끄고 한 장 찍는다(원래 모습) */
 async function captureNatural(): Promise<ImageData> {
+  // 사진 모드: 염색을 사진에 구워 넣었으므로 원래 사진을 그대로
+  if (PHOTO_MODE && photoOriginal && engine.source.kind === 'image') {
+    const cv = document.createElement('canvas');
+    cv.width = engine.source.width;
+    cv.height = engine.source.height;
+    const cx = cv.getContext('2d')!;
+    cx.drawImage(photoOriginal, 0, 0, cv.width, cv.height);
+    return cx.getImageData(0, 0, cv.width, cv.height);
+  }
   const saved = { look: engine.look, hair: engine.hair, nail: engine.nail, tattoo: engine.tattoo };
   engine.look = {};
   engine.hair = null;

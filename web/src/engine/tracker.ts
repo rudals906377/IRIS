@@ -105,6 +105,10 @@ export class Tracker {
   private lastGlobal: { flags: Uint8ClampedArray; w: number; h: number } | null = null;
   private headTs = 0;
   /** 앞 프레임의 머리카락 확률(R)과 머리 영역: 프레임 간 떨림을 줄이는 데 쓴다 */
+  /** 사진(정지 영상) 모드: 정밀 얼굴 분할 결과(face-parse.ts). 있으면 머리 주변 분할 대신 쓴다 */
+  private still: { hair: Uint8ClampedArray; face: Uint8ClampedArray; body: Uint8ClampedArray; size: number; rect: { x: number; y: number; size: number } } | null = null;
+  /** 합친 분할의 가로 해상도(사진은 더 크게) */
+  hiW = HI_W;
   private prevHair: { r: Uint8ClampedArray; w: number; h: number; cx: number; cy: number; size: number } | null = null;
   private hands: HandLandmarker | null = null;
   private face: FaceLandmarker | null = null;
@@ -272,13 +276,13 @@ export class Tracker {
     let seg: SegOutput | null = this.lastSeg;
     if (this.seg) {
       const t0 = performance.now();
-      const head = this.config.headSeg ? this.headRect(video.videoWidth, video.videoHeight) : null;
+      const head = this.still ? this.still.rect : this.config.headSeg ? this.headRect(video.videoWidth, video.videoHeight) : null;
       // 전체 분할은 segEvery 프레임마다(머리 분할을 할 때는 3배로 띄엄띄엄: 손·몸 피부는 천천히 변한다),
       // 머리 주변 분할은 얼굴이 보이면 매 프레임
       const every = Math.max(1, this.config.segEvery) * (head ? 3 : 1);
       if (!this.lastGlobal || this.frameNo % every === 0) this.runSeg(video, t);
       if (this.lastGlobal) {
-        const hair = head ? (this.hairNet ? this.runHairNet(video, head) : this.runHeadSeg(video, head)) : null;
+        const hair = this.still ? { data: this.still.hair, size: this.still.size } : head ? (this.hairNet ? this.runHairNet(video, head) : this.runHeadSeg(video, head)) : null;
         seg = this.merge(this.lastGlobal, hair, head, video.videoWidth, video.videoHeight);
         this.lastSeg = seg;
       }
@@ -302,8 +306,35 @@ export class Tracker {
     return { pose, seg, hands, face, timings };
   }
 
+  /** 실시간 전체 분할의 '사람' 확률(0~1)을 W×H 로 키워 돌려준다. 아직 없으면 null */
+  personMask(W: number, H: number): Float32Array | null {
+    const g = this.lastGlobal;
+    if (!g) return null;
+    const out = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      const fy = Math.min(g.h - 1.001, Math.max(0, ((y + 0.5) * g.h) / H - 0.5));
+      const y0 = fy | 0;
+      const ty = fy - y0;
+      for (let x = 0; x < W; x++) {
+        const fx = Math.min(g.w - 1.001, Math.max(0, ((x + 0.5) * g.w) / W - 0.5));
+        const x0 = fx | 0;
+        const tx = fx - x0;
+        const i = (y0 * g.w + x0) * 4 + 3;
+        const v = (g.flags[i] * (1 - tx) + g.flags[i + 4] * tx) * (1 - ty) + (g.flags[i + g.w * 4] * (1 - tx) + g.flags[i + g.w * 4 + 4] * tx) * ty;
+        out[y * W + x] = v / 255;
+      }
+    }
+    return out;
+  }
+
+  /** 사진 모드: 정밀 분할 결과를 넣는다(null 이면 다시 실시간 분할) */
+  setStill(p: { hair: Uint8ClampedArray; face: Uint8ClampedArray; body: Uint8ClampedArray; size: number; rect: { x: number; y: number; size: number } } | null): void {
+    this.still = p;
+    this.prevHair = null;
+  }
+
   /** 앞 프레임 얼굴 점으로 머리 전체를 감싸는 정사각형(픽셀)을 정한다. 얼굴이 없으면 null */
-  private headRect(W: number, H: number): { x: number; y: number; size: number } | null {
+  headRect(W: number, H: number): { x: number; y: number; size: number } | null {
     const lm = this.lastFaceLm;
     if (!lm || !W || !H) return null;
     let x0 = 1;
@@ -403,8 +434,9 @@ export class Tracker {
         gate[y * g.w + x] = m;
       }
     }
-    const W = HI_W;
-    const H = Math.round((HI_W * g.h) / g.w);
+    const W = this.hiW;
+    const H = Math.round((W * g.h) / g.w);
+    const st = this.still;
     const out = new Uint8ClampedArray(W * H * 4);
     const sx = g.w / W;
     const sy = g.h / H;
@@ -469,6 +501,13 @@ export class Tracker {
         const gv = (gate[gi] * (1 - gtx) + gate[gi + 1] * gtx) * (1 - gty) + (gate[gi + g.w] * (1 - gtx) + gate[gi + g.w + 1] * gtx) * gty;
         const keep = Math.max(0, Math.min(1, (gv - 25) / 60));
         out[o] = out[o] * (1 - wgt) + hp * keep * wgt;
+        if (st) {
+          // 정밀 분할: 얼굴 피부(B)·목(G)도 그 값으로. 머리카락이 확실한 곳은 실시간 분할의 피부 값을 지운다(이마 앞머리 구멍 방지)
+          const fp = (st.face[y0 * HW + x0] * (1 - tx) + st.face[y0 * HW + x0 + 1] * tx) * (1 - ty) + (st.face[(y0 + 1) * HW + x0] * (1 - tx) + st.face[(y0 + 1) * HW + x0 + 1] * tx) * ty;
+          const bp = (st.body[y0 * HW + x0] * (1 - tx) + st.body[y0 * HW + x0 + 1] * tx) * (1 - ty) + (st.body[(y0 + 1) * HW + x0] * (1 - tx) + st.body[(y0 + 1) * HW + x0 + 1] * tx) * ty;
+          out[o + 2] = out[o + 2] * (1 - wgt) + fp * wgt;
+          out[o + 1] = Math.max(out[o + 1] * (1 - (hp / 255) * wgt), bp * wgt);
+        }
       }
     }
     // 프레임 간 안정화: 머리가 거의 안 움직였으면 앞 프레임 확률과 섞어 경계 떨림을 줄인다(움직이면 섞지 않는다)

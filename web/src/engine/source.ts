@@ -28,6 +28,7 @@ export class VideoSource {
   private stopLoop: (() => void) | null = null;
   private objectUrl: string | null = null;
   private stillTimer = 0;
+  private stillDraw: ((img: ImageBitmap) => void) | null = null;
   /** 사진(정지 영상)을 열었을 때 그 원본(최대 변 제한 전) */
   still: ImageBitmap | null = null;
 
@@ -98,15 +99,25 @@ export class VideoSource {
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(img, 0, 0, w, h);
+    let cur = img;
+    ctx.drawImage(cur, 0, 0, w, h);
     this.stream = canvas.captureStream(15);
     // 그림이 그대로면 새 프레임이 안 나오는 브라우저가 있어 주기적으로 다시 그린다
-    this.stillTimer = window.setInterval(() => ctx.drawImage(img, 0, 0, w, h), 66);
+    this.stillTimer = window.setInterval(() => ctx.drawImage(cur, 0, 0, w, h), 66);
+    this.stillDraw = (next) => {
+      cur = next;
+      ctx.drawImage(cur, 0, 0, w, h);
+    };
     this.still = img;
     this.video.srcObject = this.stream;
     this.kind = 'image';
     await this.video.play();
     await this.waitForSize();
+  }
+
+  /** 사진 모드: 처리 중인 정지 영상을 (같은 크기의) 다른 그림으로 바꾼다. 엔진은 멈추지 않는다 */
+  replaceStill(img: ImageBitmap): void {
+    this.stillDraw?.(img);
   }
 
   private async waitForSize(): Promise<void> {
@@ -163,6 +174,7 @@ export class VideoSource {
     if (this.stillTimer) clearInterval(this.stillTimer);
     this.stillTimer = 0;
     this.still = null;
+    this.stillDraw = null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.video.pause();
