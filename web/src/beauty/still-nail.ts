@@ -146,7 +146,8 @@ export function transferNail(dst: Uint8ClampedArray, W: number, H: number, dMask
   const col = [0, 0, 0];
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
-      const al = alphaAt(x, y) * amount;
+      // 녹이는 테두리는 마스크 바깥쪽으로: 안쪽 가장자리까지 꽉 덮어야 원래 매니큐어 색이 테두리로 비치지 않는다
+      const al = Math.min(1, alphaAt(x, y) * 2) * amount;
       if (al <= 0.01) continue;
       const dx = x - dF.cx, dy = y - dF.cy;
       const t = dx * dF.ax + dy * dF.ay;
@@ -285,8 +286,8 @@ export function growNailMask(mask: Uint8Array, w: number, h: number, rgba: Uint8
   for (let c = 0; c < 3; c++) { nail[c] /= nn; ring[c] /= nr; }
   const d = [nail[0] - ring[0], nail[1] - ring[1], nail[2] - ring[2]];
   const dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-  // 손톱과 둘레 색이 비슷하면(맨 손톱) 넓히지 않는다
-  if (dd < 15 * 15) return;
+  // 손톱과 둘레 색이 비슷하면(맨 손톱·연한 네일) 넓히지 않는다: 손끝 살로 번진다
+  if (dd < 25 * 25) return;
   for (let it = 0; it < maxPx; it++) {
     const add: number[] = [];
     for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {

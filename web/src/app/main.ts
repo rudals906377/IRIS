@@ -1353,6 +1353,7 @@ async function ensureNailsOnce(): Promise<void> {
       }
     }
   }
+  dropSkinNails();
   // 손 점으로 몇 개만 찾았으면(손가락이 겹쳐 손 점이 어긋남) 찾은 손톱 색과 비슷한 손 둘레 덩어리를 더 찾는다
   // (빨간 매니큐어 손톱 넷 중 둘만 바뀌면 섞여 보여 어색하다)
   if (myNails.length && myNails.length < 10) await moreNailsLikeMine(handsMine);
@@ -1379,24 +1380,72 @@ async function ensureNailsOnce(): Promise<void> {
       }
     }
   }
+  dropSkinNails();
   setStatus(myNails.length ? '빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요' : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');
   nailGen++;
   applyAll();
+}
+/**
+ * 매니큐어 바른 손톱이 있으면, 색이 손 피부(손톱 둘레 띠들의 가운데 색)와 거의 같은 '손톱'은 손가락 살을 잡은 것으로 보고 뺀다.
+ * (손 점 손끝 자리에 SAM 이 손가락 살을 손톱 크기로 잡아 네일이 피부에 칠해졌다. 맨 손톱도 같이 빠지지만 피부에 칠하는 것보다 낫다)
+ */
+function dropSkinNails(): void {
+  if (myNails.length < 2) return;
+  const { w, h, rgba } = stillRGBA();
+  const lab = new Float32Array(3);
+  const ring: number[][] = [[], [], []];
+  const means = myNails.map((m) => {
+    const c = [0, 0, 0];
+    let n = 0;
+    for (let i = 0; i < m.mask.length; i += 2) {
+      if (!m.mask[i]) continue;
+      rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+      c[0] += lab[0]; c[1] += lab[1]; c[2] += lab[2]; n++;
+    }
+    // 둘레 띠(4~8px 밖)
+    let x0 = w, y0 = h, x1 = 0, y1 = 0;
+    for (let i = 0; i < m.mask.length; i++) if (m.mask[i]) { const x = i % w, y = (i / w) | 0; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    for (let y = Math.max(0, y0 - 8); y <= Math.min(h - 1, y1 + 8); y += 2) for (let x = Math.max(0, x0 - 8); x <= Math.min(w - 1, x1 + 8); x += 2) {
+      const i = y * w + x;
+      if (m.mask[i]) continue;
+      let near = false;
+      for (let d = 4; d <= 8 && !near; d += 4) for (const [dx, dy] of [[d, 0], [-d, 0], [0, d], [0, -d]]) { const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < w && yy < h && m.mask[yy * w + xx]) { near = true; break; } }
+      if (!near) continue;
+      rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+      ring[0].push(lab[0]); ring[1].push(lab[1]); ring[2].push(lab[2]);
+    }
+    return n ? c.map((v) => v / n) : null;
+  });
+  if (!ring[0].length) return;
+  const skin = ring.map((v) => v.sort((p, q) => p - q)[v.length >> 1]);
+  const dE = means.map((m) => (m ? Math.hypot((m[0] - skin[0]) * 0.5, m[1] - skin[1], m[2] - skin[2]) : 0));
+  if (!dE.some((v) => v > 30)) return;
+  for (let k = myNails.length - 1; k >= 0; k--) if (dE[k] < 15) myNails.splice(k, 1);
 }
 async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Promise<void> {
   const base = stillRGBA();
   const { w, h, rgba } = base;
   const lab = new Float32Array(3);
-  let n = 0, L = 0, A = 0, B = 0, area = 0;
-  for (const m of myNails) for (let i = 0; i < m.mask.length; i++) {
-    if (!m.mask[i]) continue;
-    area++;
-    if (i % 3) continue;
-    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
-    n++; L += lab[0]; A += lab[1]; B += lab[2];
+  // 손톱마다 색과 둘레(피부) 색: 둘레와 뚜렷이 다른(매니큐어 바른) 손톱 색만 씨앗으로
+  // (빨간 손톱과 맨 손톱을 평균하면 분홍 = 피부색이 되어 손가락 끝을 손톱으로 잡았다)
+  const seeds: [number, number, number][] = [];
+  let area = 0;
+  for (const m of myNails) {
+    let n = 0, a = 0;
+    const c = [0, 0, 0];
+    for (let i = 0; i < m.mask.length; i++) {
+      if (!m.mask[i]) continue;
+      a++;
+      if (i % 3) continue;
+      rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+      n++; c[0] += lab[0]; c[1] += lab[1]; c[2] += lab[2];
+    }
+    area += a;
+    if (!n) continue;
+    const mean: [number, number, number] = [c[0] / n, c[1] / n, c[2] / n];
+    if (maskContrast(rgba, w, h, m.mask) >= 25) seeds.push(mean);
   }
-  if (!n) return;
-  L /= n; A /= n; B /= n;
+  if (!seeds.length) return;
   const avg = area / myNails.length, side = Math.sqrt(avg);
   const boxes = hands.map((hp) => {
     const xs = hp.p.map((q) => q.x), ys = hp.p.map((q) => q.y);
@@ -1410,7 +1459,7 @@ async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Pr
     if (boxes.length && !boxes.some((b) => px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1)) continue;
     if (myNails.some((m) => m.mask[i])) continue;
     rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
-    if (Math.hypot((lab[0] - L) * 0.5, lab[1] - A, lab[2] - B) < 14) hit[y * gw + x] = 1;
+    if (seeds.some((s) => Math.hypot((lab[0] - s[0]) * 0.5, lab[1] - s[1], lab[2] - s[2]) < 14)) hit[y * gw + x] = 1;
   }
   const seen = new Uint8Array(gw * gh);
   const cands: { x: number; y: number; a: number }[] = [];
@@ -1428,14 +1477,22 @@ async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Pr
       }
     }
     const a = c * G * G;
-    // 찾은 손톱 넓이의 0.25~3배만(손톱 끝 일부만 보이는 것부터 가까운 손톱까지)
-    if (a < avg * 0.25 || a > avg * 3) continue;
+    // 찾은 손톱 넓이의 0.1~2배만(겹쳐 끝만 보이는 손톱부터 가까운 손톱까지). 작은 덩어리는 SAM 이 손톱 전체로 넓힌다
+    if (a < Math.max(150, avg * 0.1) || a > avg * 2) continue;
     cands.push({ x: (sx / c) * G + 1, y: (sy / c) * G + 1, a });
   }
   if (!cands.length) return;
   const sam = await mySamImage();
   for (const c of cands.sort((p, q) => q.a - p.a).slice(0, 8)) {
+    const before = myNails.length;
     await addMyNail(sam, c.x, c.y, null, true, { c: { x: c.x, y: c.y }, size: side });
+    // SAM 이 손가락까지 잡아 찾은 손톱보다 훨씬 크면 버린다
+    if (myNails.length > before) {
+      const m = myNails[myNails.length - 1].mask;
+      let a = 0;
+      for (let i = 0; i < m.length; i++) a += m[i];
+      if (a > avg * 2) myNails.pop();
+    }
   }
 }
 async function addMyNail(
@@ -1513,7 +1570,7 @@ viewEl.addEventListener('pointerdown', (ev) => {
 // 자동 시험용: 사진 모드 손톱 상태
 (window as unknown as { irisHair: unknown }).irisHair = () => ({ mine: mineHair, ref: refHair });
 (window as unknown as { irisTatState: unknown }).irisTatState = () => ({ planOk: tatPlanOk, sameRef: tatPlan?.ref === refTat, baked: tatBaked(), refTat: !!refTat, user: refTat?.user, designSame: refTat?.design === tattoo.design, stillKey: stillHairKey, busy: !!stillHairBusy });
-(window as unknown as { irisNail: unknown }).irisNail = { get ref() { return refNails; }, get mine() { return myNails; } };
+(window as unknown as { irisNail: unknown }).irisNail = { get ref() { return refNails; }, get mine() { return myNails; }, ctr: () => { const b = stillRGBA(); return myNails.map((n) => +maskContrast(b.rgba, b.w, b.h, n.mask).toFixed(1)); } };
 
 // ---- 사진 속에 내 얼굴(face-swap.ts): 고른 사진은 그대로, 얼굴만 내 얼굴로 바꾼 뒤 그 사진의 화장을 다시 입힌다 ----
 const btnSwapEl = $<HTMLButtonElement>('btn-swap');
