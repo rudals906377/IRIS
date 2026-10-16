@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { boxBlur, closeHoles, colorGate, flyaways, guidedFilter, hairBands, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, flyaways, guidedFilter, hairBands, hairCore, pureHair, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { hullFill, maskContrast, nailFrame, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
@@ -667,7 +667,16 @@ async function refHairDist(): Promise<HairDist | null> {
   const p = await parseFace(src, { x: (src.width - size) / 2, y: (src.height - size) / 2, size });
   const a = new Float32Array(p.size * p.size);
   for (let i = 0; i < a.length; i++) a[i] = p.hair[i] / 255;
-  refHair = { src, dist: hairDist(p.rgba, a, 0.7, 200), bands: hairBands(p.rgba, p.size, a, 0.7, 200) };
+  // 머리 속만(둘레 4칸, 512 기준): 시스루 앞머리 사이 이마·가닥 사이 배경색이 머리색으로 섞이지 않게
+  // + 색이 피부·배경에 더 가까운 픽셀(시스루 앞머리 사이 이마, 가닥 사이 배경)은 뺀다
+  const face = new Float32Array(a.length), body = new Float32Array(a.length), bg = new Float32Array(a.length);
+  for (let i = 0; i < a.length; i++) {
+    face[i] = p.face[i] / 255;
+    body[i] = p.body[i] / 255;
+    bg[i] = 1 - Math.max(a[i], face[i], body[i]);
+  }
+  const core = pureHair(p.rgba, hairCore(a, p.size, p.size, 0.7, 4), [face, body, bg]);
+  refHair = { src, dist: hairDist(p.rgba, core, 0.7, 200), bands: hairBands(p.rgba, p.size, core, 0.7, 200) };
   return refHair.dist;
 }
 // ---- 사진 모드 타투: 고른 사진의 팔 타투를 내 팔 같은 자리로(still-tattoo.ts) ----
@@ -1024,7 +1033,7 @@ async function updateStillHair(): Promise<void> {
           // 투톤·옴브레 사진이면 뿌리→끝 띠마다 옮긴다
           const rb = refHair?.bands;
           const span = rb?.ombre ? hairSpan(mine.alpha, mine.w) : null;
-          out = recolorHair(mine.rgba, mine.w, mine.h, mine.alpha, mine.dist, ref, Math.min(1, amount), 1, rb && span ? { ref: rb, ...span } : null);
+          out = recolorHair(mine.rgba, mine.w, mine.h, mine.alpha, mine.dist, ref, Math.min(1, amount), 1, rb && span ? { ref: rb, ...span } : null, rb?.lowSpread ?? null);
         }
       }
       if (mkp) {

@@ -83,7 +83,7 @@ export function hairDist(rgba: Uint8ClampedArray, alpha: ArrayLike<number>, thr 
  * 머리카락을 위(뿌리)→아래(끝) 세 띠로 나눈 분포. 투톤·옴브레(뿌리와 끝 색이 다른 머리)를 띠마다 옮기려고.
  * y0·y1: 머리카락 세로 범위(2%·98% 자리). 띠가 비면 null 이 아니라 전체 분포로 채운다.
  */
-export interface HairBands { y0: number; y1: number; bands: HairDist[]; ombre: boolean }
+export interface HairBands { y0: number; y1: number; bands: HairDist[]; ombre: boolean; lowSpread: number }
 /** 머리카락 세로 범위(알파 ≥ thr 인 줄의 2%·98% 자리) */
 export function hairSpan(alpha: ArrayLike<number>, w: number, thr = 0.6): { y0: number; y1: number } | null {
   const ys: number[] = [];
@@ -109,11 +109,14 @@ export function hairBands(rgba: Uint8ClampedArray, w: number, alpha: ArrayLike<n
     }
     bands.push(hairDist(rgba, m, thr, Math.max(60, Math.floor(minN / 4))) ?? all);
   }
-  // 뿌리 띠와 끝 띠의 가운데 색이 크게 다르면(ΔE > 12) 투톤·옴브레로 본다
-  const mid = (d: HairDist) => [d.L[Q / 2], d.a[Q / 2], d.b[Q / 2]];
+  // 뿌리 띠와 끝 띠의 색이 크게 다르면(ΔE > 12) 투톤·옴브레로 본다. 밝기는 30% 자리로 잰다:
+  // 검은 머리 정수리의 윤기(밝은 반사)·시스루 앞머리는 뿌리 띠의 밝은 쪽만 올려 가운데 값으로 재면 옴브레로 잘못 읽힌다
+  const mid = (d: HairDist) => [d.L[Math.round(Q * 0.3)], d.a[Q / 2], d.b[Q / 2]];
   const [A, B] = [mid(bands[0]), mid(bands[2])];
   const ombre = Math.hypot(A[0] - B[0], A[1] - B[1], A[2] - B[2]) > 12;
-  return { y0, y1, bands, ombre };
+  // 하이라이트 판단용 밝기 폭: 윤기가 몰리는 뿌리 띠는 빼고 가운데·끝 띠로
+  const spread = (d: HairDist) => d.L[Math.round(Q * 0.9)] - d.L[Math.round(Q * 0.1)];
+  return { y0, y1, bands, ombre, lowSpread: Math.max(spread(bands[1]), spread(bands[2])) };
 }
 
 /**
@@ -169,7 +172,7 @@ const at = (q: Float32Array, t: number): number => {
  */
 export function recolorHair(
   rgba: Uint8ClampedArray, w: number, h: number, alpha: Float32Array, mine: HairDist, ref: HairDist, amount = 1, seed = 1,
-  bands: { ref: HairBands; y0: number; y1: number } | null = null,
+  bands: { ref: HairBands; y0: number; y1: number } | null = null, hlSpread: number | null = null,
 ): Uint8ClampedArray {
   const out = new Uint8ClampedArray(rgba);
   const lab = new Float32Array(3);
@@ -201,7 +204,9 @@ export function recolorHair(
   // 하이라이트·발레아쥬(어두운 바탕에 밝은 가닥): 고른 사진 밝기 폭이 넓고 내 머리는 고르면, 분위만 옮기면 한 색으로 평평해진다
   // → 머리 흐름을 따라 길게 문지른 굵은 '리본' 무늬를 순위에 섞어 밝은 분위가 가닥 모양으로 모이게 한다
   // 내 머리 밝기 폭은 가닥 사이로 비친 배경까지 섞여 넓게 잡히므로 쓰지 않는다: 고른 사진 폭만 본다(17번 하이라이트 사진 폭 ≈ 48, 단색 염색 ≈ 25~35)
-  const hl = Math.max(0, Math.min(1, (refSpread - 32) / 14));
+  // hlSpread: 뿌리 띠(정수리 윤기)를 뺀 밝기 폭(있으면). 전체 폭과 둘 중 작은 쪽:
+  // 검은 머리 윤기는 전체 폭만, 사진 위 글씨·검은 옷은 아래 띠 폭만 키운다(진짜 하이라이트는 둘 다 넓다)
+  const hl = Math.max(0, Math.min(1, (Math.min(refSpread, hlSpread ?? refSpread) - 32) / 14));
   const ribbons = hl > 0.05 ? strandTexture(luma, w, h, alpha, seed + 7, { width: Math.max(1, Math.round(Math.min(w, h) / 220)), length: Math.min(w, h) / 4 }) : null;
   const wr = 0.85 * hl;
   // ① 픽셀마다 순위(0~1)
@@ -509,4 +514,56 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
     const prox = Math.min(1, near[i] * 20);
     alpha[i] = Math.max(alpha[i], s * prox);
   }
+}
+
+/**
+ * 머리카락 알파의 '속'만 남긴다(둘레 r 칸 안이 모두 머리카락인 곳). 고른 사진 색 분포용:
+ * 시스루 앞머리 사이로 보이는 이마, 날린 가닥 사이 배경이 머리색 분포의 밝은 쪽에 섞이면
+ * 검은 머리 사진이 '하이라이트 머리'로 읽혀 내 머리에 피부·배경색 줄이 생긴다. 속이 너무 적으면(짧은·가는 머리) 그대로.
+ */
+export function hairCore(alpha: Float32Array, w: number, h: number, thr: number, r: number, minN = 200): Float32Array {
+  const m = new Float32Array(alpha.length);
+  for (let i = 0; i < m.length; i++) m[i] = alpha[i] >= thr ? 1 : 0;
+  const b = boxBlur(m, w, h, r);
+  const out = new Float32Array(alpha.length);
+  let n = 0;
+  for (let i = 0; i < m.length; i++) if (b[i] > 0.97) { out[i] = alpha[i]; n++; }
+  return n >= minN * 2 ? out : alpha;
+}
+
+/**
+ * 머리카락 알파에서 색이 머리보다 다른 부류(피부·배경)에 가까운 픽셀을 뺀 새 알파.
+ * 시스루 앞머리 사이 이마·가닥 사이 배경은 분할이 머리카락으로 보지만 색은 피부·배경이다.
+ * 부류마다 확실한 곳(확률 0.8 이상)의 가운데 Lab 을 기준으로, 머리 가운데 색과 ΔE 20 넘게 다른 부류만 쓴다(금발·피부처럼 비슷하면 안 뺌).
+ */
+export function pureHair(rgba: Uint8ClampedArray, alpha: Float32Array, others: Float32Array[], thr = 0.7): Float32Array {
+  const lab = new Float32Array(3);
+  const med = (sel: (i: number) => boolean): [number, number, number] | null => {
+    const L: number[] = [], A: number[] = [], B: number[] = [];
+    for (let i = 0; i < alpha.length; i += 2) {
+      if (!sel(i)) continue;
+      rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+      L.push(lab[0]); A.push(lab[1]); B.push(lab[2]);
+    }
+    if (L.length < 50) return null;
+    const m = (v: number[]) => v.sort((p, q) => p - q)[v.length >> 1];
+    return [m(L), m(A), m(B)];
+  };
+  const hairC = med((i) => alpha[i] >= 0.9);
+  if (!hairC) return alpha;
+  const d2 = (c: [number, number, number]) => (lab[0] - c[0]) ** 2 + (lab[1] - c[1]) ** 2 + (lab[2] - c[2]) ** 2;
+  const cls: [number, number, number][] = [];
+  for (const o of others) {
+    const c = med((i) => o[i] >= 0.8);
+    if (c && Math.sqrt((c[0] - hairC[0]) ** 2 + (c[1] - hairC[1]) ** 2 + (c[2] - hairC[2]) ** 2) > 20) cls.push(c);
+  }
+  if (!cls.length) return alpha;
+  const out = new Float32Array(alpha);
+  for (let i = 0; i < alpha.length; i++) {
+    if (alpha[i] < thr) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    const dh = d2(hairC);
+    if (cls.some((c) => d2(c) < dh)) out[i] = 0;
+  }
+  return out;
 }

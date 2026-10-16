@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, flyaways, guidedFilter, hairDist, quantilePos, recolorHair } from '../src/beauty/still-hair.ts';
+import { Q, flyaways, guidedFilter, hairDist, pureHair, quantilePos, recolorHair } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -188,4 +188,34 @@ test('잔머리: 머리 밖 가는 어두운 가닥은 알파를 얻고, 가닥 
   assert.ok(alpha[y * w + 10] > 0.99, `머리 안 ${alpha[y * w + 10]}`);
   assert.equal(alpha[y * w + 70], 0);
   assert.equal(alpha[y * w + 50], 0);
+});
+
+test('검은 머리 정수리 윤기: 옴브레·하이라이트로 읽지 않는다', async () => {
+  const { hairBands } = await import('../src/beauty/still-hair.ts');
+  // 검은 머리, 위 1/3 의 40% 는 밝은 회보라 윤기
+  const w = 40, h = 90, rgba = new Uint8ClampedArray(w * h * 4), alpha = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    const shine = y < h / 3 && x % 5 < 2;
+    rgba.set(shine ? [150, 145, 165, 255] : [12, 12, 16, 255], i * 4);
+    alpha[i] = 1;
+  }
+  const b = hairBands(rgba, w, alpha, 0.6, 100)!;
+  assert.ok(!b.ombre, '옴브레 아님');
+  assert.ok(b.lowSpread < 20, `가운데·끝 띠 폭 ${b.lowSpread}`);
+});
+
+test('머리색 거르기: 시스루 앞머리 사이 이마(피부색)는 고른 사진 머리 분포에서 뺀다', () => {
+  const n = 1000, rgba = new Uint8ClampedArray(n * 4), hair = new Float32Array(n), face = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    rgba.set(i < 400 ? [15, 15, 18, 255] : [230, 190, 170, 255], i * 4);
+    hair[i] = i < 500 ? 1 : 0;
+    face[i] = i >= 500 ? 1 : 0;
+  }
+  const out = pureHair(rgba, hair, [face]);
+  assert.equal(out.slice(0, 400).reduce((a, b) => a + b, 0), 400);
+  assert.equal(out.slice(400, 500).reduce((a, b) => a + b, 0), 0);
+  // 금발처럼 머리와 피부색이 비슷하면 빼지 않는다
+  for (let i = 0; i < 400; i++) rgba.set([225, 185, 160, 255], i * 4);
+  assert.equal(pureHair(rgba, hair, [face]).slice(0, 500).reduce((a, b) => a + b, 0), 500);
 });
