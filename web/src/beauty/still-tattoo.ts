@@ -265,7 +265,9 @@ export function armStrip(mask: Float32Array, W: number, H: number, roi: { x: num
     }
     pts = pts.map((p, k) => ({ x: p.x + ns[k].x * cs[k], y: p.y + ns[k].y * cs[k] }));
   }
-  h = h.map((_, k) => (h[Math.max(0, k - 1)] + h[k] * 2 + h[Math.min(K - 1, k + 1)]) / 4);
+  // 마지막 가운데 맞춤 뒤에도 고른다: 팔 영역 가장자리의 들쭉날쭉함(분할 경계)이 칸마다 중심·반폭을 흔들어 도안이 지그재그로 휘었다
+  for (let r = 0; r < 4; r++) pts = smoothP(pts);
+  for (let r = 0; r < 3; r++) h = h.map((_, k) => (h[Math.max(0, k - 1)] + h[k] * 2 + h[Math.min(K - 1, k + 1)]) / 4);
   // 굵은 쪽이 앞(어깨)이 되게. 끝 칸은 잘린 모서리라 빼고 잰다
   const qn = Math.floor(K / 4);
   let hA = 0, hB = 0;
