@@ -218,7 +218,12 @@ export function recolorHair(
   // hlSpread: 뿌리 띠(정수리 윤기)를 뺀 밝기 폭(있으면). 전체 폭과 둘 중 작은 쪽:
   // 검은 머리 윤기는 전체 폭만, 사진 위 글씨·검은 옷은 아래 띠 폭만 키운다(진짜 하이라이트는 둘 다 넓다)
   const hl = Math.max(0, Math.min(1, (Math.min(refSpread, hlSpread ?? refSpread) - 32) / 14));
-  const ribbons = hl > 0.05 ? strandTexture(luma, w, h, alpha, seed + 7, { width: Math.max(1, Math.round(Math.min(w, h) / 220)), length: Math.min(w, h) / 4 }) : null;
+  // 리본 굵기·길이는 머리 크기(알파 상자 큰 변)에 맞춘다: 사진 크기로 정하면 큰 사진의 짧은 단발에서 리본이 머리에 비해
+  // 너무 굵고 길어 정수리에 하이라이트 색의 넓고 밋밋한 띠가 됐다
+  let hx0 = w, hx1 = 0, hy0 = h, hy1 = 0;
+  if (hl > 0.05) for (let i = 0; i < w * h; i++) if (alpha[i] > 0.5) { const x = i % w, y = (i / w) | 0; if (x < hx0) hx0 = x; if (x > hx1) hx1 = x; if (y < hy0) hy0 = y; if (y > hy1) hy1 = y; }
+  const hairSz = Math.min(Math.min(w, h), Math.max(hx1 - hx0, hy1 - hy0, 1));
+  const ribbons = hl > 0.05 ? strandTexture(luma, w, h, alpha, seed + 7, { width: Math.max(1, Math.round(hairSz / 150)), length: hairSz / 4 }) : null;
   const wr = 0.85 * hl;
   // ① 픽셀마다 순위(0~1)
   const U = new Float32Array(w * h).fill(-1);
