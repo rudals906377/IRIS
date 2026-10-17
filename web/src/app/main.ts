@@ -920,7 +920,19 @@ async function armTattooPlan(): Promise<TatPlan | null> {
         const ov = FACE_OVAL.map((i) => refFacePts[i]);
         const cx = ov.reduce((t, q) => t + q.x, 0) / ov.length, cy = ov.reduce((t, q) => t + q.y, 0) / ov.length;
         faceM = fillPoly(ov.map((q) => ({ x: cx + (q.x - cx) * 1.15, y: cy + (q.y - cy) * 1.15 })), ref.w, ref.h);
+      } else if (rp && rp.vis[0] > 0.5) {
+        // 얼굴 점을 못 찾으면(이마가 사진 위로 잘린 셀카) 관절점으로: 코를 가운데, 귀 사이 거리(없으면 눈 사이 2.2배)를 가로 반지름으로 한 타원
+        const P = rp.p, nose = P[0];
+        const ears = rp.vis[7] > 0.5 && rp.vis[8] > 0.5 ? Math.hypot(P[7].x - P[8].x, P[7].y - P[8].y) / 2 : 0;
+        const eyes = rp.vis[2] > 0.5 && rp.vis[5] > 0.5 ? Math.hypot(P[2].x - P[5].x, P[2].y - P[5].y) * 1.1 : 0;
+        const rx = Math.max(ears, eyes) * 1.15;
+        if (rx > 4) {
+          const pts: { x: number; y: number }[] = [];
+          for (let k = 0; k < 36; k++) pts.push({ x: nose.x + rx * Math.cos((k / 36) * Math.PI * 2), y: nose.y + rx * 1.4 * Math.sin((k / 36) * Math.PI * 2) });
+          faceM = fillPoly(pts, ref.w, ref.h);
+        }
       }
+      dbgTat({ refFacePts: !!refFacePts, faceM: !!faceM });
       const eraseFace = (im: InkMap): void => {
         if (!faceM) return;
         for (let y = 0; y < im.h; y++) for (let x = 0; x < im.w; x++) {
