@@ -198,3 +198,26 @@ test('메이크업: 고른 사진 아랫입술 밑 붉은 그늘은 립이 아�
   rgb2lab(my[o], my[o + 1], my[o + 2], lab);
   assert.ok(a < lab[1] + 6, `아랫입술 밑 a ${a.toFixed(1)}, 원래 ${lab[1].toFixed(1)}`);
 });
+
+test('메이크업: 두 사진 눈 모양이 달라도(내 흰자 ↔ 고른 눈동자) 그 차이로 내 눈꺼풀을 짙게 칠하지 않는다', () => {
+  const W = 200, H = 220;
+  const pts = face(100, 110, 60);
+  const my = new Uint8ClampedArray(W * H * 4), ref = new Uint8ClampedArray(W * H * 4);
+  // 오른눈(이미지 왼쪽): 가운데 (76, 98), 반폭 9 · 반높이 3.6
+  const inEye = (x: number, y: number) => ((x - 76) / 9) ** 2 + ((y - 98) / 3.6) ** 2 < 1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4, e = inEye(x, y);
+    // 내 눈은 흰자, 고른 사진 눈은 짙은 눈동자(눈 모양이 달라 맞물림)
+    my.set(e ? [235, 235, 230, 255] : [215, 180, 160, 255], o);
+    ref.set(e ? [40, 30, 28, 255] : [215, 180, 160, 255], o);
+  }
+  // 내 피부 분할이 윗눈꺼풀(눈 위 2~9px)을 피부로 못 잡음
+  const mySkin = new Float32Array(W * H).fill(1);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (Math.abs(x - 76) <= 12 && y >= 86 && y <= 95) mySkin[y * W + x] = 0;
+  const out = transferMakeup(my, W, H, pts, ref, W, H, pts, FACE_OVAL, { lip: 1, eye: 1, skin: 1 }, mySkin, null, null);
+  const lab = new Float32Array(3), o = (91 * W + 76) * 4;
+  rgb2lab(out[o], out[o + 1], out[o + 2], lab);
+  const L = lab[0];
+  rgb2lab(my[o], my[o + 1], my[o + 2], lab);
+  assert.ok(L > lab[0] - 6, `윗눈꺼풀 L ${L.toFixed(1)}, 원래 ${lab[0].toFixed(1)}`);
+});

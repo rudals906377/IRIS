@@ -203,16 +203,19 @@ export function transferMakeup(
   // 가까운 둘레(얼굴 폭 6%)로 먼저, 손이 넓게 가린 곳은 먼 둘레(18%)로.
   // 입술 밖은 입술 값을 빼고 메운다: 섞으면 턱에 댄 손가락으로 가린 아랫입술 밑이 립 색(a +15)으로 메워져
   // 턱에 분홍 얼룩이 번졌다. 입술 자리는 지금처럼 둘레 전체로(눈가는 빼지 않는다: 눈 밑 블러셔가 볼 메우기에 필요)
-  const zoneW = new Float32Array(n), Vs = new Float32Array(n);
+  // 눈 안(뜬 눈: 흰자·눈동자)은 어디도 메우지 않는다: 두 사진 눈 모양이 달라 흰자 ↔ 눈동자가 맞물리면 D 가 L −40 이라,
+  // 내 쪽 피부 분할이 빠진 눈두덩이 그 값으로 메워져 윗눈꺼풀 전체가 짙은 갈색 띠가 됐다
+  const zoneW = new Float32Array(n), Vs = new Float32Array(n), Vd = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     zoneW[i] = ramp(lipB[i], 0, 0.2);
-    Vs[i] = V[i] * (1 - zoneW[i]);
+    Vd[i] = V[i] * (1 - ramp(openB[i], 0.2, 0.5));
+    Vs[i] = Vd[i] * (1 - zoneW[i]);
   }
-  const Df = D.map((d) => wblur(d, V, w, h, rf(0.06)));
-  const Dg = D.map((d) => wblur(d, V, w, h, rf(0.18)));
+  const Df = D.map((d) => wblur(d, Vd, w, h, rf(0.06)));
+  const Dg = D.map((d) => wblur(d, Vd, w, h, rf(0.18)));
   const Dfs = D.map((d) => wblur(d, Vs, w, h, rf(0.06)));
   const Dgs = D.map((d) => wblur(d, Vs, w, h, rf(0.18)));
-  const C1 = boxBlur(V, w, h, rf(0.06)), C1s = boxBlur(Vs, w, h, rf(0.06));
+  const C1 = boxBlur(Vd, w, h, rf(0.06)), C1s = boxBlur(Vs, w, h, rf(0.06));
   const Cf = boxBlur(V, w, h, rf(0.18));
   const Vb = boxBlur(V, w, h, rf(0.012));
   for (let i = 0; i < n; i++) {
