@@ -912,8 +912,25 @@ async function armTattooPlan(): Promise<TatPlan | null> {
       const rs = await photoAnalyzer.bodySkin(rc);
       dbgTat({ refPose: !!rp, refSkin: !!rs });
       if (!rs) return null;
+      // 고른 사진 얼굴(윤곽 15% 넓힘)은 도안이 아니다: 팔을 얼굴까지 든 셀카에서 눈·눈썹·콧구멍·입술이 잉크로 뽑혀
+      // 내 아래팔에 검은 조각으로 찍혔다 → 잉크·팔 영역에서 뺀다
+      const refFacePts = await photoAnalyzer.faceLandmarks(rc).catch(() => null);
+      let faceM: Float32Array | null = null;
+      if (refFacePts) {
+        const ov = FACE_OVAL.map((i) => refFacePts[i]);
+        const cx = ov.reduce((t, q) => t + q.x, 0) / ov.length, cy = ov.reduce((t, q) => t + q.y, 0) / ov.length;
+        faceM = fillPoly(ov.map((q) => ({ x: cx + (q.x - cx) * 1.15, y: cy + (q.y - cy) * 1.15 })), ref.w, ref.h);
+      }
+      const eraseFace = (im: InkMap): void => {
+        if (!faceM) return;
+        for (let y = 0; y < im.h; y++) for (let x = 0; x < im.w; x++) {
+          const X = Math.round(im.rect.x + ((x + 0.5) / im.w) * im.rect.w), Y = Math.round(im.rect.y + ((y + 0.5) / im.h) * im.rect.h);
+          if (X >= 0 && Y >= 0 && X < ref.w && Y < ref.h && faceM[Y * ref.w + X] > 0) im.rgba[(y * im.w + x) * 4 + 3] = 0;
+        }
+      };
       const dc = ref.design.canvas!;
-      let ink: InkMap = { rgba: dc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, dc.width, dc.height).data, w: dc.width, h: dc.height, rect: ref.rect };
+      let ink: InkMap = { rgba: new Uint8ClampedArray(dc.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, dc.width, dc.height).data), w: dc.width, h: dc.height, rect: ref.rect };
+      eraseFace(ink);
       let total = 0;
       for (let i = 3; i < ink.rgba.length; i += 4) if (ink.rgba[i] >= 32) total += ink.rgba[i] / 255;
       // 몸통 타투(등·가슴): 잉크가 고른 사진 어깨~엉덩이 안에 절반 넘게 있으면 어깨·엉덩이 대응으로 옮긴다
@@ -956,7 +973,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
           const found = findInk(ref.src);
           const m = new Float32Array(ref.w * ref.h);
           const av = ref.src.avoid;
-          for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0);
+          for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0) * (faceM ? 1 - faceM[i] : 1);
           const limb = limbRegion(m, ref.w, ref.h, ref.rect);
           const st = limb ? armStrip(limb.mask, ref.w, ref.h, limb.box) : null;
           armLike = !!st && st.len / (2 * st.mean) >= 3;
@@ -968,7 +985,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
           const ms = await photoAnalyzer.bodySkin(mc);
           if (!mp || !ms || Math.min(mp.vis[11], mp.vis[12]) < 0.5) return null;
           // 뒷모습(얼굴이 안 보임)은 관절점이 왼쪽·오른쪽·크기를 자주 틀려 옮기지 않는다: 앞모습끼리(가슴·쇄골)만
-          const refFace = await photoAnalyzer.faceLandmarks(rc);
+          const refFace = refFacePts;
           const myFace = await photoAnalyzer.faceLandmarks(mc);
           // 얼굴이 사진 위로 잘린 앞모습(가슴·팔 타투 사진에 흔함)도 있다: 얼굴이 없어도 사람 왼어깨(11)가 그림 오른쪽이면 앞모습
           const sw0 = Math.abs(rp.p[11].x - rp.p[12].x);
@@ -1026,12 +1043,15 @@ async function armTattooPlan(): Promise<TatPlan | null> {
         const m = new Float32Array(ref.w * ref.h);
         // 타투가 빽빽한 팔은 분할이 옷으로 봐 피부에서 빠진다: 도안 뽑기에서 '피부 아님'을 덜어 낸 곳(1 − avoid)도 팔로
         const av = ref.src.avoid;
-        for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0);
+        for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0) * (faceM ? 1 - faceM[i] : 1);
         const limb = limbRegion(m, ref.w, ref.h, ref.rect);
         if (!limb) return null;
         if (!ref.user) {
           const ex = extractDesign(ref.src, limb.box, 1600);
-          if (ex) ink = { rgba: ex.rgba, w: ex.w, h: ex.h, rect: ex.rect };
+          if (ex) {
+            ink = { rgba: ex.rgba, w: ex.w, h: ex.h, rect: ex.rect };
+            eraseFace(ink);
+          }
         }
         strip = armStrip(limb.mask, ref.w, ref.h, limb.box);
         dbgTat({ strip: strip && { len: strip.len, mean: strip.mean, ratio: strip.ratio, p: strip.p, h: [...strip.h], refW: ref.w, rect: ink.rect } });
