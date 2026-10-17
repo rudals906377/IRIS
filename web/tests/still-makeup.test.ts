@@ -89,3 +89,27 @@ test('메이크업: 고른 사진의 하얗게 비친 볼(조명)은 내 볼을 
   rgb2lab(out[o], out[o + 1], out[o + 2], b);
   assert.ok(b[2] - a[2] > -4.5, `노란 기 변화 ${(b[2] - a[2]).toFixed(1)}`);
 });
+
+test('메이크업: 맨얼굴의 점 몇 개(점·여드름)는 옮기지 않고, 얼굴에 많이 그린 주근깨는 옮긴다', () => {
+  const W = 320, H = 360, cx = 160, cy = 180, R = 110;
+  const pts = face(cx, cy, R);
+  const skin = [205, 170, 150];
+  const make = (spots: [number, number][]) => {
+    const ref = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < W * H; i++) { ref.set(skin, i * 4); ref[i * 4 + 3] = 255; }
+    for (const [x, y] of spots) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (dx * dx + dy * dy <= 5) ref.set([120, 85, 70], ((y + dy) * W + x + dx) * 4);
+    return ref;
+  };
+  const my = make([]);
+  const few: [number, number][] = [[cx - 50, cy + 22], [cx + 50, cy + 20], [cx - 40, cy + 30]];
+  const many: [number, number][] = [];
+  for (let y = 0; y < H; y += 9) for (let x = 0; x < W; x += 9) if (((x - cx) / (0.8 * R)) ** 2 + ((y - cy) / (0.95 * R)) ** 2 < 1) many.push([x, y]);
+  const lum = (o: Uint8ClampedArray, x: number, y: number) => { const i = (y * W + x) * 4; return o[i] + o[i + 1] + o[i + 2]; };
+  const a = transferMakeup(my, W, H, pts, make(few), W, H, pts, FACE_OVAL, { lip: 1, eye: 1, skin: 1 });
+  assert.ok(lum(my, few[0][0], few[0][1]) - lum(a, few[0][0], few[0][1]) < 30, `점 몇 개 ${lum(my, few[0][0], few[0][1]) - lum(a, few[0][0], few[0][1])}`);
+  const dbg: Record<string, unknown> = {};
+  const b = transferMakeup(my, W, H, pts, make(many), W, H, pts, FACE_OVAL, { lip: 1, eye: 1, skin: 1 }, null, null, null, dbg);
+  const ds = many.map(([x, y]) => lum(my, x, y) - lum(b, x, y)).sort((p, q) => p - q);
+  const p90 = ds[Math.floor(ds.length * 0.9)];
+  assert.ok(p90 > 100, `주근깨 ${p90} (점 ${dbg.nDots}개, ${many.length}개 그림)`);
+});

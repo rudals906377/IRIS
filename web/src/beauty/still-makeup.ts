@@ -220,6 +220,26 @@ export function transferMakeup(
   // 주근깨: 고른 사진 손 바로 곁(얼굴 폭 4% 안 손 몫 6~9% 넘음)인 점은 뺀다. 칠한 손톱은 몸 피부로 안 잡히고 얼굴로 읽혀
   // 끝이 둥근 어두운 점이 턱·볼에 검은 점으로 옮겨졌다(손 지도는 얼굴 가장자리에도 조금 번져서 문턱을 낮추면 진짜 주근깨가 빠진다)
   const handsFar = rHands ? boxBlur(rHands, w, h, rf(0.04)) : null;
+  // 주근깨 화장은 볼·코에 걸친 많은 점이다. 점이 몇 개뿐이면(맨얼굴의 점·여드름·수염 자국) 옮기지 않는다
+  // (얼굴에 떨어진 몇 개의 검은 점·턱의 거뭇한 얼룩이 됐다): 얼굴 피부에서 뚜렷한 점 덩어리를 세어 40~80개 사이에서 켠다(주근깨 화장 사진 130개 남짓, 맨얼굴·다른 화장은 30개 아래: 모공·잡티)
+  let nDots = 0;
+  {
+    const seed = new Uint8Array(n);
+    for (let i = 0; i < n; i++) seed[i] = dots[i] > 0.5 && V[i] > 0.5 && faceM[i] > 0.5 && eyeM[i] < 0.2 && lipM[i] < 0.2 && rfL[0][i] - rfSkinMean[i] + 2.5 < 0 ? 1 : 0;
+    const seen = new Uint8Array(n), st: number[] = [];
+    for (let i0 = 0; i0 < n; i0++) {
+      if (!seed[i0] || seen[i0]) continue;
+      nDots++;
+      seen[i0] = 1;
+      st.push(i0);
+      while (st.length) {
+        const i = st.pop()!, x = i % w, y = (i / w) | 0;
+        for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) if (j >= 0 && seed[j] && !seen[j]) { seen[j] = 1; st.push(j); }
+      }
+    }
+  }
+  const frOn = ramp(nDots, 40, 80);
+  if (dbg) dbg.nDots = nDots;
   // ⑤ 옮기기
   const o = new Uint8ClampedArray(4);
   for (let i = 0; i < n; i++) {
@@ -244,7 +264,7 @@ export function transferMakeup(
     if (lowerOK[i] < 1) L += Math.min(0, rfL[0][i] - rfThin[i]) * amt.eye * eyeM[i] * keep * Vb[i] * (1 - lowerOK[i]);
     // 주근깨·점: 피부(눈가·입술 밖)에서 뚜렷한 작은 어두운 점
     const fr = rfL[0][i] - rfSkinMean[i] + 2.5;
-    if (fr < 0 && dots[i] > 0) L += fr * 2 * dots[i] * amt.skin * keep * Vb[i] * (handsFar ? 1 - ramp(handsFar[i], 0.06, 0.09) : 1) * (1 - eyeM[i]) * (1 - ramp(mouthB[i], 0, 0.08));
+    if (fr < 0 && dots[i] > 0 && frOn > 0) L += fr * 2 * dots[i] * frOn * amt.skin * keep * Vb[i] * (handsFar ? 1 - ramp(handsFar[i], 0.06, 0.09) : 1) * (1 - eyeM[i]) * (1 - ramp(mouthB[i], 0, 0.08));
     lab2rgb(Math.max(0, Math.min(100, L)), a, b, o, 0);
     const X = (i % w) + x0, Y = Math.floor(i / w) + y0;
     const q = (Y * W + X) * 4;
