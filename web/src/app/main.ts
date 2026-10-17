@@ -1567,9 +1567,11 @@ async function ensureNailsOnce(): Promise<void> {
   // 손 점으로 몇 개만 찾았으면(손가락이 겹쳐 손 점이 어긋남) 찾은 손톱 색과 비슷한 손 둘레 덩어리를 더 찾는다
   // (빨간 매니큐어 손톱 넷 중 둘만 바뀌면 섞여 보여 어색하다)
   if (myNails.length && myNails.length < 10) await moreNailsLikeMine(handsMine);
-  // 손 점으로 하나도 못 찾았으면(가까이 찍은 손) 색으로: 매니큐어 바른 손톱은 피부와 색이 뚜렷이 다르다
-  const colorFound = !myNails.length;
-  if (!myNails.length) {
+  // 손 점으로 4개 미만이면(가까이 찍은 손·긴 네일은 손 점이 엉뚱한 곳에 몰리기도 한다) 색으로도 찾아 더 많이 찾은 쪽:
+  // 매니큐어 바른 손톱은 피부와 색이 뚜렷이 다르다(전에는 하나라도 찾으면 색으로 안 찾아 손톱 하나만 바뀌었다)
+  let colorFound = !myNails.length;
+  if (myNails.length < 4) {
+    const byPose = myNails.splice(0);
     const base = stillRGBA();
     // 손 점으로 찾을 때와 같은 기준: 사진의 3% 넘는 덩어리는 손톱이 아니고, 손이 잡혔으면 손 둘레(손 크기 50% 여백: 서로 낀 손은 점이 어긋난다) 안만
     // (서로 낀 손 사진에서 손톱 색과 비슷한 어두운 머리카락이 큰 손톱으로 칠해졌다)
@@ -1578,7 +1580,12 @@ async function ensureNailsOnce(): Promise<void> {
       const m = Math.hypot(hp.p[9].x - hp.p[0].x, hp.p[9].y - hp.p[0].y) * 0.5;
       return { x0: Math.min(...xs) - m, y0: Math.min(...ys) - m, x1: Math.max(...xs) + m, y1: Math.max(...ys) + m };
     });
-    const found = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…', boxes);
+    let found = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…', boxes);
+    // 손 점으로 하나 이하만 찾았으면 손 점 자체가 어긋났을 수 있다: 손 둘레 안에서 못 찾으면 사진 전체에서
+    if (found.length < 2 && byPose.length <= 1 && boxes.length) {
+      found = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…');
+      boxes.length = 0;
+    }
     for (const n of found) {
       let a = 0, sx = 0, sy = 0;
       for (let i = 0; i < n.mask.length; i++) if (n.mask[i]) { a++; sx += i % base.w; sy += (i / base.w) | 0; }
@@ -1590,6 +1597,8 @@ async function ensureNailsOnce(): Promise<void> {
         myNails.push(n);
       }
     }
+    if (myNails.length > byPose.length) colorFound = true;
+    else myNails.splice(0, myNails.length, ...byPose);
   }
   // 색으로 몇 개만 찾았어도(서로 낀 손) 그 손톱 색으로 나머지를 더 찾는다
   if (colorFound && myNails.length && myNails.length < 10) await moreNailsLikeMine(handsMine);
