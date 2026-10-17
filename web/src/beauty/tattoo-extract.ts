@@ -111,7 +111,7 @@ function lumaOf(src: InkSource): Float32Array {
 }
 
 /** 잉크 후보(0/1)와 피부 마스크 */
-export function findInk(src: InkSource): { ink: Uint8Array; skin: Uint8Array; L: Float32Array } {
+export function findInk(src: InkSource): { ink: Uint8Array; skin: Uint8Array; L: Float32Array; rimLine: Uint8Array } {
   const { w, h } = src;
   const n = w * h;
   const short = Math.min(w, h);
@@ -145,11 +145,35 @@ export function findInk(src: InkSource): { ink: Uint8Array; skin: Uint8Array; L:
     ls.sort((a, b) => a - b);
     if (ls[Math.floor(ls.length * 0.2)] < 0.14) drop.add(c);
   }
+  // 몸 윤곽선(피부와 배경·옷 경계의 어두운 그늘): 가는 선 덩어리 대부분(80% 넘게)이 피부 가장자리 띠(짧은 변 2.5%)에 있으면
+  // 잉크에서 빼 rimLine 으로 따로 돌려준다(가슴 사이 가는 타투보다 몸 옆 윤곽선 잉크가 많아 윤곽선이 도안으로 뽑혔음).
+  // 무리 묶기에서는 이음새로만 쓴다(팔 가장자리 선이 소매 위아래 그림을 한 무리로 이어 주던 것은 그대로)
+  const deep = boxBlur(skinRaw, w, h, Math.max(2, short * 0.025));
+  // 선처럼 가는 것만(넓이 / 상자 대각선 = 평균 굵기가 짧은 변 1.2% 아래): 빽빽한 소매 타투 덩어리는 팔 가장자리에 걸려도 남긴다
+  const rim = new Int32Array(nc + 1), line = new Set<number>();
+  const bx0 = new Int32Array(nc + 1).fill(w), by0 = new Int32Array(nc + 1).fill(h), bx1 = new Int32Array(nc + 1), by1 = new Int32Array(nc + 1);
   for (let i = 0; i < n; i++) {
     const c = lab[i];
-    if (c && (area[c] < 4 || drop.has(c))) ink[i] = 0;
+    if (!c) continue;
+    if (deep[i] < 0.97) rim[c]++;
+    const x = i % w, y = (i / w) | 0;
+    if (x < bx0[c]) bx0[c] = x;
+    if (x > bx1[c]) bx1[c] = x;
+    if (y < by0[c]) by0[c] = y;
+    if (y > by1[c]) by1[c] = y;
   }
-  return { ink, skin, L };
+  for (let c = 1; c <= nc; c++) {
+    if (area[c] < 4 || rim[c] <= area[c] * 0.8) continue;
+    const diag = Math.hypot(bx1[c] - bx0[c] + 1, by1[c] - by0[c] + 1);
+    if (area[c] / diag < short * 0.012) line.add(c);
+  }
+  const rimLine = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const c = lab[i];
+    if (c && line.has(c) && !drop.has(c)) rimLine[i] = 1;
+    if (c && (area[c] < 4 || drop.has(c) || line.has(c))) ink[i] = 0;
+  }
+  return { ink, skin, L, rimLine };
 }
 
 /** 흩어진 도안을 한 무리로 묶어 잉크가 가장 많은 무리의 영역을 제안한다. 없으면 null */
@@ -161,7 +185,7 @@ export function proposeRect(src: InkSource, found = findInk(src)): Rect | null {
   for (let i = 0; i < ink.length; i++) total += ink[i];
   if (total < short * 0.5) return null;
   const f = new Float32Array(ink.length);
-  for (let i = 0; i < ink.length; i++) f[i] = ink[i];
+  for (let i = 0; i < ink.length; i++) f[i] = ink[i] || found.rimLine[i];
   const grown = boxBlur(f, w, h, Math.max(2, short * 0.02));
   const gm = new Uint8Array(ink.length);
   for (let i = 0; i < ink.length; i++) gm[i] = grown[i] > 0 ? 1 : 0;

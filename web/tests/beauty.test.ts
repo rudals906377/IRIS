@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { bandMesh, faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 import { LOOKS, PALETTES } from '../src/beauty/palettes.ts';
 import { measureLimbWidth, placeFromPoint, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
-import { dropEdgeBits, extractDesign } from '../src/beauty/tattoo-extract.ts';
+import { dropEdgeBits, extractDesign, proposeRect } from '../src/beauty/tattoo-extract.ts';
 
 type P = { x: number; y: number };
 const area = (pts: P[], tris: number[]): number => {
@@ -346,6 +346,20 @@ test('타투 도안 뽑기: 배율을 곱해 소수가 된 영역도 잉크를 �
   let ink = 0;
   for (let i = 3; i < r.rgba.length; i += 4) if (r.rgba[i] > 128) ink++;
   assert.ok(ink > 40, `잉크 ${ink}`);
+});
+
+test('타투 영역 고르기: 피부 가장자리를 따라 길게 난 몸 윤곽선 그늘보다 가운데 가는 타투를 고른다', () => {
+  const w = 200, h = 200;
+  const d = new Uint8ClampedArray(w * h * 4);
+  const skin = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 20; x < 200; x++) skin[y * w + x] = 1;
+  for (let i = 0; i < w * h; i++) d.set(skin[i] ? [220, 170, 150, 255] : [240, 240, 240, 255], i * 4);
+  // 윤곽선: 피부 왼쪽 가장자리 안쪽 2px 짜리 긴 어두운 띠(잉크 양이 타투보다 많다)
+  for (let y = 0; y < h; y++) for (let x = 23; x < 25; x++) d.set([150, 110, 95, 255], (y * w + x) * 4);
+  // 가운데 가는 십자 타투
+  for (let k = 70; k <= 150; k++) for (const [x, y] of [[110, k], [k, 110]]) d.set([90, 70, 70, 255], (y * w + x) * 4);
+  const r = proposeRect({ w, h, d, skin })!;
+  assert.ok(r && r.x > 60 && r.x < 110 && r.x + r.w > 110, `영역 ${JSON.stringify(r)}`);
 });
 
 test('타투 도안: 옷 곁에 떨어진 작은 그늘 조각은 지우고, 도안에 붙은 점·옷에서 먼 점은 남긴다', () => {

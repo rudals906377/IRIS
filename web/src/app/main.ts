@@ -952,7 +952,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
         const m = new Float32Array(ref.w * ref.h);
         // 타투가 빽빽한 팔은 분할이 옷으로 봐 피부에서 빠진다: 도안 뽑기에서 '피부 아님'을 덜어 낸 곳(1 − avoid)도 팔로
         const av = ref.src.avoid;
-        for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], av ? 1 - av[i] : 0);
+        for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0);
         const limb = limbRegion(m, ref.w, ref.h, ref.rect);
         if (!limb) return null;
         if (!ref.user) {
