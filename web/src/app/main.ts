@@ -692,6 +692,17 @@ async function mineHairMatte(): Promise<typeof mineHair> {
     if (person) gate = Math.min(gate, Math.max(0, Math.min(1, (person[i] - 0.3) / 0.4)));
     alpha[i] = Math.min(Math.max(0, Math.min(1, (alpha[i] - 0.15) / 0.7)), gate);
   }
+  // 분할이 덜 확신하는 머리(아주 짧은 머리 등)는 머리 속 알파가 0.7 언저리에 머문다 → 그대로면 원래 머리색이 30% 비쳐
+  // 밝게 염색해도 회색으로 탁해졌다. 머리 알파 95% 자리가 0.9 아래면 그 값이 1 이 되게 늘린다
+  {
+    const av: number[] = [];
+    for (let i = 0; i < alpha.length; i += 3) if (alpha[i] > 0.2) av.push(alpha[i]);
+    if (av.length > 200) {
+      av.sort((p, q) => p - q);
+      const top = av[Math.floor((av.length - 1) * 0.95)];
+      if (top > 0.3 && top < 0.9) for (let i = 0; i < alpha.length; i++) alpha[i] = Math.min(1, alpha[i] / top);
+    }
+  }
   // 아주 어두운 머리카락 덩어리는 분할·필터가 놓쳐 작은 구멍(원래 색 얼룩)이 된다 → 머리 크기에 맞춰 닫기
   const closed = closeHoles(alpha, W, H, Math.max(3, Math.round(rect.size / 90)));
   for (let i = 0; i < alpha.length; i++) alpha[i] = closed[i];
