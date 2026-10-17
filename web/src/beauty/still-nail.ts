@@ -166,6 +166,65 @@ export function transferNail(dst: Uint8ClampedArray, W: number, H: number, dMask
   }
 }
 
+/**
+ * 매니큐어 바른 손톱 마스크를 칠한 색 쪽 픽셀만으로 다듬고, 떨어진 덩어리로 나눈다.
+ * 옆으로 본 두 손가락처럼 SAM 이 손톱 둘과 그 사이 손가락 살을 한 덩어리로 잡으면 큰 네모 하나로 칠해졌다.
+ * 둘레(3~8px 밖) 피부색과 ΔE 20 넘게 다른 마스크 픽셀의 가운데 색을 매니큐어 색으로 보고, 피부보다 그 색에 가까운 픽셀만 남긴다.
+ * 매니큐어가 없거나(먼 픽셀 30% 미만·피부와 ΔE 30 미만) 다듬어도 거의 그대로(85% 넘게 남음)면 [mask] 그대로.
+ * 반환 마스크는 새 배열(볼록 껍질 채우기 전 입력을 넣는다).
+ */
+export function splitPolished(mask: Uint8Array, w: number, h: number, rgba: Uint8ClampedArray): Uint8Array[] {
+  let x0 = w, y0 = h, x1 = -1, y1 = -1, area = 0;
+  for (let i = 0; i < mask.length; i++) if (mask[i]) { const x = i % w, y = (i - x) / w; area++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (area < 30) return [mask];
+  const lab = new Float32Array(3);
+  const at = (i: number): [number, number, number] => { rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab); return [lab[0], lab[1], lab[2]]; };
+  const dist = (p: number[], q: number[]) => Math.hypot((p[0] - q[0]) * 0.5, p[1] - q[1], p[2] - q[2]);
+  const med = (v: number[][]) => [0, 1, 2].map((c) => v.map((p) => p[c]).sort((a, b) => a - b)[v.length >> 1]);
+  // 둘레 띠: 마스크 밖이면서 3~8px 안에 마스크가 있는 픽셀
+  const ring: number[][] = [];
+  for (let y = Math.max(0, y0 - 8); y <= Math.min(h - 1, y1 + 8); y += 2) for (let x = Math.max(0, x0 - 8); x <= Math.min(w - 1, x1 + 8); x += 2) {
+    const i = y * w + x;
+    if (mask[i]) continue;
+    let near = false, close = false;
+    for (let dy = -8; dy <= 8 && !close; dy += 2) for (let dx = -8; dx <= 8; dx += 2) {
+      const xx = x + dx, yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h || !mask[yy * w + xx]) continue;
+      if (Math.abs(dx) < 3 && Math.abs(dy) < 3) { close = true; break; }
+      near = true;
+    }
+    if (near && !close) ring.push(at(i));
+  }
+  if (ring.length < 10) return [mask];
+  const skin = med(ring);
+  const px: number[] = [], cols: number[][] = [];
+  for (let i = 0; i < mask.length; i++) if (mask[i]) { px.push(i); cols.push(at(i)); }
+  const far = cols.filter((c) => dist(c, skin) > 20);
+  if (far.length < cols.length * 0.3) return [mask];
+  const pol = med(far);
+  if (dist(pol, skin) < 30) return [mask];
+  const keep = new Uint8Array(mask.length);
+  let kept = 0;
+  for (let k = 0; k < px.length; k++) if (dist(cols[k], pol) < dist(cols[k], skin)) { keep[px[k]] = 1; kept++; }
+  if (kept > area * 0.85) return [mask];
+  // 덩어리 나누기(4방향), 가장 큰 것의 15%·30px 미만은 버림
+  const lab2 = new Int32Array(mask.length).fill(-1), comps: number[][] = [];
+  for (const i0 of px) {
+    if (!keep[i0] || lab2[i0] >= 0) continue;
+    const st = [i0], cur: number[] = [];
+    lab2[i0] = comps.length;
+    while (st.length) {
+      const i = st.pop()!, x = i % w;
+      cur.push(i);
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) if (j >= 0 && j < mask.length && keep[j] && lab2[j] < 0) { lab2[j] = comps.length; st.push(j); }
+    }
+    comps.push(cur);
+  }
+  const big = Math.max(0, ...comps.map((c) => c.length));
+  const out = comps.filter((c) => c.length >= 30 && c.length >= big * 0.15).map((c) => { const m = new Uint8Array(mask.length); for (const i of c) m[i] = 1; return m; });
+  return out.length ? out : [mask];
+}
+
 /** 손톱은 볼록하다: 마스크를 볼록 껍질로 채워 반사광 때문에 빠진 구멍·들쭉날쭉한 가장자리를 메운다(제자리 수정) */
 export function hullFill(mask: Uint8Array, w: number, h: number): Uint8Array {
   // 행마다 가장 왼쪽·오른쪽 점만으로 껍질을 구해도 충분

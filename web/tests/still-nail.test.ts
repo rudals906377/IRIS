@@ -2,7 +2,7 @@
 // 사진 모드 네일(손톱 틀·옮겨 그리기) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { nailFrame, transferNail } from '../src/beauty/still-nail.ts';
+import { nailFrame, splitPolished, transferNail } from '../src/beauty/still-nail.ts';
 
 /** 중심(cx,cy), 반지름(a: 길이 방향, b: 폭), 각도 th 의 타원 마스크 */
 function ellipse(w: number, h: number, cx: number, cy: number, a: number, b: number, th: number): Uint8Array {
@@ -114,4 +114,24 @@ test('손톱 마스크 넓히기: 빨간 매니큐어 테두리(마스크 밖 1~
   assert.equal(mask[30 * w + 30 + 11], 1, '빨간 테두리');
   assert.equal(mask[30 * w + 30 + 12], 1, '섞인 가장자리');
   assert.equal(mask[30 * w + 30 + 15], 0, '피부');
+});
+
+test('매니큐어 손톱 나누기: 두 손톱 + 사이 손가락 살을 한 덩어리로 잡으면 손톱 둘로, 손톱만 잡았으면 그대로', () => {
+  const w = 80, h = 60, rgba = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) rgba.set([235, 190, 170, 255], i * 4);
+  const mask = new Uint8Array(w * h);
+  // 빨간 손톱 둘(x 20~29, 45~54) + 그 사이 살(x 30~44)까지 한 마스크
+  for (let y = 20; y < 40; y++) for (let x = 20; x < 55; x++) {
+    mask[y * w + x] = 1;
+    if (x < 30 || x >= 45) rgba.set([210, 30, 40, 255], (y * w + x) * 4);
+  }
+  const parts = splitPolished(mask, w, h, rgba);
+  assert.equal(parts.length, 2);
+  for (const p of parts) assert.equal(p[30 * w + 37], 0, '사이 살은 빠짐');
+  // 손톱만 잡은 마스크는 그대로(같은 배열)
+  const one = new Uint8Array(w * h);
+  for (let y = 20; y < 40; y++) for (let x = 20; x < 30; x++) one[y * w + x] = 1;
+  const r = splitPolished(one, w, h, rgba);
+  assert.equal(r.length, 1);
+  assert.equal(r[0], one);
 });

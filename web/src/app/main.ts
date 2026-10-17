@@ -34,7 +34,7 @@ import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../en
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
 import { boxBlur, closeHoles, colorGate, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
-import { growNailMask, hullFill, maskContrast, nailFrame, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
+import { growNailMask, hullFill, maskContrast, nailFrame, splitPolished, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
@@ -1551,12 +1551,22 @@ function dropSkinNails(): void {
   if (!dE.some((v) => v > 30)) return;
   for (let k = myNails.length - 1; k >= 0; k--) if (dE[k] < 15) myNails.splice(k, 1);
 }
-/** 같은 사진 손톱들 넓이 가운데 값의 1.6배 넘는 '손톱'은 SAM 이 손끝 살까지 잡은 것: 뺀다(3개 이상일 때만, 한 손 크기가 비슷하다는 가정) */
+/**
+ * 같은 사진 손톱들 넓이 가운데 값의 1.6배 넘는 '손톱'은 SAM 이 손끝 살까지 잡은 것: 뺀다(3개 이상일 때만, 한 손 크기가 비슷하다는 가정).
+ * 단 살이 섞이지 않은 매니큐어 손톱(둘레와 색 차 25 이상, 매니큐어 색으로 다듬을 게 없음)은 남긴다:
+ * 정면으로 보이는 엄지 손톱은 옆으로 본 손톱들보다 3배 가까이 크다
+ */
 function dropOversizeNails(): void {
   if (myNails.length < 3) return;
+  const { w, h, rgba } = stillRGBA();
   const areas = myNails.map((m) => m.mask.reduce((a, v) => a + v, 0));
   const med = [...areas].sort((a, b) => a - b)[areas.length >> 1];
-  for (let k = myNails.length - 1; k >= 0; k--) if (areas[k] > med * 1.6) myNails.splice(k, 1);
+  for (let k = myNails.length - 1; k >= 0; k--) {
+    if (areas[k] <= med * 1.6) continue;
+    const m = myNails[k].mask;
+    if (maskContrast(rgba, w, h, m) >= 25 && splitPolished(m, w, h, rgba)[0] === m) continue;
+    myNails.splice(k, 1);
+  }
 }
 async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Promise<void> {
   const base = stillRGBA();
@@ -1621,8 +1631,9 @@ async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Pr
       }
     }
     const a = c * G * G;
-    // 찾은 손톱 넓이의 0.1~2배만(겹쳐 끝만 보이는 손톱부터 가까운 손톱까지). 작은 덩어리는 SAM 이 손톱 전체로 넓힌다
-    if (a < Math.max(150, avg * 0.1) || a > avg * 2) continue;
+    // 찾은 손톱 넓이의 0.1~4배만(겹쳐 끝만 보이는 손톱부터 가까이 정면으로 보이는 엄지 손톱까지:
+    // 옆으로 본 손톱만 찾았으면 엄지는 3배 가까이 된다). 작은 덩어리는 SAM 이 손톱 전체로 넓힌다
+    if (a < Math.max(150, avg * 0.1) || a > avg * 4) continue;
     const cx = (sx / c) * G + 1, cy = (sy / c) * G + 1;
     // 손톱은 손 하나 크기 안에 모여 있다: 이미 찾은 손톱에서 손 크기보다 먼 덩어리(다른 손가락 그늘·소매)는 뺀다
     if (hs > 0 && !centers.some((q) => Math.hypot(q.x - cx, q.y - cy) <= hs)) continue;
@@ -1633,12 +1644,13 @@ async function moreNailsLikeMine(hands: { p: { x: number; y: number }[] }[]): Pr
   for (const c of cands.sort((p, q) => q.a - p.a).slice(0, 8)) {
     const before = myNails.length;
     await addMyNail(sam, c.x, c.y, null, true, { c: { x: c.x, y: c.y }, size: side });
-    // SAM 이 손가락까지 잡아 찾은 손톱보다 훨씬 크면 버린다
-    if (myNails.length > before) {
+    // SAM 이 손가락까지 잡아 찾은 손톱보다 훨씬 크면 버린다(매니큐어 색 쪽으로 다듬은 뒤라 4배까지는 손톱)
+    while (myNails.length > before) {
       const m = myNails[myNails.length - 1].mask;
       let a = 0;
       for (let i = 0; i < m.length; i++) a += m[i];
-      if (a > avg * 2) myNails.pop();
+      if (a <= avg * 4) break;
+      myNails.pop();
     }
   }
 }
@@ -1671,19 +1683,28 @@ async function addMyNail(
     if (!quiet) setStatus('손톱을 찾지 못했어요. 손톱 가운데를 눌러 주세요');
     return false;
   }
-  hullFill(r.mask, base.w, base.h);
-  // 마스크가 실제 손톱보다 조금 작아 원래 매니큐어 색이 테두리로 비치지 않게 손톱 색 쪽 가장자리까지 넓힌다
-  growNailMask(r.mask, base.w, base.h, base.rgba, Math.min(4, Math.max(2, Math.round(Math.sqrt(area) * 0.08))));
-  // 이미 잡은 손톱과 절반 넘게 겹치면 같은 손톱(두 번 그리면 진해지고 테두리가 두꺼워진다)
-  for (const m of myNails) {
-    let ov = 0, a2 = 0;
-    for (let i = 0; i < r.mask.length; i++) if (r.mask[i]) { a2++; if (m.mask[i]) ov++; }
-    if (ov > a2 * 0.5) return false;
+  // 매니큐어 색 쪽 픽셀만으로 다듬고 떨어진 손톱은 나눈다(옆으로 본 두 손가락의 손톱 둘 + 사이 살이 한 덩어리로 잡혔다)
+  let added = false;
+  for (const part of splitPolished(r.mask, base.w, base.h, base.rgba)) {
+    hullFill(part, base.w, base.h);
+    let pa = 0;
+    for (let i = 0; i < part.length; i++) pa += part[i];
+    // 마스크가 실제 손톱보다 조금 작아 원래 매니큐어 색이 테두리로 비치지 않게 손톱 색 쪽 가장자리까지 넓힌다
+    growNailMask(part, base.w, base.h, base.rgba, Math.min(4, Math.max(2, Math.round(Math.sqrt(pa) * 0.08))));
+    // 이미 잡은 손톱과 절반 넘게 겹치면 같은 손톱(두 번 그리면 진해지고 테두리가 두꺼워진다)
+    let dup = false;
+    for (const m of myNails) {
+      let ov = 0, a2 = 0;
+      for (let i = 0; i < part.length; i++) if (part[i]) { a2++; if (m.mask[i]) ov++; }
+      if (ov > a2 * 0.5) { dup = true; break; }
+    }
+    if (dup) continue;
+    const f = nailFrame(part, base.w, base.h, hint, base.rgba);
+    if (!f) continue;
+    myNails.push({ mask: part, frame: f });
+    added = true;
   }
-  const f = nailFrame(r.mask, base.w, base.h, hint, base.rgba);
-  if (!f) return false;
-  myNails.push({ mask: r.mask, frame: f });
-  return true;
+  return added;
 }
 // 사진 모드에서 네일을 켰을 때 화면을 누르면: 손톱 더하기(이미 잡힌 손톱이면 빼기)
 viewEl.addEventListener('pointerdown', (ev) => {
