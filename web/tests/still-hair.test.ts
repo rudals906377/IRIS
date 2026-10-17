@@ -409,3 +409,24 @@ test('흑발 사진으로 바꾸기: 검은 머리(배경이 섞여 분포가 �
   for (let y = 5; y < 35; y++) for (let x = 35; x < 55; x++) { const o = (y * w + x) * 4; worst = Math.max(worst, out[o] - rgba[o]); }
   assert.ok(worst < 14, `원래보다 밝아진 정도 ${worst}`);
 });
+
+test('피부 거르기: 흑발 사진의 그늘진 이마(어둡지만 피부 색도)는 알파를 줄이고, 갈색 머리는 그대로', () => {
+  const n = 900, rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n), face = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    // 0~399 흑발, 400~449 머리 알파가 번진 그늘진 이마, 500~ 밝은 얼굴 피부
+    rgba.set(i < 400 ? [8, 8, 9, 255] : i < 450 ? [110, 74, 53, 255] : [225, 180, 160, 255], i * 4);
+    alpha[i] = i < 400 ? 1 : i < 450 ? 0.8 : 0;
+    face[i] = i >= 500 ? 1 : 0;
+  }
+  skinGate(rgba, alpha, face);
+  assert.equal(alpha[10], 1);
+  // 전에는 밝기만 머리 쪽이라(전체 0.5 남짓) 0.8 그대로 → 흑발로 염색하면 색이 빠진 잿빛 얼룩
+  assert.ok(alpha[420] < 0.3, `그늘진 이마 ${alpha[420]}`);
+  // 갈색 머리(피부와 색도가 비슷)면 같은 색 픽셀도 손대지 않는다
+  for (let i = 0; i < 400; i++) rgba.set([70, 45, 30, 255], i * 4);
+  const a2 = new Float32Array(n);
+  for (let i = 0; i < 400; i++) a2[i] = 1;
+  for (let i = 400; i < 450; i++) a2[i] = 0.8;
+  skinGate(rgba, a2, face);
+  assert.ok(a2[420] > 0.75, `갈색 머리 ${a2[420]}`);
+});

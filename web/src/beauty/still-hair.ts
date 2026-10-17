@@ -700,13 +700,18 @@ export function skinGate(rgba: Uint8ClampedArray, alpha: Float32Array, faceP: Fl
   const d = [sc[0] - hc[0], sc[1] - hc[1], sc[2] - hc[2]];
   const dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
   if (dd < 25 * 25) return;
+  const chromaSep = d[1] * d[1] + d[2] * d[2] > 12 * 12 && Math.hypot(hc[1], hc[2]) < 6;
   for (let i = 0; i < alpha.length; i++) {
     if (alpha[i] <= 0) continue;
     rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
     const t = ((lab[0] - hc[0]) * d[0] + (lab[1] - hc[1]) * d[1] + (lab[2] - hc[2]) * d[2]) / dd;
     // 색도(a·b)까지 피부 쪽이어야: 빛 받아 밝기만 오른 머리(윤기)는 a·b 가 머리색이라 덜 걸린다
     const tc = (d[1] * d[1] + d[2] * d[2]) > 16 ? ((lab[1] - hc[1]) * d[1] + (lab[2] - hc[2]) * d[2]) / (d[1] * d[1] + d[2] * d[2]) : t;
-    const s = Math.max(0, Math.min(1, (Math.min(t, tc) - 0.55) / 0.3));
+    let s = Math.max(0, Math.min(1, (Math.min(t, tc) - 0.55) / 0.3));
+    // 머리가 거의 무채색(흑발)이고 피부와 색도가 뚜렷이 다르면(a·b 거리 12 넘게), 색도가 피부 쪽(75~100%)이고 아주 어둡지 않은
+    // (전체로 25~40% 넘게 피부 쪽) 픽셀은 그늘진 피부다: 밝기만 어두워 위 기준(둘 다 55%)에 안 걸려, 흑발로 염색할 때 그늘진
+    // 이마·관자놀이가 색이 빠진 잿빛 보라 얼룩이 됐다(갈색 머리는 피부와 색도가 비슷해 여기 안 걸린다)
+    if (chromaSep) s = Math.max(s, Math.max(0, Math.min(1, (tc - 0.75) / 0.25)) * Math.max(0, Math.min(1, (t - 0.25) / 0.15)));
     if (s > 0) alpha[i] *= 1 - s;
   }
 }
