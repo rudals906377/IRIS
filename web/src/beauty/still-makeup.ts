@@ -141,10 +141,14 @@ export function transferMakeup(
     // 화장은 피부를 파랗게·크게 어둡게 만들지 않으므로 차이를 그럴 만한 범위로 자른다(가장자리·머리카락 대응 실수 막기)
     const [lo, hi] = LIMIT[c];
     for (let i = 0; i < n; i++) {
-      const wm = skinOwn + (1 - skinOwn) * Math.max(lipM[i], eyeM[i]);
+      const zm = Math.max(lipM[i], eyeM[i]);
+      const wm = skinOwn + (1 - skinOwn) * zm;
       // 바탕색 차이 몫은 ±3 까지만: 얼굴에만 입히므로 크면 귀·목과 갈려 가면처럼 보인다(빨간 조명 사진은 피부가 붉게 찍힌다)
       const v = (rfLow[c][i] - rfBase[c][i]) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
-      d[i] = Math.max(lo, Math.min(hi, v));
+      // 피부(입술·눈가 밖)는 노란 기를 3 넘게 빼지 않는다: 화장은 피부를 파랗게 만들지 않는데, 고른 사진 조명
+      // (밝게 비친 콧등·이마는 하얗게, 즉 b 가 낮게 찍힌다)이 차이로 옮겨져 얼굴이 잿빛으로 떴다. 섀도·립은 차가운 색도 그대로
+      const lo2 = c === 2 ? lo * zm - 3 * (1 - zm) : lo;
+      d[i] = Math.max(lo2, Math.min(hi, v));
     }
     return d;
   });
@@ -213,6 +217,9 @@ export function transferMakeup(
   const rfThin = wblur(rfL[0], V, w, h, rf(0.012));
   // 입꼬리·입술 선 그늘도 둥글고 어두워 주근깨로 잡힌다(입술 칸 바로 밖이라 입술 제외에 안 걸림): 입술 둘레(얼굴 폭 3%)는 뺀다
   const mouthB = boxBlur(lipO, w, h, rf(0.03));
+  // 주근깨: 고른 사진 손 바로 곁(얼굴 폭 4% 안 손 몫 6~9% 넘음)인 점은 뺀다. 칠한 손톱은 몸 피부로 안 잡히고 얼굴로 읽혀
+  // 끝이 둥근 어두운 점이 턱·볼에 검은 점으로 옮겨졌다(손 지도는 얼굴 가장자리에도 조금 번져서 문턱을 낮추면 진짜 주근깨가 빠진다)
+  const handsFar = rHands ? boxBlur(rHands, w, h, rf(0.04)) : null;
   // ⑤ 옮기기
   const o = new Uint8ClampedArray(4);
   for (let i = 0; i < n; i++) {
@@ -237,7 +244,7 @@ export function transferMakeup(
     if (lowerOK[i] < 1) L += Math.min(0, rfL[0][i] - rfThin[i]) * amt.eye * eyeM[i] * keep * Vb[i] * (1 - lowerOK[i]);
     // 주근깨·점: 피부(눈가·입술 밖)에서 뚜렷한 작은 어두운 점
     const fr = rfL[0][i] - rfSkinMean[i] + 2.5;
-    if (fr < 0 && dots[i] > 0) L += fr * 2 * dots[i] * amt.skin * keep * Vb[i] * (1 - eyeM[i]) * (1 - ramp(mouthB[i], 0, 0.08));
+    if (fr < 0 && dots[i] > 0) L += fr * 2 * dots[i] * amt.skin * keep * Vb[i] * (handsFar ? 1 - ramp(handsFar[i], 0.06, 0.09) : 1) * (1 - eyeM[i]) * (1 - ramp(mouthB[i], 0, 0.08));
     lab2rgb(Math.max(0, Math.min(100, L)), a, b, o, 0);
     const X = (i % w) + x0, Y = Math.floor(i / w) + y0;
     const q = (Y * W + X) * 4;

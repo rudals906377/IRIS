@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { transferMakeup } from '../src/beauty/still-makeup.ts';
+import { rgb2lab } from '../src/beauty/still-hair.ts';
 import { FACE_OVAL } from '../src/beauty/face-measure.ts';
 import { BROW_L_LOWER, BROW_L_UPPER, BROW_R_LOWER, BROW_R_UPPER, EYE_L_LOWER, EYE_L_UPPER, EYE_R_LOWER, EYE_R_UPPER, LIPS_INNER, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 
@@ -66,4 +67,25 @@ test('주근깨 찾기: 둥근 어두운 점은 잡고, 가는 선(머리카락�
   const m = dotMask(L, w, h);
   assert.ok(m[20 * w + 20] > 0.5, `점 ${m[20 * w + 20]}`);
   assert.ok(m[20 * w + 60] < 0.2, `선 ${m[20 * w + 60]}`);
+});
+
+test('메이크업: 고른 사진의 하얗게 비친 볼(조명)은 내 볼을 잿빛(노란 기 빠짐)으로 만들지 않는다', () => {
+  const W = 200, H = 220;
+  const pts = face(100, 110, 60);
+  const skin = [200, 165, 135];
+  const my = new Uint8ClampedArray(W * H * 4);
+  const ref = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < W * H; i++) {
+    for (let c = 0; c < 3; c++) { my[i * 4 + c] = skin[c]; ref[i * 4 + c] = skin[c]; }
+    my[i * 4 + 3] = ref[i * 4 + 3] = 255;
+  }
+  // 고른 사진: 볼에 넓게 하얗게 비친 곳(노란 기가 빠진 밝은 피부)
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if ((x - 70) ** 2 + (y - 130) ** 2 < 22 ** 2) { const o = (y * W + x) * 4; ref[o] = 228; ref[o + 1] = 218; ref[o + 2] = 214; }
+  }
+  const out = transferMakeup(my, W, H, pts, ref, W, H, pts, FACE_OVAL, { lip: 1, eye: 1, skin: 1 });
+  const o = (130 * W + 70) * 4, a = new Float32Array(3), b = new Float32Array(3);
+  rgb2lab(my[o], my[o + 1], my[o + 2], a);
+  rgb2lab(out[o], out[o + 1], out[o + 2], b);
+  assert.ok(b[2] - a[2] > -4.5, `노란 기 변화 ${(b[2] - a[2]).toFixed(1)}`);
 });
