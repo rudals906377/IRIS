@@ -1411,6 +1411,8 @@ function overlapFrac(a: Uint8Array, b: Uint8Array): number {
 async function nailsByColor(
   rgba: Uint8ClampedArray, w: number, h: number, getSam: () => Promise<SamImage>, status: string,
   region: { x0: number; y0: number; x1: number; y1: number }[] = [],
+  /** 손톱 안 무늬 칸 → 손톱 전체로 넓히기(내 손톱만: 고른 사진은 넓힌 후보가 어두운 소매·배경까지 잡아 네일이 짙은 남색이 됐다) */
+  expandRim = false,
 ): Promise<{ mask: Uint8Array; frame: NailFrame }[]> {
   const G = 4;
   const gw = Math.floor(w / G), gh = Math.floor(h / G);
@@ -1511,7 +1513,7 @@ async function nailsByColor(
       // 손톱 안 무늬 한 칸(크롬 테두리 안 색 칸·프렌치 바탕)만 잡았으면 그 칸을 품은 손톱 전체로: 5배 안으로 크고,
       // 늘어난 테두리가 바깥 둘레와 색이 뚜렷이 다르고(ΔE 12 넘게) 피부색 픽셀이 30% 아래면 손톱의 일부다
       // (손가락까지 잡은 후보는 테두리가 피부색. 크롬 스틸레토는 안쪽 청록 칸만 잡혀 손톱의 1/4 만 칠해졌다)
-      for (const c of r.alts) {
+      for (const c of expandRim ? r.alts : []) {
         if (c.area <= area * 1.15 || c.area > area * 5 || c.score < 0.5 || overlapFrac(c.mask, r.mask) < 0.9) continue;
         if (rimContrast(rgba, w, h, r.mask, c.mask) < 12 || skinFrac(rgba, c.mask, r.mask) > 0.3) continue;
         r.mask = c.mask;
@@ -1691,11 +1693,11 @@ async function ensureNailsOnce(): Promise<void> {
       const m = Math.hypot(hp.p[9].x - hp.p[0].x, hp.p[9].y - hp.p[0].y) * 0.5;
       return { x0: Math.min(...xs) - m, y0: Math.min(...ys) - m, x1: Math.max(...xs) + m, y1: Math.max(...ys) + m };
     });
-    let found = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…', boxes);
+    let found = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…', boxes, true);
     // 손 점으로 하나 이하만 찾았으면 손 점 자체가 어긋났을 수 있다: 사진 전체에서도 찾아 더 많이 찾은 쪽
     // (긴 네일 손을 가까이 찍으면 손 찾기가 구석에 작은 손을 잡아, 그 둘레만 세느라 위쪽 손톱 셋을 못 봤다)
     if (byPose.length <= 1 && boxes.length) {
-      const all = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…');
+      const all = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…', [], true);
       if (all.length > found.length) {
         found = all;
         boxes.length = 0;
