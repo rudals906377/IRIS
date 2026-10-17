@@ -246,6 +246,23 @@ export function recolorHair(
       U[i] += wr * sm * tex * (1 - U[i]);
     }
   }
+  // 배경에 닿은 가장자리(알파 0.3 아래가 2px 안)는 배경이 섞여 제 밝기 순위가 부풀어 있다(알파는 높아도):
+  // 둘레 머리 속 순위 +0.1 까지만(검은 짧은 머리를 밝게 염색하면 머리 둘레가 가장 밝은 머리색 = 하얀 점선이 됐다).
+  // 아래 새까만 픽셀 메우기보다 먼저: 메우기가 부푼 가장자리 순위를 빌려 가면 테두리 안쪽 검정까지 하얘진다
+  {
+    const bgm = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) if (alpha[i] < 0.3) bgm[i] = 1;
+    const nearBg = boxBlur(bgm, w, h, 2);
+    const cm = new Float32Array(w * h), cu = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) if (U[i] >= 0 && nearBg[i] === 0 && luma[i] >= 24) { cm[i] = 1; cu[i] = U[i]; }
+    const r = Math.max(3, Math.round(Math.min(w, h) / 80));
+    const cd = boxBlur(cm, w, h, r), cn = boxBlur(cu, w, h, r);
+    for (let i = 0; i < w * h; i++) {
+      if (U[i] < 0 || nearBg[i] === 0 || cd[i] < 0.02) continue;
+      const cap = cn[i] / cd[i] + 0.1;
+      if (U[i] > cap) U[i] = cap;
+    }
+  }
   // ①' 아주 어두운 곳(원본 루마 24 아래: 정보가 거의 없는 검정)은 가장 어두운 분위로 몰려 밝게 바꿀 때 검은 점·얼룩이 된다
   //     → 둘레의 밝기 정보가 있는 머리카락(루마 24 이상) 순위를 넓게 가져와, 어두울수록 더 섞는다(루마 8 이하는 전부).
   //     딱 잘라 바꾸면 경계 바로 위 픽셀들이 맨 아래 순위가 되어 또 점이 된다

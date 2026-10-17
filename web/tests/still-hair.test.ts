@@ -253,3 +253,24 @@ test('머리 색 거르기: 가닥 사이 어두운 그늘(색이 옅음)은 남
   assert.ok(alpha[shade] > 0.9, `그늘 ${alpha[shade]}`);
   assert.ok(alpha[leaf] < 0.1, `초록 ${alpha[leaf]}`);
 });
+
+test('검은 머리 밝게 염색: 배경에 닿은 가장자리(알파 높아도 배경이 섞여 밝음)는 가장 밝은 머리색이 되지 않는다', () => {
+  const w = 60, h = 40, n = w * h;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    // 검은 머리(루마 26~34, 약한 결) | 마지막 한 줄은 배경이 섞여 루마 60(알파는 0.85) | 밝은 배경
+    const c = x < 30 ? 26 + ((x * 7 + y * 3) % 9) : x === 30 ? 60 : 245;
+    rgba.set([c, c, c, 255], i * 4);
+    alpha[i] = x < 30 ? 1 : x === 30 ? 0.85 : 0;
+  }
+  const ref = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) { const v = 150 + (i % 60); ref.set([v + 30, v, v - 5, 255], i * 4); }
+  const mine = hairDist(rgba, alpha, 0.6, 50)!, rd = hairDist(ref, new Float32Array(n).fill(1), 0.6, 50)!;
+  const out = recolorHair(rgba, w, h, alpha, mine, rd, 1);
+  const lum = (i: number) => 0.2126 * out[i * 4] + 0.7152 * out[i * 4 + 1] + 0.0722 * out[i * 4 + 2];
+  let inner = 0, rim = 0;
+  for (let y = 5; y < 35; y++) { inner += lum(y * w + 15); rim += lum(y * w + 30); }
+  inner /= 30; rim /= 30;
+  assert.ok(rim < inner + 15, `가장자리 ${rim.toFixed(0)}, 머리 속 ${inner.toFixed(0)}`);
+});
