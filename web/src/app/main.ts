@@ -913,7 +913,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
       dbgTat({ refPose: !!rp, refSkin: !!rs });
       if (!rs) return null;
       // 고른 사진 얼굴(윤곽 15% 넓힘)은 도안이 아니다: 팔을 얼굴까지 든 셀카에서 눈·눈썹·콧구멍·입술이 잉크로 뽑혀
-      // 내 아래팔에 검은 조각으로 찍혔다 → 잉크·팔 영역에서 뺀다
+      // 내 아래팔에 검은 조각으로 찍혔다 → 잉크에서만 뺀다(팔 영역(limbRegion)에서도 빼면 얼굴에 붙은 팔 띠가 끊겨 팔로 못 읽었다)
       const refFacePts = await photoAnalyzer.faceLandmarks(rc).catch(() => null);
       let faceM: Float32Array | null = null;
       if (refFacePts) {
@@ -973,7 +973,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
           const found = findInk(ref.src);
           const m = new Float32Array(ref.w * ref.h);
           const av = ref.src.avoid;
-          for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0) * (faceM ? 1 - faceM[i] : 1);
+          for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0);
           const limb = limbRegion(m, ref.w, ref.h, ref.rect);
           const st = limb ? armStrip(limb.mask, ref.w, ref.h, limb.box) : null;
           armLike = !!st && st.len / (2 * st.mean) >= 3;
@@ -1043,7 +1043,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
         const m = new Float32Array(ref.w * ref.h);
         // 타투가 빽빽한 팔은 분할이 옷으로 봐 피부에서 빠진다: 도안 뽑기에서 '피부 아님'을 덜어 낸 곳(1 − avoid)도 팔로
         const av = ref.src.avoid;
-        for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0) * (faceM ? 1 - faceM[i] : 1);
+        for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0);
         const limb = limbRegion(m, ref.w, ref.h, ref.rect);
         if (!limb) return null;
         if (!ref.user) {
