@@ -290,7 +290,27 @@ export class PhotoAnalyzer {
     const all = r.faceLandmarks.map((lm) => toPx(lm, canvas.width, canvas.height));
     const widthOf = (q: Vec2[]): number => Math.hypot(q[234].x - q[454].x, q[234].y - q[454].y);
     all.sort((a, b) => widthOf(b) - widthOf(a));
-    return all[0] ?? null;
+    if (all[0]) return all[0];
+    // 전신 사진처럼 얼굴이 작으면 얼굴 점 모델이 못 찾는다: 몸 관절점(코·눈·귀)으로 머리 자리를 찾아 잘라 키워서 다시
+    const pose = await this.pose(canvas).catch(() => null);
+    if (!pose) return null;
+    const P = pose.p, V = pose.vis;
+    const head = [0, 2, 5, 7, 8].filter((k) => V[k] > 0.3);
+    if (head.length < 3) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const k of head) { x0 = Math.min(x0, P[k].x); x1 = Math.max(x1, P[k].x); y0 = Math.min(y0, P[k].y); y1 = Math.max(y1, P[k].y); }
+    // 귀~귀(또는 눈 사이 2.5배)를 머리 폭으로, 그 3배 정사각형(머리카락·턱까지)
+    const hw = Math.max(x1 - x0, y1 - y0, V[2] > 0.3 && V[5] > 0.3 ? Math.hypot(P[2].x - P[5].x, P[2].y - P[5].y) * 2.5 : 0);
+    if (!(hw > 4)) return null;
+    const size = hw * 3, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const N = 512, c = document.createElement('canvas');
+    c.width = c.height = N;
+    const sx = cx - size / 2, sy = cy - size / 2;
+    c.getContext('2d')!.drawImage(canvas, sx, sy, size, size, 0, 0, N, N);
+    const r2 = fm.detect(c);
+    const got = r2.faceLandmarks.map((lm) => toPx(lm, N, N).map((q) => ({ x: sx + (q.x * size) / N, y: sy + (q.y * size) / N })));
+    got.sort((a, b) => widthOf(b) - widthOf(a));
+    return got[0] ?? null;
   }
 
   async analyze(source: ImageBitmap | HTMLImageElement, mode: PhotoMode, onStatus?: (s: string) => void): Promise<StyleResult> {

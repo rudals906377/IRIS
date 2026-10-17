@@ -612,7 +612,20 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   // 얼굴 점이 잡힐 때까지 잠깐 기다린다
   let r: { x: number; y: number; size: number } | null = null;
   for (let i = 0; i < 80 && !(r = engine.tracker.headRect(engine.source.width, engine.source.height)); i++) await new Promise((res) => setTimeout(res, 100));
-  if (!r || photoOriginal !== orig) return null;
+  if (photoOriginal !== orig) return null;
+  // 실시간 얼굴 추적이 못 잡는 작은 얼굴(전신 사진)은 사진용 얼굴 점(몸 관절점으로 머리를 잘라 다시 찾음)으로 머리 상자를 만든다
+  if (!r) {
+    photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+    const pts = await photoAnalyzer.faceLandmarks(stillCanvas()).catch(() => null);
+    if (!pts || photoOriginal !== orig) return null;
+    const W0 = engine.source.width, H0 = engine.source.height;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of pts) { x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
+    // 실시간 추적의 headRect 와 같은 규칙: 얼굴 폭 2.4배 정사각형, 중심은 얼굴 중심보다 위
+    const fw = x1 - x0, fh = y1 - y0, size = Math.min(Math.max(fw * 2.4, fh * 2), W0, H0);
+    if (size < 64) return null;
+    r = { x: Math.max(0, Math.min(W0 - size, (x0 + x1) / 2 - size / 2)), y: Math.max(0, Math.min(H0 - size, (y0 + y1) / 2 - fh * 0.35 - size / 2)), size };
+  }
   const W = engine.source.width, H = engine.source.height;
   // 긴 머리까지 들어오게 머리 상자를 키우고 조금 아래로
   const size = Math.min(Math.max(W, H), r.size * 1.45);
