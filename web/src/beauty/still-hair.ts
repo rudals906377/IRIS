@@ -584,13 +584,28 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
     const s = (bg - luma[i]) / c;
     alpha[i] *= Math.max(0, Math.min(1, (s - 0.1) / 0.35));
   }
+  // 색 검사: 잔머리는 배경과 머리의 섞임이라 색(a·b)도 그 사이에 있다. 머리 옆 가는 어두운 선이라도 색이 동떨어지면
+  // (머리 끝에 닿은 보라색 옷깃) 잔머리가 아니다 — 옷깃이 머리색 줄로 칠해졌다
+  const lab = new Float32Array(3);
+  const ha: number[] = [], hb: number[] = [];
+  for (let i = 0; i < n; i += 3) if (alpha[i] >= 0.9) { rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab); ha.push(lab[1]); hb.push(lab[2]); }
+  ha.sort((a, b) => a - b); hb.sort((a, b) => a - b);
+  const hA = ha[ha.length >> 1], hB = hb[hb.length >> 1];
+  const bga = new Float32Array(n), bgb = new Float32Array(n);
+  for (let i = 0; i < n; i++) if (bgw[i]) { rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab); bga[i] = lab[1]; bgb[i] = lab[2]; }
+  const numA = boxBlur(bga, w, h, r), numB = boxBlur(bgb, w, h, r);
   for (let i = 0; i < n; i++) {
     if (alpha[i] >= 0.5 || near[i] <= 0 || den[i] < 0.15 || (block && block[i] > 0.4)) continue;
     const bg = num[i] / den[i];
     const c = bg - hL;
     // 배경과 머리 밝기가 비슷하면 가닥과 배경 무늬를 구별할 수 없다
     if (Math.abs(c) < 25) continue;
-    const s = Math.max(0, Math.min(1, ((bg - luma[i]) / c - 0.25) / 0.55));
+    const t = Math.max(0, Math.min(1, (bg - luma[i]) / c));
+    let s = Math.max(0, Math.min(1, (t - 0.25) / 0.55));
+    if (s <= 0) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    const ea = numA[i] / den[i] + t * (hA - numA[i] / den[i]), eb = numB[i] / den[i] + t * (hB - numB[i] / den[i]);
+    s *= 1 - Math.max(0, Math.min(1, (Math.hypot(lab[1] - ea, lab[2] - eb) - 10) / 8));
     if (s <= 0) continue;
     const prox = Math.min(1, near[i] * 20);
     alpha[i] = Math.max(alpha[i], s * prox);

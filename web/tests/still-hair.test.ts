@@ -339,3 +339,22 @@ test('머리 속 채우기: 둘레가 다 머리카락인 곳의 덜 확신한 �
   assert.equal(a[30 * w + 10], edge, '가장자리 그대로');
   assert.equal(a[2 * w + 40], 0, '바깥 그대로');
 });
+
+test('잔머리: 머리 옆 가는 선이라도 색이 배경·머리 사이가 아니면(보라색 옷깃) 알파를 얻지 않는다', () => {
+  // 갈색 머리(알파 1) 오른쪽 밝은 배경. x=34 는 갈색 가닥, x=37 은 같은 밝기의 보라색 선
+  const w = 80, h = 60;
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  const alpha = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    let c = [225, 222, 218];
+    if (x < 30) { c = [95, 62, 35]; alpha[i] = 1; }
+    if (x === 34) c = [120, 88, 62];
+    if (x === 37) c = [92, 70, 125];
+    rgba.set([...c, 255], i * 4);
+  }
+  flyaways(rgba, w, h, alpha, 12);
+  const y = 30;
+  assert.ok(alpha[y * w + 34] > 0.5, `갈색 가닥 ${alpha[y * w + 34].toFixed(2)}`);
+  assert.ok(alpha[y * w + 37] < 0.15, `보라색 선 ${alpha[y * w + 37].toFixed(2)}`);
+});
