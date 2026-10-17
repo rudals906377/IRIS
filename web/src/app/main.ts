@@ -1320,12 +1320,15 @@ async function handSamImage(hp: { p: { x: number; y: number }[] }): Promise<SamI
     h: H,
     async segment(x: number, y: number) {
       const r = await sam.segment((x - bx) * k, (y - by) * k);
-      const mask = new Uint8Array(W * H);
-      for (let yy = by; yy < by + bh; yy++) for (let xx = bx; xx < bx + bw; xx++) {
-        const u = Math.min(c.width - 1, Math.floor((xx - bx + 0.5) * k)), v = Math.min(c.height - 1, Math.floor((yy - by + 0.5) * k));
-        mask[yy * W + xx] = r.mask[v * c.width + u];
-      }
-      return { mask, score: r.score };
+      const back = (m: Uint8Array): Uint8Array => {
+        const mask = new Uint8Array(W * H);
+        for (let yy = by; yy < by + bh; yy++) for (let xx = bx; xx < bx + bw; xx++) {
+          const u = Math.min(c.width - 1, Math.floor((xx - bx + 0.5) * k)), v = Math.min(c.height - 1, Math.floor((yy - by + 0.5) * k));
+          mask[yy * W + xx] = m[v * c.width + u];
+        }
+        return mask;
+      };
+      return { mask: back(r.mask), score: r.score, alts: r.alts.map((a) => ({ mask: back(a.mask), score: a.score, area: a.area / (k * k) })) };
     },
   };
 }
@@ -1338,6 +1341,52 @@ async function handSamImage(hp: { p: { x: number; y: number }[] }): Promise<SamI
  * 색으로 손톱 찾기: 피부·흰 바탕(바탕이 흰 사진만)·아주 어두운 곳을 뺀 픽셀을 색 상자로 묶고, 많은 색부터 그 색 덩어리 가운데를
  * SAM 으로 오려 손톱 모양(길쭉함·꽉 참)인 것이 가장 많은 색을 고른다. 손 점이 안 잡히는 가까운 손 사진용.
  */
+/**
+ * 찾은 '손톱' 가운데 윤기 반사 조각(사진의 0.3% 아래·거의 흰색)은 그 조각을 품은 손톱 전체(SAM 의 더 큰 후보: 4배 넘게,
+ * 손톱 모양)로 바꾼다(이미 잡은 손톱과 겹치면 뺀다). 누드·젤리 손톱은 피부색에 가까워 반사만 잡혔다.
+ */
+async function glintsToNails(): Promise<void> {
+  const base = stillRGBA();
+  const { w, h, rgba } = base;
+  let sam: SamImage | null = null;
+  for (let k = myNails.length - 1; k >= 0; k--) {
+    const m = myNails[k].mask;
+    let a = 0, sx = 0, sy = 0;
+    for (let i = 0; i < m.length; i++) if (m[i]) { a++; sx += i % w; sy += (i / w) | 0; }
+    if (!a || a >= w * h * 0.003 || !nearWhite(rgba, m)) continue;
+    sam ??= await mySamImage();
+    const r = await sam.segment(sx / a, sy / a);
+    let rep: { mask: Uint8Array; frame: NailFrame } | null = null;
+    for (const c of r.alts) {
+      if (c.area < a * 4 || c.area > w * h * 0.08 || c.score < 0.5 || overlapFrac(c.mask, m) < 0.9) continue;
+      const cm = new Uint8Array(c.mask);
+      hullFill(cm, w, h);
+      const f = nailFrame(cm, w, h, null, rgba);
+      if (!f) continue;
+      const len = f.t1 - f.t0, wid = 2 * Math.max(...f.prof);
+      if (len / Math.max(1, wid) < 1.15 || len / Math.max(1, wid) > 5 || c.area / Math.max(1, len * wid) < 0.55) continue;
+      rep = { mask: cm, frame: f };
+      break;
+    }
+    // 손톱 전체를 못 찾으면 그대로 둔다(작은 흰 매니큐어 손톱일 수 있다). 이미 잡은 손톱과 겹치면 뺀다
+    if (rep && myNails.some((n, j) => j !== k && overlapFrac(n.mask, rep!.mask) > 0.5)) myNails.splice(k, 1);
+    else if (rep) myNails[k] = rep;
+  }
+}
+/** 마스크에서 밝은 쪽 40% 픽셀이 거의 흰색(밝기 L 88 넘게, 채도 10 아래)인가(윤기 반사: 넓힌 가장자리는 둘레 손톱색이 섞인다) */
+function nearWhite(rgba: Uint8ClampedArray, mask: Uint8Array): boolean {
+  const lab = new Float32Array(3);
+  const px: [number, number][] = [];
+  for (let i = 0; i < mask.length; i++) {
+    if (!mask[i]) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    px.push([lab[0], Math.hypot(lab[1], lab[2])]);
+  }
+  if (px.length < 10) return false;
+  px.sort((p, q) => q[0] - p[0]);
+  const top = px.slice(0, Math.max(4, Math.round(px.length * 0.4)));
+  return top.reduce((t, p) => t + p[0], 0) / top.length > 88 && top.reduce((t, p) => t + p[1], 0) / top.length < 10;
+}
 /** 두 마스크가 겹친 넓이 / 작은 쪽 넓이 */
 function overlapFrac(a: Uint8Array, b: Uint8Array): number {
   let na = 0, nb = 0, ov = 0;
@@ -1431,10 +1480,22 @@ async function nailsByColor(
     sam ??= await getSam();
     const got: { mask: Uint8Array; frame: NailFrame }[] = [];
     let gotCtr = 0;
-    for (const b of blobs.slice(0, 4)) {
+    // 거의 흰 색(반사)이면 손톱마다 반사가 여럿이라 더 많이 본다(같은 손톱은 겹침으로 하나만 남는다)
+    const kWhite = (k >> 6) >= 6 && ((k >> 3) & 7) >= 6 && (k & 7) >= 6;
+    for (const b of blobs.slice(0, kWhite ? 12 : 4)) {
       const r = await sam.segment(b.x, b.y);
       let area = 0;
       for (let i = 0; i < r.mask.length; i++) area += r.mask[i];
+      // 윤기 나는 손톱의 하얀 반사 조각(작고 거의 흰색)을 잡았으면, 그 조각을 품은 더 큰 후보(손톱 전체)로 바꾼다:
+      // 피부색에 가까운 누드·젤리 손톱은 색 찾기에서 피부로 빠지고 반사만 남아, 손톱마다 반사 조각만 칠해졌다
+      if (area > 0 && area < w * h * 0.003 && nearWhite(rgba, r.mask)) {
+        const big = r.alts.find((c) => c.area >= area * 4 && c.area <= w * h * 0.08 && c.score >= 0.5 && overlapFrac(c.mask, r.mask) > 0.9);
+        if (big) {
+          r.mask = big.mask;
+          r.score = Math.max(r.score, big.score);
+          area = big.area;
+        }
+      }
       // 작은 손톱(손이 사진의 일부)도: 최소 넓이는 사진의 0.06%(모양·대비로 거른다)
       if (r.score < 0.6 || area < w * h * 0.0006 || area > w * h * 0.08) continue;
       hullFill(r.mask, w, h);
@@ -1637,6 +1698,7 @@ async function ensureNailsOnce(): Promise<void> {
   }
   // 색으로 몇 개만 찾았어도(서로 낀 손) 그 손톱 색으로 나머지를 더 찾는다
   if (colorFound && myNails.length && myNails.length < 10) await moreNailsLikeMine(handsMine);
+  await glintsToNails();
   dropSkinNails();
   dropOversizeNails();
   setStatus(myNails.length ? '빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요' : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');

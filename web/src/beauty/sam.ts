@@ -35,7 +35,8 @@ export interface SamImage {
   w: number;
   h: number;
   /** 점(그림 픽셀) → 마스크(0/1, w×h)와 점수 */
-  segment(x: number, y: number): Promise<{ mask: Uint8Array; score: number }>;
+  /** alts: 고르지 않은 나머지 후보(넓이 오름차순) */
+  segment(x: number, y: number): Promise<{ mask: Uint8Array; score: number; alts: { mask: Uint8Array; score: number; area: number }[] }>;
 }
 
 /** 그림(캔버스) 하나의 특징을 계산해 둔다 */
@@ -77,7 +78,12 @@ export async function samImage(canvas: HTMLCanvasElement): Promise<SamImage> {
       }
       const mask = new Uint8Array(n);
       if (best >= 0) for (let i = 0; i < n; i++) mask[i] = m[best * n + i] ? 1 : 0;
-      return { mask, score: bestScore };
+      const alts = cand.filter((c) => c.k !== best).sort((p, q) => p.area - q.area).map((c) => {
+        const am = new Uint8Array(n);
+        for (let i = 0; i < n; i++) am[i] = m[c.k * n + i] ? 1 : 0;
+        return { mask: am, score: c.s, area: c.area };
+      });
+      return { mask, score: bestScore, alts };
     },
   };
 }
