@@ -472,14 +472,14 @@ export function strandTexture(
  */
 export function colorGate(rgba: Uint8ClampedArray, alpha: Float32Array, coarse: Float32Array, sure = 0.85): void {
   const lab = new Float32Array(3);
-  let n = 0, sa = 0, sb = 0, saa = 0, sbb = 0;
+  let n = 0, sa = 0, sb = 0, saa = 0, sbb = 0, sl = 0;
   for (let i = 0; i < alpha.length; i += 2) {
     if (alpha[i] < 0.95 || coarse[i] < sure) continue;
     rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
-    n++; sa += lab[1]; sb += lab[2]; saa += lab[1] * lab[1]; sbb += lab[2] * lab[2];
+    n++; sa += lab[1]; sb += lab[2]; saa += lab[1] * lab[1]; sbb += lab[2] * lab[2]; sl += lab[0];
   }
   if (n < 100) return;
-  const ma = sa / n, mb = sb / n;
+  const ma = sa / n, mb = sb / n, ml = Math.max(1, sl / n);
   const da = Math.max(3, Math.sqrt(Math.max(0, saa / n - ma * ma)));
   const db = Math.max(3, Math.sqrt(Math.max(0, sbb / n - mb * mb)));
   for (let i = 0; i < alpha.length; i++) {
@@ -487,7 +487,10 @@ export function colorGate(rgba: Uint8ClampedArray, alpha: Float32Array, coarse: 
     rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
     // 한쪽만 본다: 머리보다 초록(a↓)·파랑(b↓) 쪽으로 벗어난 것만 뺀다(나뭇잎·하늘·푸른 벽).
     // 피부와 섞인 이마 잔머리는 빨강·노랑(a·b↑) 쪽이고, 빛 받은 머리 끝은 밝기만 달라서 남는다
-    const d = Math.hypot(Math.max(0, (ma - lab[1]) / da), Math.max(0, (mb - lab[2]) / db));
+    // 어두운 곳(가닥 사이 그늘)은 색도 옅어진다: 기대 색을 밝기 비율만큼 줄여 비교한다
+    // (안 하면 갈색 머리 그늘이 '덜 노란 픽셀'로 빠져, 검게 염색하면 붉은 갈색 줄로 남았다)
+    const k = Math.max(0.25, Math.min(1, lab[0] / ml));
+    const d = Math.hypot(Math.max(0, (ma * k - lab[1]) / da), Math.max(0, (mb * k - lab[2]) / db));
     const keep = Math.max(0, Math.min(1, 1 - (d - 2.5) / 2));
     alpha[i] *= keep;
   }

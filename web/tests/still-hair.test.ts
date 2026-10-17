@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair } from '../src/beauty/still-hair.ts';
+import { Q, colorGate, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -237,4 +237,19 @@ test('피부 거르기: 검은 머리 알파 안의 피부색 픽셀(앞머리 �
   for (let i = 0; i < 500; i++) a2[i] = 1;
   skinGate(rgba, a2, face);
   assert.equal(a2[450], 1);
+});
+
+test('머리 색 거르기: 가닥 사이 어두운 그늘(색이 옅음)은 남기고, 초록·푸른 배경은 뺀다', () => {
+  const w = 40, h = 40, n = w * h;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n).fill(1), coarse = new Float32Array(n).fill(1);
+  // 확실한 갈색 머리
+  for (let i = 0; i < n; i++) rgba.set([120, 80, 50, 255], i * 4);
+  // 가장자리 칸(분할이 덜 확실): 어두운 그늘, 초록 배경
+  const shade = 5 * w + 5, leaf = 5 * w + 30;
+  rgba.set([28, 22, 19, 255], shade * 4);
+  rgba.set([70, 110, 60, 255], leaf * 4);
+  coarse[shade] = coarse[leaf] = 0.5;
+  colorGate(rgba, alpha, coarse);
+  assert.ok(alpha[shade] > 0.9, `그늘 ${alpha[shade]}`);
+  assert.ok(alpha[leaf] < 0.1, `초록 ${alpha[leaf]}`);
 });
