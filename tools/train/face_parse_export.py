@@ -4,7 +4,7 @@
 
 - 코드(model.py·resnet.py)와 가중치(79999_iter.pth)는 공식 저장소(HairFastGAN 설치본에도 같은 파일: models/face_parsing,
   pretrained_models/BiSeNet/face_parsing_79999_iter.pth). model.py 의 .cuda() 는 지우고 쓴다.
-- 입력 RGB 0~1(1×3×512×512, 정규화는 모델 안), 출력 [머리카락, 얼굴(피부·눈썹·눈·귀·코·입), 목] 확률(1×3×512×512)
+- 입력 RGB 0~1(1×3×512×512, 정규화는 모델 안), 출력 [머리카락, 얼굴(피부·눈썹·눈·귀·코·입), 목, 안경] 확률(1×4×512×512)
 - 가중치는 fp16 으로 저장하고 불러올 때 fp32 로 되돌리는 Cast 를 끼운다(계산 fp32, 파일 53MB → 26MB, 출력 차이 0.0005 이하)
 """
 import sys
@@ -34,7 +34,9 @@ class Wrap(nn.Module):
         hair = p[:, 17:18]
         face = p[:, 1:6].sum(1, keepdim=True) + p[:, 7:9].sum(1, keepdim=True) + p[:, 10:14].sum(1, keepdim=True)
         neck = p[:, 14:15]
-        return torch.cat([hair, face, neck], 1)
+        # 안경(6): 얼굴에서 뺀 채로 두고 따로 준다(안경 쓴 얼굴을 사진 속에 넣을 때 테·코받침 자리를 알아야 한다)
+        glasses = p[:, 6:7]
+        return torch.cat([hair, face, neck, glasses], 1)
 
 
 def main() -> None:

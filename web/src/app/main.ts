@@ -17,7 +17,7 @@
 
 import { LOOKS, PALETTES, PART_LABELS, type LookName, type PartName } from '../beauty/palettes.ts';
 import type { MakeupLook, RGB } from '../beauty/makeup.ts';
-import type { LipStyle } from '../beauty/face-regions.ts';
+import { EYE_L_LOWER, EYE_L_UPPER, EYE_R_LOWER, EYE_R_UPPER, type LipStyle } from '../beauty/face-regions.ts';
 import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
 import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
 import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, SKIN_REF, paperInk, tattooFromSource, upscaleInkSource, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
@@ -36,7 +36,7 @@ import { parseFace } from '../beauty/face-parse.ts';
 import { boxBlur, closeHoles, colorGate, fillInterior, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPolished, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
-import { swapFace } from '../beauty/face-swap.ts';
+import { fillPoly, swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
 import { extractDesign, findInk, type InkSource } from '../beauty/tattoo-extract.ts';
 import { affine3, armStrip, inkOnArm, limbRegion, maskOutLimbs, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
@@ -2014,6 +2014,24 @@ async function skinOf(c: HTMLCanvasElement, pts: { x: number; y: number }[], hai
     const p = await parseFace(c, rect, setStatus);
     const face = new Float32Array(p.size * p.size);
     for (let i = 0; i < face.length; i++) face[i] = p.face[i] / 255;
+    // 안경 테·코받침 자리는 피부가 아니다: 얇은 테는 분할이 피부로 보기도 해 콧등 위에 늘어난 네모 조각으로 남았다
+    // → 안경 확률만큼 빼고(2px 넓혀) 얼굴 바꾸기에서 가는 틈 메우기가 둘레 피부로 채우게 한다
+    // (안경 확률은 알까지 덮는다: 눈 둘레(눈 폭 1.5배로 넓힘)는 알 너머로 보이는 내 눈·피부라 남기고 테·코받침·다리만 뺀다)
+    if (p.glasses) {
+      const g = new Float32Array(p.size * p.size);
+      for (let i = 0; i < g.length; i++) g[i] = p.glasses[i] / 255;
+      const gb = boxBlur(g, p.size, p.size, 2);
+      const keep = new Float32Array(p.size * p.size);
+      const k = p.size / rect.size;
+      for (const ids of [[...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)], [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)]]) {
+        const q = ids.map((j) => pts[j]);
+        const ex = q.reduce((t, v) => t + v.x, 0) / q.length, ey = q.reduce((t, v) => t + v.y, 0) / q.length;
+        const m = fillPoly(q.map((v) => ({ x: (ex + (v.x - ex) * 1.5 - rect.x) * k, y: (ey + (v.y - ey) * 1.8 - rect.y) * k })), p.size, p.size);
+        for (let i = 0; i < keep.length; i++) if (m[i]) keep[i] = 1;
+      }
+      const kb = boxBlur(keep, p.size, p.size, Math.max(1, Math.round(p.size * 0.01)));
+      for (let i = 0; i < face.length; i++) face[i] *= 1 - Math.min(1, gb[i] * 3) * (1 - Math.min(1, kb[i]));
+    }
     if (hairPad > 0) {
       const hair = new Float32Array(p.size * p.size);
       for (let i = 0; i < hair.length; i++) hair[i] = p.hair[i] / 255;

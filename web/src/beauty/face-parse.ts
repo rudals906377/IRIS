@@ -2,7 +2,7 @@
 // 실시간 분할은 이마로 내려온 머리카락을 '얼굴 피부'로, 귀걸이·귀 주변을 머리카락으로 헷갈려 염색에 구멍·얼룩이 생긴다.
 // 사진은 한 번만 처리하면 되므로 머리 주변을 이 모델로 한 번 나눈다.
 // 모델: public/models/face-parse-512.onnx(26MB, 가중치 fp16 저장·계산 fp32). 입력 RGB 0~1(정규화는 모델 안),
-// 출력 [머리카락, 얼굴(피부·눈·눈썹·코·입·귀), 목] 확률 512×512. 만든 방법은 tools/train/face_parse_export.py.
+// 출력 [머리카락, 얼굴(피부·눈·눈썹·코·입·귀), 목, 안경] 확률 512×512. 만든 방법은 tools/train/face_parse_export.py.
 // onnxruntime-web(WASM)으로 기기 안에서 돌린다.
 
 const ORT_VERSION = '1.30.0';
@@ -15,6 +15,8 @@ export interface ParseResult {
   hair: Uint8ClampedArray;
   face: Uint8ClampedArray;
   body: Uint8ClampedArray;
+  /** 안경(테·알·코받침): 얼굴에는 들어 있지 않다. 안경 쓴 얼굴을 사진 속에 넣을 때 그 자리를 둘레 피부로 메운다 */
+  glasses: Uint8ClampedArray;
   size: number;
   /** 모델에 넣은 잘라 낸 그림(RGBA, size×size) */
   rgba: Uint8ClampedArray;
@@ -73,5 +75,5 @@ export async function parseFace(img: ImageBitmap | HTMLCanvasElement, rect: { x:
     for (let i = 0; i < plane; i++) o[i] = y[k * plane + i] * 255;
     return o;
   };
-  return { hair: ch(0), face: ch(1), body: ch(2), size: N, rgba: px };
+  return { hair: ch(0), face: ch(1), body: ch(2), glasses: ch(3), size: N, rgba: px };
 }
