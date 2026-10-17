@@ -1,0 +1,626 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --line: #2a2f3a;
+  --text: #e9ecf1;
+  --muted: #9aa3b2;
+  --accent: #f0a93c;
+  --accent-ink: #1b1204;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+}
+
+button,
+select,
+input,
+.file-btn {
+  font: inherit;
+}
+
+#app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.brand small {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.logo {
+  color: var(--accent);
+}
+
+.status {
+  flex: 1;
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+}
+
+button,
+.file-btn {
+  background: #232834;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+
+button:hover,
+.file-btn:hover {
+  border-color: #3b4252;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+button.big {
+  font-size: 17px;
+  padding: 13px 26px;
+}
+
+button.ghost {
+  background: transparent;
+}
+
+/* 참고 사진에서 타투 영역 고르기 */
+.crop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  color: #eee;
+}
+.crop-overlay canvas {
+  max-width: 100%;
+  max-height: 70vh;
+  touch-action: none;
+  cursor: crosshair;
+  border-radius: 6px;
+}
+.crop-overlay .row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.stage {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: #000;
+}
+
+.view {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.view.mirror {
+  transform: scaleX(-1);
+}
+
+.view canvas {
+  grid-area: 1 / 1;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+#overlay {
+  pointer-events: none;
+}
+
+#video {
+  /* 프레임 콜백이 계속 오도록 문서 안에 두되 보이지 않게 한다 */
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  opacity: 0.01;
+  pointer-events: none;
+  left: 0;
+  top: 0;
+}
+
+.hud {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(10, 12, 16, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.guide {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 12, 16, 0.8);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 14px;
+  max-width: calc(100% - 32px);
+  text-align: center;
+}
+
+.start {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px 16px;
+  background: radial-gradient(circle at 50% 30%, #1d2230, var(--bg) 70%);
+}
+
+.start h1 {
+  margin: 0 0 8px;
+  font-size: clamp(24px, 4vw, 36px);
+}
+
+.start p {
+  color: var(--muted);
+  max-width: 560px;
+  margin: 6px 0;
+  line-height: 1.6;
+  text-wrap: balance;
+}
+
+.start-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin: 18px 0 10px;
+}
+
+.privacy {
+  font-size: 13px;
+}
+
+.ext-link {
+  font-size: 13px;
+}
+
+.ext-link a {
+  color: var(--accent);
+}
+
+.start .credit {
+  font-size: 11px;
+  opacity: 0.55;
+  margin-top: 22px;
+}
+
+.rail {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 8px 16px 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 사진 고르기 줄: 큰 단추 + 한 줄 안내 (+ 생성 서버가 켜져 있을 때만 AI 생성) */
+.pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding-bottom: 8px;
+}
+
+.pick .hint {
+  color: var(--muted);
+  font-size: 13px;
+  flex: 1 1 200px;
+  line-height: 1.4;
+}
+
+.pick #btn-gen {
+  margin-left: auto;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+}
+
+/* 입혀진 부위 칩: 누르면 그 부위만 끄고 켠다 */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+.chip {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  text-decoration: line-through;
+}
+
+.chip.on {
+  background: rgba(240, 169, 60, 0.18);
+  color: var(--accent);
+  border-color: transparent;
+  text-decoration: none;
+}
+
+/* 사진을 끌어다 놓을 때 */
+.drop {
+  position: absolute;
+  inset: 12px;
+  display: grid;
+  place-items: center;
+  border: 3px dashed var(--accent);
+  border-radius: 16px;
+  background: rgba(15, 17, 21, 0.75);
+  font-size: 20px;
+  font-weight: 700;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.ref {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 0 6px;
+  color: var(--muted, #aab);
+}
+
+.ref span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+
+.ref img {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.ref button {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.ref span {
+  flex: 1 1 120px;
+}
+
+.ref #ref-clear {
+  border: none;
+  padding: 4px 6px;
+}
+
+.amount-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 13px;
+  padding-top: 4px;
+}
+
+.amount-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.amount-row button {
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+}
+
+.amount-row input[type='range'] {
+  width: clamp(90px, 22vw, 220px);
+}
+
+.panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 100%);
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  padding: 14px 16px 24px;
+  overflow-y: auto;
+  z-index: 10;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.panel h3 {
+  margin: 18px 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 14px;
+}
+
+.row > select,
+.row > input[type='text'] {
+  margin-left: auto;
+}
+
+.row input[type='range'] {
+  width: 150px;
+}
+
+.row input[type='checkbox'] {
+  order: -1;
+}
+
+.note {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.result {
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  color: var(--text);
+  min-height: 1em;
+}
+
+.panel button {
+  width: 100%;
+  margin: 4px 0;
+}
+
+.panel-head button {
+  width: auto;
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    padding: 8px 12px;
+  }
+  .rail {
+    padding: 6px 12px 10px;
+  }
+  .pick #btn-gen {
+    margin-left: 0;
+  }
+  .drop {
+    font-size: 16px;
+  }
+}
+
+/* 설정의 고급 영역·생성 고급 */
+details.adv {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+details.adv > summary,
+details.gen-adv > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 6px 0;
+}
+
+details.adv .row input[type='text'] {
+  width: 180px;
+}
+
+details.gen-adv {
+  flex: 1 1 100%;
+}
+
+details.gen-adv[open] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+}
+
+details.gen-adv > summary {
+  flex: 1 1 100%;
+  padding: 2px 0;
+}
+
+/* 생성 모드(사진 한 장) */
+.gen {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+}
+
+.gen-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gen-head button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.gen-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding-top: 6px;
+}
+
+.gen-desc {
+  flex: 1 1 260px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.gen-desc input {
+  flex: 1;
+}
+
+.gen button.primary {
+  background: var(--accent, #f0a040);
+  color: #111;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gen button.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.gen-compare {
+  position: relative;
+  margin-top: 8px;
+  max-height: 60vh;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.gen-compare img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gen-compare #gen-after {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(0 0 0 50%);
+}
+
+.gen-compare input[type='range'] {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 6px;
+  width: 100%;
+}
+
+.gen-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 6px;
+}
+
+.muted {
+  color: var(--muted, #aab);
+}

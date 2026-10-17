@@ -1,0 +1,14 @@
+torch
+torchvision
+transformers>=4.45
+timm
+kornia
+einops
+pyarrow
+opencv-python-headless
+numpy
+pillow
+onnx
+onnxscript
+onnxruntime
+mediapipe>=0.10.14

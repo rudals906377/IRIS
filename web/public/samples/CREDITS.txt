@@ -1,0 +1,5 @@
+sample-person.mp4 / sample-person.webm
+원본: Intel IoT DevKit "sample-videos" — head-pose-face-detection-male.mp4
+출처: https://github.com/intel-iot-devkit/sample-videos
+라이선스: Creative Commons Attribution 4.0 International (CC BY 4.0)
+변경 사항: 앞 26초만 잘라 768×432로 다시 인코딩, 소리 제거

@@ -1,0 +1,414 @@
+"""IRIS 생성 서버(사진 한 장 모드).
+
+웹 앱이 웹캠 한 장 + 참고 사진 + 설명을 보내면, 헤어 모양·네일아트·타투를 생성형 AI로 그려 돌려준다.
+사용자 컴퓨터(엔비디아 GPU 권장)에서 돌리고, 사진은 이 컴퓨터 밖으로 나가지 않는다.
+
+실행:  python server.py [--port 8765] [--dry-run] [--host 127.0.0.1]
+확인:  http://127.0.0.1:8765/health
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import io
+import threading
+import time
+import uuid
+
+import numpy as np
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
+from pydantic import BaseModel
+
+from masks import Masker
+import anydoor_client
+import hair_extend
+import realistic_client
+from blend import harmonize
+from pipelines import Generator, GenRequest, lock_hair_color
+
+app = FastAPI(title="IRIS 생성 서버")
+# 웹 앱(다른 주소)에서 부를 수 있게. 로컬 전용이므로 모든 출처 허용
+import inspect
+
+_cors_kwargs = dict(allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# 최신 Starlette: https 사이트 → 127.0.0.1 요청(사설망 접근)을 명시적으로 허용해야 한다
+if "allow_private_network" in inspect.signature(CORSMiddleware.__init__).parameters:
+    _cors_kwargs["allow_private_network"] = True
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
+
+
+@app.middleware("http")
+async def allow_private_network(request, call_next):
+    """https 사이트(GitHub Pages)에서 내 컴퓨터(127.0.0.1)로 부를 때 크롬이 요구하는 헤더."""
+    resp = await call_next(request)
+    resp.headers["Access-Control-Allow-Private-Network"] = "true"
+    return resp
+
+masker = Masker()
+generator = Generator()
+LOG: list[str] = []
+
+
+def log(msg: str) -> None:
+    line = f"{time.strftime('%H:%M:%S')} {msg}"
+    print(line, flush=True)
+    LOG.append(line)
+    del LOG[:-200]
+
+
+def decode(data_url: str) -> Image.Image:
+    if "," in data_url:
+        data_url = data_url.split(",", 1)[1]
+    try:
+        return Image.open(io.BytesIO(base64.b64decode(data_url))).convert("RGB")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"그림을 읽지 못했습니다: {e}") from e
+
+
+def encode(img: Image.Image, fmt: str = "JPEG") -> str:
+    buf = io.BytesIO()
+    img.save(buf, format=fmt, quality=92)
+    return f"data:image/{fmt.lower()};base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+class GenerateBody(BaseModel):
+    category: str  # hair | nail | tattoo | makeup(사진처럼 엔진만)
+    image: str  # dataURL
+    reference: str | None = None
+    desc: str | None = None
+    negative: str | None = None
+    place: str = "forearmL"
+    grow: float = 0.25
+    extend: float = 0.0
+    steps: int = 30
+    strength: float | None = None  # 없으면 분야별 기본값(헤어 0.95, 네일 0.65, 타투 0.45)
+    guidance: float | None = None
+    ip_scale: float = 0.6
+    seed: int | None = None
+    mask_only: bool = False
+    color_lock: bool = True  # 헤어: 생성 뒤 머리색을 참고 사진에 맞춤
+    engine: str = "default"  # default(SDXL/SD1.5 인페인팅) | anydoor(tools/anydoor 합성 서버) | realistic(tools/realistic 헤어·메이크업 옮기기)
+    reference_mask: str | None = None  # 참고 사진에서 합성할 물체 마스크(dataURL, 흰색=물체). 없으면 서버가 추정
+    extend_hair: bool = True  # 사진처럼 헤어: 고른 사진이 긴 머리면 정렬 사각형 아래로 이어 그리기
+    hair_model: str = "auto"  # 사진처럼 헤어: auto(HairFastGAN, 고른 사진에서 얼굴을 못 찾으면 헤어 2) | stablehair(디퓨전, 10~20초) | hairfast(빠름)
+
+
+@app.get("/health")
+def health() -> dict:
+    import torch
+
+    return {
+        "ok": True,
+        "dry_run": generator.dry_run,
+        "device": generator.device or ("cuda" if torch.cuda.is_available() else "cpu"),
+        "model_loaded": generator.pipe is not None,
+        "model": generator.loaded_model,
+        "model_choice": generator.model_name,
+        "anydoor": anydoor_client.health() is not None,
+        "realistic": _realistic_health(),
+        "log": LOG[-5:],
+    }
+
+
+def _realistic_health() -> dict | None:
+    """사진처럼 그리기 서버(8767)와 헤어 2(8768) 상태: {hair, makeup, hair2} 또는 None(둘 다 꺼짐)."""
+    h = realistic_client.health()
+    h2 = realistic_client.health(realistic_client.STABLEHAIR_URL)
+    if not h and not h2:
+        return None
+    hair2 = bool(h2 and h2.get("hair"))
+    return {"hair": bool(h and h.get("hair")) or hair2, "makeup": bool(h and h.get("makeup")), "hair2": hair2}
+
+
+# 비동기 작업: 무료 터널(trycloudflare)은 응답을 100초까지만 기다리므로, 오래 걸리는 생성은
+# /generate/start 로 작업 번호를 바로 받고 /job/{id} 로 2초마다 물어보는 방식을 쓴다(웹 앱 기본).
+JOBS: dict[str, dict] = {}
+GPU_LOCK = threading.Lock()  # 생성은 한 번에 하나(GPU 메모리)
+
+
+def _run_job(job_id: str, body: "GenerateBody") -> None:
+    job = JOBS[job_id]
+    try:
+        with GPU_LOCK:
+            job["result"] = generate(body)
+        job["status"] = "done"
+    except HTTPException as e:
+        job.update(status="error", detail=str(e.detail))
+    except Exception as e:  # noqa: BLE001
+        job.update(status="error", detail=f"생성 실패: {e}")
+
+
+@app.post("/generate/start")
+def generate_start(body: "GenerateBody") -> dict:
+    now = time.time()
+    for k in [k for k, j in JOBS.items() if now - j["t0"] > 900]:
+        del JOBS[k]
+    job_id = uuid.uuid4().hex[:12]
+    JOBS[job_id] = {"status": "running", "t0": now}
+    threading.Thread(target=_run_job, args=(job_id, body), daemon=True).start()
+    return {"job": job_id}
+
+
+@app.get("/job/{job_id}")
+def job_status(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "그런 작업이 없습니다(서버가 다시 켜졌을 수 있음)")
+    out = {"status": job["status"], "elapsed_ms": int((time.time() - job["t0"]) * 1000), "log": LOG[-3:]}
+    if job["status"] == "done":
+        out["result"] = job["result"]
+        del JOBS[job_id]
+    elif job["status"] == "error":
+        out["detail"] = job["detail"]
+        del JOBS[job_id]
+    return out
+
+
+@app.post("/generate")
+def generate(body: GenerateBody) -> dict:
+    if body.category not in ("hair", "nail", "tattoo", "makeup"):
+        raise HTTPException(400, "category는 hair, nail, tattoo, makeup 중 하나여야 합니다")
+    img = decode(body.image)
+    ref = decode(body.reference) if body.reference else None
+    t0 = time.time()
+    found = None
+    if body.engine == "realistic" or body.category == "makeup":
+        return generate_realistic(body, img, ref, t0)
+    if body.category == "hair":
+        mask = masker.hair_mask(img, grow=body.grow)
+    elif body.category == "nail":
+        mask, found = masker.nail_mask(img, extend=body.extend)
+        if found == 0:
+            raise HTTPException(422, "손톱을 찾지 못했습니다. 손등이 카메라를 향하게 해 주세요")
+    else:
+        mask = masker.arm_mask(img, place=body.place)
+    # 타투는 자리가 너무 작으면(화면의 0.3% 미만, 예: 목이 살짝만 보임) 그리지 않는다
+    if int((mask > 0).sum()) < (max(64, int(mask.size * 0.003)) if body.category == "tattoo" else 64):
+        if body.category == "tattoo":
+            where = {"forearm": "팔 아래쪽(팔꿈치~손목)", "upperArm": "팔 위쪽(어깨~팔꿈치)", "neck": "목(귀~어깨)", "chest": "가슴(양쪽 어깨)"}
+            part = next((v for k, v in where.items() if body.place.startswith(k)), "선택한 부위")
+            raise HTTPException(422, f"카메라에 {part} 부위가 보이지 않습니다. 타투 탭의 '위치'를 보이는 부위로 바꾸거나 그 부위를 비춰 주세요")
+        raise HTTPException(422, "다시 그릴 영역을 찾지 못했습니다(머리카락·손·팔이 보여야 합니다)")
+    log(f"마스크 {body.category} {int((mask > 0).sum())}px {int((time.time() - t0) * 1000)}ms")
+    if body.mask_only:
+        return {"mask": encode(Image.fromarray(mask), "PNG"), "found": found}
+    if body.engine == "anydoor":
+        return generate_anydoor(body, img, ref, mask, found, t0)
+    try:
+        out = generator.generate(
+            GenRequest(
+                category=body.category,
+                image=img,
+                mask=mask,
+                reference=ref,
+                desc=body.desc,
+                negative=body.negative,
+                steps=body.steps,
+                strength=body.strength,
+                guidance=body.guidance,
+                ip_scale=body.ip_scale,
+                seed=body.seed,
+                color_lock=body.color_lock,
+                color_fn=lambda res, mask, ref, lg: lock_hair_color(res, mask, ref, lambda im: masker.segment(im)["hair"], lg),
+            ),
+            log,
+        )
+    except Exception as e:  # noqa: BLE001
+        log(f"생성 실패: {e}")
+        raise HTTPException(500, f"생성 실패: {e}") from e
+    log(f"완료 {out['elapsed_ms']}ms")
+    return {"image": encode(out["image"]), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": out["elapsed_ms"], "prompt": out["prompt"], "model": out["model"], "found": found}
+
+
+_extender: Generator | None = None
+
+
+def _extend_long_hair(body: "GenerateBody", img: Image.Image, out: Image.Image, raw: Image.Image, after_hair: np.ndarray, ref: Image.Image, valid: np.ndarray, mask: np.ndarray, px: int):
+    """고른 사진이 긴 머리인데 결과가 정렬 사각형 아래에서 잘렸으면, 그 아래를 인페인팅으로 이어 그린다(hair_extend.py).
+    out: 섞은 결과, raw: 모델이 그린 그대로(사각형 가장자리까지 머리가 진하다), after_hair: raw 의 머리카락(사각형 안)"""
+    global _extender
+    rs = masker.segment(ref)
+    ratio = hair_extend.hair_length_ratio(rs["hair"], rs["face"])
+    if ratio is None or ratio < 0.6:
+        log(f"  긴 머리 이어 그리기 안 함(고른 사진 머리 길이 {'모름' if ratio is None else f'턱 아래 {ratio:.2f}배'})")
+        return out, mask
+    # 섞은 결과는 사각형 가장자리에서 원래 사진으로 돌아가 머리가 옅다 → 모델이 그린 그대로에서 닿은 다발을 찾는다
+    s = masker.segment(img)
+    ext, why = hair_extend.extension_mask(after_hair, valid, s["face"], ratio, px * 2)
+    if ext is None:
+        log(f"  긴 머리 이어 그리기 안 함: {why}")
+        return out, mask
+    log(f"  긴 머리 이어 그리기: {why}")
+    if _extender is None:
+        # 사진처럼 서버들과 GPU 를 나눠 쓰므로 가벼운 SD1.5 인페인팅을 CPU 오프로드로
+        _extender = Generator(dry_run=generator.dry_run, model_name="sd15")
+        _extender.low_vram = True
+    # 위쪽 결과 머리와 이어지게 경계(사각형 안쪽 띠)도 함께 다시 그린다
+    paint = cv2_dilate(ext, max(2, px // 2))
+    # 머리 색·결을 먼저 깔아 두고(위 머리를 아래로 늘임) 인페인팅은 결·끝 모양만 다시 그리게
+    fr = hair_extend.face_rows(s["face"])
+    fh = (fr[1] - fr[0]) if fr else img.height // 3
+    base = Image.fromarray(hair_extend.prefill(np.asarray(out.convert("RGB")), paint, after_hair, max(8, int(fh * 0.25)), np.asarray(raw.convert("RGB"))))
+    try:
+        res = _extender.generate(
+            GenRequest(
+                category="hair",
+                image=base,
+                mask=(paint * 255).astype(np.uint8),
+                reference=ref,
+                desc=(body.desc or "").strip() or "long hair, same color and texture as the hair above",
+                negative="logo, emblem, badge, text, letters, watermark, print, bald, short hair, hair ends cut straight, blurry, lowres, cartoon",
+                steps=max(20, min(40, body.steps)),
+                strength=0.75,
+                ip_scale=0.5,
+                seed=body.seed,
+                color_lock=True,
+                # 색은 고른 사진이 아니라 바로 위에 그려진 머리에 맞춘다(이음매가 안 보이게)
+                color_fn=lambda res, m, r, lg: lock_hair_color(res, m, raw, lambda im: masker.segment(im)["hair"], lg),
+            ),
+            log,
+        )
+    except Exception as e:  # noqa: BLE001
+        log(f"  긴 머리 이어 그리기 실패(잘린 채로 둠): {e}")
+        return out, mask
+    return res["image"], np.maximum(mask, (paint * 255).astype(np.uint8))
+
+
+def generate_realistic(body: GenerateBody, img: Image.Image, ref: Image.Image | None, t0: float) -> dict:
+    """사진처럼 그리기 엔진: 헤어(모양·색) 또는 메이크업을 고른 사진에서 내 사진으로 옮긴다."""
+    if body.category not in ("hair", "makeup"):
+        raise HTTPException(400, "사진처럼 그리기 엔진은 헤어와 메이크업만 됩니다(네일·타투는 기본 또는 AnyDoor 엔진)")
+    if ref is None:
+        raise HTTPException(400, "사진처럼 그리기 엔진은 고른 사진이 필요합니다(📷 사진 고르기)")
+    h = _realistic_health()
+    if h is None:
+        raise HTTPException(503, f"사진처럼 그리기 서버가 꺼져 있습니다({realistic_client.REALISTIC_URL}) — tools/realistic/run.bat")
+    if not h.get(body.category):
+        raise HTTPException(503, f"사진처럼 그리기 서버에 {'헤어' if body.category == 'hair' else '메이크업'} 모델이 없습니다(설치: tools/realistic/setup.py)")
+    model = realistic_client.hair_model(body.hair_model) if body.category == "hair" else "stablemakeup"
+    log(f"사진처럼 {body.category} ({model})")
+    try:
+        if body.category == "hair":
+            try:
+                out, valid = realistic_client.hair(img, ref, seed=body.seed, model=model or "hairfast", steps=max(10, min(50, body.steps)))
+            except RuntimeError as e:
+                # HairFastGAN 은 고른 사진에도 얼굴이 있어야 한다 → 자동이면 헤어 2(사진 가운데를 참고)로 다시
+                if body.hair_model == "auto" and model == "hairfast" and "고른 사진" in str(e) and realistic_client.stablehair_on():
+                    log("  고른 사진에서 얼굴을 못 찾음 → 헤어 2(Stable-Hair)로 다시")
+                    model = "stablehair"
+                    out, valid = realistic_client.hair(img, ref, seed=body.seed, model=model, steps=max(10, min(50, body.steps)))
+                else:
+                    raise
+            # 섞을 자리: 원래 머리카락과 결과 머리카락을 합친 곳(머리가 길어지거나 짧아진 곳 모두).
+            # 결과 쪽 머리카락은 원래 머리와 이어진 덩어리만(다시 그려져 흐려진 배경이 머리카락으로 읽히는 것 제외)
+            before_hair = (masker.segment(img)["hair"] > 0.5).astype(np.uint8)
+            after_hair = (masker.segment(out)["hair"] > 0.5).astype(np.uint8) & valid
+            head = max(8, int(np.sqrt(max(int(before_hair.sum()), 1))))
+            after_hair = realistic_client.attached_to(after_hair, before_hair, int(head * 0.6))
+            region = ((before_hair | after_hair) & valid).astype(np.uint8)
+            px = max(4, int(min(img.width, img.height) * 0.02))
+            region = cv2_dilate(region, px)
+            log(f"  섞는 자리 {int(region.sum() * 100 / max(1, valid.sum()))}% (원래 머리 {int(before_hair.sum())}px, 결과 머리 {int(after_hair.sum())}px)")
+            # 정렬 사각형(valid) 가장자리에서 끊긴 직선이 보이지 않게, 사각형 안쪽으로 점점 섞는다
+            soft = realistic_client.feather(region, px) * realistic_client.inner_fade(valid, px * 2)
+            raw = out
+            mixed = realistic_client.blend(img, out, soft)
+            # 색감·결(잡음)을 주변에 맞춘다. 색은 고른 사진을 따라야 하므로 harmonize 의 색 보정은 약하게
+            out = harmonize(img, mixed, region, seed=body.seed or 0, color_strength=0.3)
+            mask = (region > 0).astype(np.uint8) * 255
+            if body.extend_hair:
+                out, mask = _extend_long_hair(body, img, out, raw, after_hair, ref, valid, mask, px)
+        else:
+            steps = max(10, min(50, body.steps))
+            out, valid = realistic_client.makeup(img, ref, steps=steps, guidance=body.guidance if body.guidance is not None else 1.6, seed=body.seed)
+            face = realistic_client.fill_holes((masker.segment(img)["face"] > 0.5).astype(np.uint8)) & valid
+            px = max(4, int(min(img.width, img.height) * 0.015))
+            soft = realistic_client.feather(face, px)
+            out = realistic_client.blend(img, out, soft)
+            mask = (face > 0).astype(np.uint8) * 255
+    except RuntimeError as e:
+        log(str(e))
+        raise HTTPException(500, str(e)) from e
+    ms = int((time.time() - t0) * 1000)
+    log(f"완료 {ms}ms (사진처럼)")
+    return {"image": encode(out), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": ms, "prompt": "", "model": "realistic", "found": None, "hair_model": model}
+
+
+def generate_anydoor(body: GenerateBody, img: Image.Image, ref: Image.Image | None, mask, found, t0: float) -> dict:
+    """AnyDoor 엔진: 참고 물체 마스크 → 대상 자리마다 합성 → (헤어) 색 고정."""
+    if ref is None:
+        raise HTTPException(400, "AnyDoor 엔진은 참고 사진이 필요합니다(📷 사진 따라하기로 먼저 올리세요)")
+    if anydoor_client.health() is None:
+        raise HTTPException(503, f"AnyDoor 서버가 꺼져 있습니다({anydoor_client.ANYDOOR_URL}) — tools/anydoor/run.bat")
+    given = None
+    if body.reference_mask:
+        given = (np.asarray(decode(body.reference_mask).convert("L")) > 127).astype(np.uint8)
+        if given.shape != (ref.height, ref.width):
+            given = cv2_resize_nearest(given, ref.size)
+    ref_mask = anydoor_client.ref_object_mask(masker, body.category, ref, given)
+    if ref_mask is None:
+        raise HTTPException(422, "참고 사진에서 합성할 물체(머리카락·손톱·타투)를 찾지 못했습니다")
+    targets = anydoor_client.target_masks(body.category, mask, ref_mask)
+    if not targets:
+        raise HTTPException(422, "합성할 자리를 찾지 못했습니다")
+    steps = max(10, min(50, body.steps))
+    guidance = body.guidance if body.guidance is not None else 5.0
+    out = img
+    log(f"AnyDoor {body.category}: 자리 {len(targets)}곳, {steps}단계")
+    for i, tm in enumerate(targets):
+        try:
+            before = out
+            comp = anydoor_client.compose(ref, ref_mask, out, tm, steps=steps, guidance=guidance, seed=body.seed)
+            # AnyDoor 는 정사각형으로 자른 영역 전체를 다시 그려 5px 여백으로 붙인다 → 자리 주변만 남기고 색감·결을 맞춰 섞는다
+            grow = cv2_dilate(tm, max(3, int(min(img.width, img.height) * 0.03)))
+            out = harmonize(before, comp, grow, seed=body.seed or 0)
+        except RuntimeError as e:
+            log(str(e))
+            raise HTTPException(500, str(e)) from e
+        log(f"  자리 {i + 1}/{len(targets)} 완료")
+    if body.category == "hair" and body.color_lock:
+        try:
+            out = lock_hair_color(out, mask, ref, lambda im: masker.segment(im)["hair"], log)
+        except Exception as e:  # noqa: BLE001
+            log(f"색 맞추기 건너뜀: {e}")
+    ms = int((time.time() - t0) * 1000)
+    log(f"완료 {ms}ms (AnyDoor)")
+    return {"image": encode(out), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": ms, "prompt": "", "model": "anydoor", "found": found, "targets": len(targets)}
+
+
+def cv2_dilate(m, r: int):
+    import cv2
+
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    return cv2.dilate((m > 0).astype(np.uint8), k)
+
+
+def cv2_resize_nearest(m, size):
+    import cv2
+
+    return cv2.resize(m, size, interpolation=cv2.INTER_NEAREST)
+
+
+def main() -> None:
+    import uvicorn
+
+    ap = argparse.ArgumentParser(description="IRIS 생성 서버")
+    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--dry-run", action="store_true", help="모델 없이 마스크만 표시(연결 시험)")
+    ap.add_argument("--preload", action="store_true", help="시작할 때 모델을 미리 불러온다")
+    ap.add_argument("--model", default=None, help="auto(기본: GPU 메모리로 결정) | sd15 | sdxl | Hugging Face 모델 id")
+    a = ap.parse_args()
+    generator.dry_run = a.dry_run
+    if a.model:
+        generator.model_name = a.model
+    if a.preload and not a.dry_run:
+        generator.load(log)
+    print(f"IRIS 생성 서버: http://{a.host}:{a.port}  (dry-run={a.dry_run})", flush=True)
+    uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
+
+
+if __name__ == "__main__":
+    main()

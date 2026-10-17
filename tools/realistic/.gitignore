@@ -1,0 +1,6 @@
+# 설치 때 받는 저장소·가중치·가상환경(수 GB)은 올리지 않는다
+HairFastGAN/
+Stable-Makeup/
+Stable-Hair/
+venv_realistic/
+__pycache__/

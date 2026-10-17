@@ -1,0 +1,187 @@
+// 영상 입력: 웹캠 또는 테스트용 동영상 파일. 둘 다 <video> 요소로 다룬다.
+// 새 프레임이 도착할 때마다(requestVideoFrameCallback) 콜백을 부른다.
+
+export interface FrameInfo {
+  /** 콜백 호출 시각(performance.now 기준, ms). */
+  now: number;
+  /** 카메라가 프레임을 촬영한 시각(브라우저가 제공할 때만). */
+  captureTime?: number;
+  /** 누적 표시 프레임 수(건너뛴 프레임 계산용). */
+  presentedFrames?: number;
+  mediaTime: number;
+}
+
+export type SourceKind = 'camera' | 'file' | 'image';
+
+export interface CameraRequest {
+  width: number;
+  height: number;
+  fps: number;
+  /** 'user' 앞(셀피) 카메라, 'environment' 뒤 카메라(휴대폰) */
+  facing?: 'user' | 'environment';
+}
+
+export class VideoSource {
+  readonly video: HTMLVideoElement;
+  kind: SourceKind | null = null;
+  private stream: MediaStream | null = null;
+  private stopLoop: (() => void) | null = null;
+  private objectUrl: string | null = null;
+  private stillTimer = 0;
+  private stillDraw: ((img: ImageBitmap) => void) | null = null;
+  /** 사진(정지 영상)을 열었을 때 그 원본(최대 변 제한 전) */
+  still: ImageBitmap | null = null;
+
+  constructor(video: HTMLVideoElement) {
+    this.video = video;
+    video.muted = true;
+    video.playsInline = true;
+    video.autoplay = true;
+  }
+
+  get width(): number {
+    return this.video.videoWidth;
+  }
+
+  get height(): number {
+    return this.video.videoHeight;
+  }
+
+  get settings(): MediaTrackSettings | null {
+    return this.stream?.getVideoTracks()[0]?.getSettings() ?? null;
+  }
+
+  async openCamera(req: CameraRequest): Promise<void> {
+    this.close();
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('이 브라우저에서는 카메라를 사용할 수 없습니다(HTTPS 필요).');
+    }
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: req.facing ?? 'user',
+        width: { ideal: req.width },
+        height: { ideal: req.height },
+        frameRate: { ideal: req.fps },
+      },
+    });
+    this.video.srcObject = this.stream;
+    this.kind = 'camera';
+    await this.video.play();
+    await this.waitForSize();
+  }
+
+  async openFile(fileOrUrl: File | string): Promise<void> {
+    this.close();
+    if (typeof fileOrUrl === 'string') {
+      this.video.src = fileOrUrl;
+    } else {
+      this.objectUrl = URL.createObjectURL(fileOrUrl);
+      this.video.src = this.objectUrl;
+    }
+    this.video.loop = true;
+    this.kind = 'file';
+    await this.video.play();
+    await this.waitForSize();
+  }
+
+  /**
+   * 사진 한 장을 '움직이지 않는 카메라'처럼 연다: 캔버스에 그려 스트림으로 내보낸다.
+   * 그러면 얼굴 찾기·분할·화장·생성 등 영상용 처리가 모두 그대로 사진에 적용된다.
+   * maxSide: 처리 속도를 위해 긴 변을 줄인다(원본은 still 에 남김).
+   */
+  async openImage(img: ImageBitmap, maxSide = 1600): Promise<void> {
+    this.close();
+    const s = Math.min(1, maxSide / Math.max(img.width, img.height));
+    const w = Math.max(2, Math.round((img.width * s) / 2) * 2);
+    const h = Math.max(2, Math.round((img.height * s) / 2) * 2);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    let cur = img;
+    ctx.drawImage(cur, 0, 0, w, h);
+    this.stream = canvas.captureStream(15);
+    // 그림이 그대로면 새 프레임이 안 나오는 브라우저가 있어 주기적으로 다시 그린다
+    this.stillTimer = window.setInterval(() => ctx.drawImage(cur, 0, 0, w, h), 66);
+    this.stillDraw = (next) => {
+      cur = next;
+      ctx.drawImage(cur, 0, 0, w, h);
+    };
+    this.still = img;
+    this.video.srcObject = this.stream;
+    this.kind = 'image';
+    await this.video.play();
+    await this.waitForSize();
+  }
+
+  /** 사진 모드: 처리 중인 정지 영상을 (같은 크기의) 다른 그림으로 바꾼다. 엔진은 멈추지 않는다 */
+  replaceStill(img: ImageBitmap): void {
+    this.stillDraw?.(img);
+  }
+
+  private async waitForSize(): Promise<void> {
+    if (this.video.videoWidth > 0) return;
+    await new Promise<void>((resolve) => {
+      const on = (): void => {
+        this.video.removeEventListener('loadedmetadata', on);
+        resolve();
+      };
+      this.video.addEventListener('loadedmetadata', on);
+    });
+  }
+
+  /** 새 프레임마다 cb 호출. 반환 함수로 중지한다. */
+  onFrame(cb: (info: FrameInfo) => void): void {
+    this.stopLoop?.();
+    const video = this.video;
+    let stopped = false;
+    if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+      let handle = 0;
+      const step = (now: number, md: VideoFrameCallbackMetadata): void => {
+        if (stopped) return;
+        cb({ now, captureTime: md.captureTime, presentedFrames: md.presentedFrames, mediaTime: md.mediaTime });
+        handle = video.requestVideoFrameCallback(step);
+      };
+      handle = video.requestVideoFrameCallback(step);
+      this.stopLoop = () => {
+        stopped = true;
+        video.cancelVideoFrameCallback(handle);
+      };
+      return;
+    }
+    // 대체 경로: 화면 갱신마다 currentTime 변화를 확인한다.
+    let last = -1;
+    let raf = 0;
+    const tick = (now: number): void => {
+      if (stopped) return;
+      if (video.currentTime !== last) {
+        last = video.currentTime;
+        cb({ now, mediaTime: video.currentTime });
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    this.stopLoop = () => {
+      stopped = true;
+      cancelAnimationFrame(raf);
+    };
+  }
+
+  close(): void {
+    this.stopLoop?.();
+    this.stopLoop = null;
+    if (this.stillTimer) clearInterval(this.stillTimer);
+    this.stillTimer = 0;
+    this.still = null;
+    this.stillDraw = null;
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.video.pause();
+    this.video.removeAttribute('src');
+    this.video.srcObject = null;
+    if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
+    this.objectUrl = null;
+    this.kind = null;
+  }
+}

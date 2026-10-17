@@ -1,0 +1,11 @@
+diffusers>=0.30
+transformers>=4.40
+accelerate
+safetensors
+fastapi
+uvicorn[standard]
+pydantic>=2
+pillow
+numpy
+opencv-python-headless
+mediapipe>=0.10.14
