@@ -122,10 +122,6 @@ export function transferNail(dst: Uint8ClampedArray, W: number, H: number, dMask
     }
     return s / n;
   };
-  // 내 손톱 평균 밝기(명암 비율 기준)
-  let lsum = 0, ln = 0;
-  for (let i = 0; i < W * H; i++) if (dMask[i]) { const o = i * 4; lsum += 0.2126 * dst[o] + 0.7152 * dst[o + 1] + 0.0722 * dst[o + 2]; ln++; }
-  const lmean = Math.max(1, lsum / Math.max(1, ln));
   // 범위: 틀 상자
   const L = dF.t1 - dF.t0;
   const R = Math.max(...dF.prof) + 2;
@@ -133,6 +129,12 @@ export function transferNail(dst: Uint8ClampedArray, W: number, H: number, dMask
   const ys = [dF.t0, dF.t1].flatMap((t) => [-R, R].map((s) => dF.cy + dF.ay * t + dny * s));
   const x0 = Math.max(0, Math.floor(Math.min(...xs)) - 2 - fr), x1 = Math.min(W - 1, Math.ceil(Math.max(...xs)) + 2 + fr);
   const y0 = Math.max(0, Math.floor(Math.min(...ys)) - 2 - fr), y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)) + 2 + fr);
+  const shadeL = nailShading(dst, W, dMask, x0, y0, x1, y1, Math.max(2, Math.round(Math.max(...dF.prof) * 0.5)));
+  const bw = x1 - x0 + 1;
+  // 내 손톱 평균 밝기(명암 비율 기준)
+  let lsum = 0, ln = 0;
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (dMask[y * W + x]) { lsum += shadeL[(y - y0) * bw + x - x0]; ln++; }
+  const lmean = Math.max(1, lsum / Math.max(1, ln));
   const sL = sF.t1 - sF.t0;
   const samp = (px: number, py: number, out: number[]): void => {
     const x = Math.max(0, Math.min(sw - 1.001, px)), y = Math.max(0, Math.min(sh - 1.001, py));
@@ -159,11 +161,67 @@ export function transferNail(dst: Uint8ClampedArray, W: number, H: number, dMask
       const ss = v * 0.9 * hwAt(sF, u);
       samp(sF.cx + sF.ax * ts + snx * ss, sF.cy + sF.ay * ts + sny * ss, col);
       const o = (y * W + x) * 4;
-      const Ld = 0.2126 * dst[o] + 0.7152 * dst[o + 1] + 0.0722 * dst[o + 2];
+      const Ld = shadeL[(y - y0) * bw + x - x0];
       const shade = Math.pow(Math.max(0.2, Ld / lmean), shadeK);
       for (let c = 0; c < 3; c++) dst[o + c] = dst[o + c] + (Math.min(255, col[c] * shade) - dst[o + c]) * al;
     }
   }
+}
+
+/**
+ * 손톱 명암(빛·윤기)으로 쓸 밝기. 손톱의 주된 색(마스크 Lab 가운데 값)과 색이 다르거나 L 12 넘게 어두운 픽셀(드립·프렌치·스톤 같은 원래 무늬)은
+ * 조명이 아니라 칠한 색이므로, 둘레 반지름 [r] 안 주된 색 픽셀 밝기의 평균으로 바꾼다(a·b 거리 8~16 사이 섞음).
+ * (흰 바탕에 로즈골드 드립 손톱이면 드립 밝기가 평균의 0.3~0.5 라 새 네일에 원래 드립 무늬가 어둡게 비쳤다)
+ * 반환: 상자 [x0..x1]×[y0..y1] 크기의 밝기 배열.
+ */
+export function nailShading(rgba: Uint8ClampedArray, W: number, mask: Uint8Array, x0: number, y0: number, x1: number, y1: number, r: number): Float32Array {
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  const lum = new Float32Array(bw * bh), wb = new Float32Array(bw * bh);
+  const lv: number[] = [], av: number[] = [], bv: number[] = [];
+  const lab = new Float32Array(3);
+  const Lc = new Float32Array(bw * bh), A = new Float32Array(bw * bh), B = new Float32Array(bw * bh);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const o = (y * W + x) * 4, k = (y - y0) * bw + x - x0;
+    lum[k] = 0.2126 * rgba[o] + 0.7152 * rgba[o + 1] + 0.0722 * rgba[o + 2];
+    if (!mask[y * W + x]) continue;
+    rgb2lab(rgba[o], rgba[o + 1], rgba[o + 2], lab);
+    Lc[k] = lab[0]; A[k] = lab[1]; B[k] = lab[2];
+    lv.push(lab[0]); av.push(lab[1]); bv.push(lab[2]);
+  }
+  if (av.length < 20) return lum;
+  const med = (v: number[]) => v.sort((p, q) => p - q)[v.length >> 1];
+  const ml = med(lv), ma = med(av), mb = med(bv);
+  let other = 0;
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const k = (y - y0) * bw + x - x0;
+    if (!mask[y * W + x]) continue;
+    // 색 차이 + 주된 밝기보다 L 12 넘게 어두운 만큼(어두운 크롬·검은 선은 채도가 낮아 색만으로는 못 가림). 밝은 쪽(광택)은 그대로
+    const d = Math.hypot(A[k] - ma, B[k] - mb, Math.max(0, ml - Lc[k] - 12));
+    wb[k] = 1 - Math.min(1, Math.max(0, (d - 8) / 8));
+    if (wb[k] < 0.5) other++;
+  }
+  if (other < av.length * 0.03) return lum;
+  // 주된 색 픽셀만의 둘레 평균 밝기(적분 영상 두 장)
+  const S = new Float64Array((bw + 1) * (bh + 1)), N = new Float64Array((bw + 1) * (bh + 1));
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    const k = y * bw + x, j = (y + 1) * (bw + 1) + x + 1;
+    S[j] = lum[k] * wb[k] + S[j - 1] + S[j - bw - 1] - S[j - bw - 2];
+    N[j] = wb[k] + N[j - 1] + N[j - bw - 1] - N[j - bw - 2];
+  }
+  let gs = 0, gn = 0;
+  for (let k = 0; k < lum.length; k++) { gs += lum[k] * wb[k]; gn += wb[k]; }
+  const g = gs / Math.max(1e-6, gn);
+  const out = new Float32Array(lum);
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    const k = y * bw + x;
+    if (!mask[(y + y0) * W + x + x0] || wb[k] >= 1) continue;
+    const xa = Math.max(0, x - r), xb = Math.min(bw, x + r + 1), ya = Math.max(0, y - r), yb = Math.min(bh, y + r + 1);
+    const n = N[yb * (bw + 1) + xb] - N[ya * (bw + 1) + xb] - N[yb * (bw + 1) + xa] + N[ya * (bw + 1) + xa];
+    const s = S[yb * (bw + 1) + xb] - S[ya * (bw + 1) + xb] - S[yb * (bw + 1) + xa] + S[ya * (bw + 1) + xa];
+    const base = n > 1 ? s / n : g;
+    out[k] = lum[k] * wb[k] + base * (1 - wb[k]);
+  }
+  return out;
 }
 
 /**

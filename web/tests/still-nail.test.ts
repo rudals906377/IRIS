@@ -135,3 +135,27 @@ test('매니큐어 손톱 나누기: 두 손톱 + 사이 손가락 살을 한 �
   assert.equal(r.length, 1);
   assert.equal(r[0], one);
 });
+
+test('옮겨 그리기 명암: 내 손톱의 원래 무늬(어두운 크롬 드립)는 새 네일에 비치지 않고, 광택은 남음', () => {
+  // 고른 손톱: 고른 연보라
+  const SW = 80, SH = 120;
+  const sm = ellipse(SW, SH, 40, 60, 40, 15, Math.PI / 2);
+  const src = new Uint8ClampedArray(SW * SH * 4);
+  for (let i = 0; i < SW * SH; i++) src.set([170, 150, 230, 255], i * 4);
+  const sF = nailFrame(sm, SW, SH, { x: 0, y: -1 })!;
+  // 내 손톱: 흰 바탕(밝기 200)에 가는 어두운 갈색 드립(x 55~60) + 작은 흰 광택(x 70~72)
+  const W = 120, H = 80;
+  const dm = ellipse(W, H, 60, 40, 30, 14, 0);
+  const dst = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const c = x >= 55 && x <= 60 ? [70, 50, 45] : x >= 70 && x <= 72 && y >= 36 && y <= 44 ? [250, 250, 250] : [205, 198, 200];
+    dst.set([...c, 255], (y * W + x) * 4);
+  }
+  const dF = nailFrame(dm, W, H, { x: 1, y: 0 })!;
+  transferNail(dst, W, H, dm, dF, src, SW, SH, sF, 0.35);
+  const lum = (x: number, y: number) => { const o = (y * W + x) * 4; return 0.2126 * dst[o] + 0.7152 * dst[o + 1] + 0.0722 * dst[o + 2]; };
+  const base = lum(45, 40), drip = lum(57, 40), gloss = lum(71, 40);
+  // 전에는 드립 자리가 바탕보다 30% 어두워 원래 무늬가 그대로 비쳤다
+  assert.ok(drip > base * 0.93, `드립 ${drip.toFixed(0)} / 바탕 ${base.toFixed(0)}`);
+  assert.ok(gloss > base * 1.03, `광택 ${gloss.toFixed(0)} / 바탕 ${base.toFixed(0)}`);
+});
