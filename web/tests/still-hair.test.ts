@@ -253,3 +253,22 @@ test('머리 색 거르기: 가닥 사이 어두운 그늘(색이 옅음)은 남
   assert.ok(alpha[shade] > 0.9, `그늘 ${alpha[shade]}`);
   assert.ok(alpha[leaf] < 0.1, `초록 ${alpha[leaf]}`);
 });
+
+test('잔머리 더하기: 금발 옆 벽의 회색 그림자는 가닥으로 더하지 않고, 배경색~머리색 사이 가닥은 더한다', () => {
+  const w = 80, h = 60, n = w * h;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    const c = x < 30 ? [200, 160, 90] : [240, 240, 240];
+    rgba.set([...c, 255], i * 4);
+    alpha[i] = x < 30 ? 1 : 0;
+  }
+  // 벽 그림자(무채색 회색) 위쪽 줄, 가닥(벽과 금발 사이 색) 아래쪽 줄
+  for (let x = 32; x < 36; x++) {
+    for (let y = 10; y < 20; y++) rgba.set([170, 170, 170, 255], (y * w + x) * 4);
+    for (let y = 40; y < 50; y++) rgba.set([215, 192, 150, 255], (y * w + x) * 4);
+  }
+  flyaways(rgba, w, h, alpha, 12);
+  assert.ok(alpha[15 * w + 33] < 0.1, `그림자 ${alpha[15 * w + 33]}`);
+  assert.ok(alpha[45 * w + 33] > 0.25, `가닥 ${alpha[45 * w + 33]}`);
+});
