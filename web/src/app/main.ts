@@ -106,6 +106,14 @@ let loopbackFailures = 0;
 function setStatus(msg: string): void {
   statusEl.textContent = msg;
 }
+/** 모델 불러오기 안내: 다 불러오면 그 안내일 때만 지운다(그사이 뜬 다른 안내 — 타투가 옷에 가림 등 — 를 지우지 않게) */
+let modelMsg = '';
+function modelStatus(msg: string): void {
+  if (msg) {
+    modelMsg = msg;
+    setStatus(msg);
+  } else if (statusEl.textContent === modelMsg) setStatus('');
+}
 
 // ---- 입혀진 스타일 상태 ----
 
@@ -172,7 +180,7 @@ function applyTattooToEngine(): void {
   // 타투는 몸 관절점이 필요하다: 처음 켤 때 자세 추적을 켠다(모델을 한 번 내려받음)
   if (d && !trackerConfig.pose) {
     trackerConfig.pose = true;
-    if (running) void engine.tracker.configure(trackerConfig, setStatus).then(() => setStatus(''));
+    if (running) void engine.tracker.configure(trackerConfig, modelStatus).then(() => modelStatus(''));
   }
 }
 
@@ -207,7 +215,7 @@ function applyLookToEngine(): void {
   // 네일은 손 점이 필요하다: 처음 켤 때 손 추적을 켠다
   if (n.color && !trackerConfig.hands) {
     trackerConfig.hands = true;
-    if (running) void engine.tracker.configure(trackerConfig, setStatus).then(() => setStatus(''));
+    if (running) void engine.tracker.configure(trackerConfig, modelStatus).then(() => modelStatus(''));
   }
 }
 
@@ -791,7 +799,11 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   if (!body) return null;
   const legs = m[1] === 'thigh' || m[1] === 'calf';
   const a = armsOf(body.pose, body.skin, engine.source.width, engine.source.height, legs)[m[2] === 'L' ? 0 : 1];
-  if (!a.seen || a.vis < 0.4) return null;
+  if (!a.seen || a.vis < 0.4) {
+    // 관절점은 있는데 피부가 안 보이면(긴소매·바지) 굽어도 안 보인다: 아무 변화 없이 끝나 무엇이 잘못됐는지 몰랐다
+    if (a.vis >= 0.4 && !a.seen) tatNote = `고른 타투 자리(${legs ? '다리' : '팔'})가 내 사진에선 옷에 가려 보이지 않아요. 📍 자리 고르기로 보이는 피부에 놓아 보세요`;
+    return null;
+  }
   const arm = a.arm;
   const upLen = Math.hypot(arm.e.x - arm.s.x, arm.e.y - arm.s.y), loLen = Math.hypot(arm.w.x - arm.e.x, arm.w.y - arm.e.y);
   const first = m[1] === 'upperArm' || m[1] === 'thigh';
@@ -1133,7 +1145,11 @@ async function updateStillHair(): Promise<void> {
   const mkOn = !!(lastSource && lastStyle?.makeup && (mk.lip || mk.eye || mk.skin));
   const mkp = mkOn ? await makeupPlan() : null;
   const key = `${mkp ? `${mk.lip}:${mk.eye}:${mk.skin}` : 0}|${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen : 0}|${plan ? strength.toFixed(2) : 0}|${placed ? pk : ''}`;
-  if (key === stillHairKey && refHair?.src === lastSource) return;
+  if (key === stillHairKey && refHair?.src === lastSource) {
+    // 같은 결과면 다시 굽지 않지만, 타투를 못 옮긴 안내(옷에 가림 등)는 다른 안내에 지워졌을 수 있어 다시 띄운다
+    if (tatOn && !plan && tatNote) setStatus(tatNote);
+    return;
+  }
   // 작업이 곧바로 끝나는 경우(할 일 없음)에도 표시가 남지 않게, 끝난 뒤 '그 작업이면' 지운다
   // 굽는 사이(화장·타투 준비는 수십 초) 얼굴 바꾸기를 켰거나 내 사진을 바꿨으면 결과를 버린다
   const stale = () => swapMode || photoOriginal !== orig || engine.source.kind !== 'image';
