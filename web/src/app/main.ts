@@ -1338,6 +1338,15 @@ async function handSamImage(hp: { p: { x: number; y: number }[] }): Promise<SamI
  * 색으로 손톱 찾기: 피부·흰 바탕(바탕이 흰 사진만)·아주 어두운 곳을 뺀 픽셀을 색 상자로 묶고, 많은 색부터 그 색 덩어리 가운데를
  * SAM 으로 오려 손톱 모양(길쭉함·꽉 참)인 것이 가장 많은 색을 고른다. 손 점이 안 잡히는 가까운 손 사진용.
  */
+/** 두 마스크가 겹친 넓이 / 작은 쪽 넓이 */
+function overlapFrac(a: Uint8Array, b: Uint8Array): number {
+  let na = 0, nb = 0, ov = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i]) na++;
+    if (b[i]) { nb++; if (a[i]) ov++; }
+  }
+  return ov / Math.max(1, Math.min(na, nb));
+}
 async function nailsByColor(
   rgba: Uint8ClampedArray, w: number, h: number, getSam: () => Promise<SamImage>, status: string,
   region: { x0: number; y0: number; x1: number; y1: number }[] = [],
@@ -1416,8 +1425,8 @@ async function nailsByColor(
       }
       if (n >= 8) blobs.push({ n, x: (sx / n) * G + 2, y: (sy / n) * G + 2 });
     }
-    if (!blobs.length) continue;
     blobs.sort((a, b) => b.n - a.n);
+    if (!blobs.length) continue;
     setStatus(status);
     sam ??= await getSam();
     const got: { mask: Uint8Array; frame: NailFrame }[] = [];
@@ -1438,6 +1447,8 @@ async function nailsByColor(
       // 둘레(손가락 피부)와 색이 뚜렷이 달라야 손톱(손가락 사이 피부·그늘이 잡히는 것 막기)
       const ctr = maskContrast(rgba, w, h, r.mask);
       if (ctr < 8) continue;
+      // 한 손톱이 무늬(드립·프렌치)로 갈려 같은 색 덩어리 둘이면 SAM 이 같은 손톱을 두 번 오린다: 절반 넘게 겹치면 하나만
+      if (got.some((g) => overlapFrac(g.mask, r.mask) > 0.5)) continue;
       got.push({ mask: r.mask, frame: f });
       gotCtr += ctr;
     }
@@ -1598,15 +1609,22 @@ async function ensureNailsOnce(): Promise<void> {
       return { x0: Math.min(...xs) - m, y0: Math.min(...ys) - m, x1: Math.max(...xs) + m, y1: Math.max(...ys) + m };
     });
     let found = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…', boxes);
-    // 손 점으로 하나 이하만 찾았으면 손 점 자체가 어긋났을 수 있다: 손 둘레 안에서 못 찾으면 사진 전체에서
-    if (found.length < 2 && byPose.length <= 1 && boxes.length) {
-      found = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…');
-      boxes.length = 0;
+    // 손 점으로 하나 이하만 찾았으면 손 점 자체가 어긋났을 수 있다: 사진 전체에서도 찾아 더 많이 찾은 쪽
+    // (긴 네일 손을 가까이 찍으면 손 찾기가 구석에 작은 손을 잡아, 그 둘레만 세느라 위쪽 손톱 셋을 못 봤다)
+    if (byPose.length <= 1 && boxes.length) {
+      const all = await nailsByColor(base.rgba, base.w, base.h, () => mySamImage(), '손톱을 찾는 중…');
+      if (all.length > found.length) {
+        found = all;
+        boxes.length = 0;
+      }
     }
+    // 너무 큰 덩어리 기준: 사진의 3%, 단 찾은 손톱 넓이 가운데 값의 1.6배가 더 크면 그쪽(8%까지: 가까이 찍은 긴 네일은 하나가 사진의 4%)
+    const areas = found.map((n) => n.mask.reduce((t, v) => t + v, 0)).sort((x, y) => x - y);
+    const maxA = Math.max(base.w * base.h * 0.03, Math.min(base.w * base.h * 0.08, (areas[areas.length >> 1] ?? 0) * 1.6));
     for (const n of found) {
       let a = 0, sx = 0, sy = 0;
       for (let i = 0; i < n.mask.length; i++) if (n.mask[i]) { a++; sx += i % base.w; sy += (i / base.w) | 0; }
-      if (!a || a > base.w * base.h * 0.03) continue;
+      if (!a || a > maxA) continue;
       const cx = sx / a, cy = sy / a;
       if (boxes.length && !boxes.some((b) => cx >= b.x0 && cx <= b.x1 && cy >= b.y0 && cy <= b.y1)) continue;
       if (maskContrast(base.rgba, base.w, base.h, n.mask) >= 4) {
