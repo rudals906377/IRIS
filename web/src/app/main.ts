@@ -948,7 +948,20 @@ async function armTattooPlan(): Promise<TatPlan | null> {
           if (inside(ref.rect.x + ((x + 0.5) / ink.w) * ref.rect.w, ref.rect.y + ((y + 0.5) / ink.h) * ref.rect.h)) inT += a / 255;
         }
         dbgTat({ torsoFrac: inT / Math.max(1, total), refNose: rp.vis[0] });
-        if (inT > total * 0.5) {
+        // 팔꿈치를 둘 다 못 잡았으면(팔을 얼굴까지 든 셀카 등) 관절점이 팔을 놓쳐 어깨 사다리꼴이 팔을 덮는다:
+        // 잉크가 있는 피부 덩어리가 팔처럼 길쭉하면(길이 ≥ 굵기 3배) 몸통이 아니라 팔로 본다(배·손등에 소매 조각이 찍혔다)
+        let armLike = false;
+        if (Math.max(rp.vis[13], rp.vis[14]) < 0.5 && !ref.user) {
+          const found = findInk(ref.src);
+          const m = new Float32Array(ref.w * ref.h);
+          const av = ref.src.avoid;
+          for (let i = 0; i < m.length; i++) m[i] = Math.max(rs[i], ref.src.skin[i], found.ink[i], found.rimLine[i], av ? 1 - av[i] : 0);
+          const limb = limbRegion(m, ref.w, ref.h, ref.rect);
+          const st = limb ? armStrip(limb.mask, ref.w, ref.h, limb.box) : null;
+          armLike = !!st && st.len / (2 * st.mean) >= 3;
+          dbgTat({ armLike, armLen: st ? +(st.len / (2 * st.mean)).toFixed(2) : null });
+        }
+        if (inT > total * 0.5 && !armLike) {
           const mc = stillCanvas();
           const mp = await photoAnalyzer.pose(mc);
           const ms = await photoAnalyzer.bodySkin(mc);
