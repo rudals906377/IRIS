@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { bandMesh, faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 import { LOOKS, PALETTES } from '../src/beauty/palettes.ts';
 import { measureLimbWidth, placeFromPoint, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
-import { extractDesign } from '../src/beauty/tattoo-extract.ts';
+import { dropEdgeBits, extractDesign } from '../src/beauty/tattoo-extract.ts';
 
 type P = { x: number; y: number };
 const area = (pts: P[], tris: number[]): number => {
@@ -346,6 +346,23 @@ test('타투 도안 뽑기: 배율을 곱해 소수가 된 영역도 잉크를 �
   let ink = 0;
   for (let i = 3; i < r.rgba.length; i += 4) if (r.rgba[i] > 128) ink++;
   assert.ok(ink > 40, `잉크 ${ink}`);
+});
+
+test('타투 도안: 옷 곁에 떨어진 작은 그늘 조각은 지우고, 도안에 붙은 점·옷에서 먼 점은 남긴다', () => {
+  const w = 100, h = 100, full = new Float32Array(w * h * 4);
+  const put = (x0: number, y0: number, x1: number, y1: number) => { for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) full[(y * w + x) * 4 + 3] = 1; };
+  put(30, 30, 70, 70); // 도안
+  put(10, 5, 20, 9); // 옷 밑단 그늘(옷 곁, 떨어짐)
+  put(71, 50, 73, 52); // 도안에 붙은 점
+  put(85, 85, 88, 88); // 옷에서 먼 떨어진 점(장식)
+  const cloth = new Float32Array(w * h);
+  for (let y = 0; y < 12; y++) for (let x = 0; x < w; x++) cloth[y * w + x] = 1;
+  dropEdgeBits(full, w, h, cloth);
+  const a = (x: number, y: number) => full[(y * w + x) * 4 + 3];
+  assert.equal(a(15, 7), 0);
+  assert.equal(a(50, 50), 1);
+  assert.equal(a(72, 51), 1);
+  assert.equal(a(86, 86), 1);
 });
 
 test('두 색 아이섀도: 바깥 가중치 망은 눈꼬리 1 → 앞머리 0, 섀도 망과 같은 크기', () => {

@@ -266,6 +266,16 @@ export function extractDesign(src: InkSource, rect?: Rect | null, maxSide = 512)
     }
     if (sumG >= sumR * 0.3) break;
   }
+  // 옷 곁(짧은 변 2%): 옷 밑단 그늘 조각 가려내기용
+  let cloth: Float32Array | undefined;
+  if (src.avoid) {
+    const av = new Float32Array(n);
+    for (let i = 0; i < n; i++) av[i] = src.avoid[i] > 0.5 ? 1 : 0;
+    const avN = boxBlur(av, w, h, Math.max(2, short * 0.02));
+    cloth = new Float32Array(ow * oh);
+    for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) cloth[y * ow + x] = avN[(R.y + y) * w + R.x + x] > 0.05 ? 1 : 0;
+  }
+  dropEdgeBits(full, ow, oh, cloth);
   const s = Math.min(1, maxSide / Math.max(ow, oh));
   const tw = Math.max(1, Math.round(ow * s));
   const th = Math.max(1, Math.round(oh * s));
@@ -302,6 +312,56 @@ export function extractDesign(src: InkSource, rect?: Rect | null, maxSide = 512)
     }
   }
   return { rgba, w: tw, h: th, rect: R, inkMask };
+}
+
+/**
+ * 도안 한 덩어리(잉크 60% 이상)에서 떨어져(긴 변 1.5% 넘게) 영역 가장자리나 옷(cloth > 0) 곁에 걸린 작은 조각(잉크 10% 미만)을 지운다:
+ * 옷 밑단 바로 아래 그늘·주름 조각(팔에 옮기면 도안 위에 얼룩으로 뜬다).
+ * 소매처럼 여러 그림이 흩어진 도안은 한 덩어리가 60%가 안 되어 그대로 둔다. full: [r,g,b,a]×w×h(0~1), 제자리에서 고친다.
+ */
+export function dropEdgeBits(full: Float32Array, w: number, h: number, cloth?: Float32Array): void {
+  const n = w * h;
+  const a = new Float32Array(n);
+  for (let i = 0; i < n; i++) a[i] = full[i * 4 + 3];
+  // 가는 선 사이 틈은 이어 보도록 조금 넓혀서 덩어리를 나눈다
+  const wide = boxBlur(a, w, h, Math.max(1, Math.round(Math.max(w, h) * 0.01)));
+  const lab = new Int32Array(n).fill(-1);
+  const mass: number[] = [], edge: boolean[] = [];
+  const st: number[] = [];
+  for (let i0 = 0; i0 < n; i0++) {
+    if (lab[i0] >= 0 || wide[i0] < 0.03) continue;
+    const id = mass.length;
+    let m = 0, e = false;
+    lab[i0] = id;
+    st.push(i0);
+    while (st.length) {
+      const i = st.pop()!;
+      const x = i % w, y = (i / w) | 0;
+      m += a[i];
+      if (x < 2 || y < 2 || x >= w - 2 || y >= h - 2 || (cloth && cloth[i] > 0)) e = true;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const X = x + dx, Y = y + dy;
+        if (X < 0 || Y < 0 || X >= w || Y >= h) continue;
+        const j = Y * w + X;
+        if (lab[j] < 0 && wide[j] >= 0.03) { lab[j] = id; st.push(j); }
+      }
+    }
+    mass.push(m);
+    edge.push(e);
+  }
+  const tot = mass.reduce((s, v) => s + v, 0);
+  if (tot <= 0) return;
+  const big = mass.indexOf(Math.max(...mass));
+  if (mass[big] < tot * 0.6) return;
+  // 큰 덩어리에서 긴 변의 1.5% 넘게 떨어진 것만(도안에 붙은 장식·점은 남긴다)
+  const mainM = new Float32Array(n);
+  for (let i = 0; i < n; i++) mainM[i] = lab[i] === big ? 1 : 0;
+  const near = boxBlur(mainM, w, h, Math.max(1, Math.round(Math.max(w, h) * 0.015)));
+  const touch = mass.map(() => false);
+  for (let i = 0; i < n; i++) if (lab[i] >= 0 && near[i] > 0) touch[lab[i]] = true;
+  const drop = mass.map((m, k) => k !== big && edge[k] && !touch[k] && m < tot * 0.1);
+  if (!drop.some(Boolean)) return;
+  for (let i = 0; i < n; i++) if (lab[i] >= 0 && drop[lab[i]]) full[i * 4 + 3] = 0;
 }
 
 /**

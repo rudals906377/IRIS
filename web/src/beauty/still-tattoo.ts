@@ -74,6 +74,38 @@ function sampleInk(ink: InkMap, x: number, y: number, o: Float32Array): void {
   }
 }
 
+/**
+ * 잉크 맵을 f×f 칸 평균으로 줄인다(진하기로 가중한 색). 큰 도안을 작은 자리에 옮길 때 미리 줄여 두면
+ * 가는 선이 샘플 사이로 빠져 점·조각으로 깨지지 않고 옅게 이어진다. rect 는 그대로(남는 칸은 잉크 없음).
+ */
+export function inkMip(ink: InkMap, f: number): InkMap {
+  if (f < 2) return ink;
+  const w = Math.ceil(ink.w / f), h = Math.ceil(ink.h / f);
+  const d = ink.rgba, o = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let a = 0, r = 0, g = 0, b = 0;
+    for (let yy = y * f; yy < Math.min(ink.h, (y + 1) * f); yy++) for (let xx = x * f; xx < Math.min(ink.w, (x + 1) * f); xx++) {
+      const i = (yy * ink.w + xx) * 4, ai = d[i + 3];
+      a += ai; r += d[i] * ai; g += d[i + 1] * ai; b += d[i + 2] * ai;
+    }
+    const j = (y * w + x) * 4;
+    o[j + 3] = a / (f * f);
+    if (a > 0) { o[j] = r / a; o[j + 1] = g / a; o[j + 2] = b / a; } else o[j] = o[j + 1] = o[j + 2] = 255;
+  }
+  const r = ink.rect;
+  return { rgba: o, w, h, rect: { x: r.x, y: r.y, w: (r.w * w * f) / ink.w, h: (r.h * h * f) / ink.h } };
+}
+
+/** 줄이는 배율(사진 1px 당 고른 사진 px)에 맞춰 잉크 맵을 미리 줄인다 */
+function prepInk(ink: InkMap, refPx: number): InkMap {
+  return inkMip(ink, mipFactor(ink, refPx));
+}
+
+/** 사진 1px 이 잉크 맵 몇 칸에 걸치는지 → 미리 줄일 배수(2×2 나눠 뽑기에 맞춰 사진 1px 당 2칸 남김) */
+function mipFactor(ink: InkMap, refPx: number): number {
+  return Math.floor((refPx * ink.w) / ink.rect.w / 2);
+}
+
 /** 팔 마디 안(옆 반폭의 1.15배, 축 앞뒤 조금 여유)에 든 잉크 진하기 합 */
 export function inkOnArm(ink: InkMap, arm: Arm): { up: number; lo: number } {
   let up = 0, lo = 0;
@@ -103,6 +135,19 @@ export function transferArmInk(
     ? (g: number, t: number, s: number) => srcArm(g === 0 ? t * upLen : upLen + t * loLen, s)
     : (g: number, t: number, s: number) => (g === 0 ? at(srcArm.s, srcArm.e, srcArm.rUp, t, s) : at(srcArm.e, srcArm.w, srcArm.rLo, t, s));
   const out = new Uint8ClampedArray(dst);
+  // 줄여 옮기는 배율: 마디 몇 곳에서 내 사진 1px(길이·옆) 이 고른 사진 몇 px 인지
+  const steps: number[] = [];
+  for (let g = 0; g < 2; g++) for (const t of [0.2, 0.4, 0.6, 0.8]) {
+    const len = g === 0 ? upLen : loLen, r = g === 0 ? dstArm.rUp : dstArm.rLo;
+    if (len < 4 || r < 2) continue;
+    const p0 = refAt(g, t, 0), p1 = refAt(g, t + 1 / len, 0), p2 = refAt(g, t, 1 / r);
+    if (!p0 || !p1 || !p2) continue;
+    steps.push(Math.max(Math.hypot(p1.x - p0.x, p1.y - p0.y), Math.hypot(p2.x - p0.x, p2.y - p0.y)));
+  }
+  if (steps.length) {
+    steps.sort((a, b) => a - b);
+    ink = prepInk(ink, steps[steps.length >> 1]);
+  }
   // 피부 반짝임(작은 밝은 결): 밝기 - 흐린 밝기
   const L = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) L[i] = 0.299 * dst[i * 4] + 0.587 * dst[i * 4 + 1] + 0.114 * dst[i * 4 + 2];
@@ -383,6 +428,8 @@ export function transferTorsoInk(
   dst: Uint8ClampedArray, W: number, H: number, skin: Float32Array, ink: InkMap, toRef: number[], fromRef: number[], amount = 1,
 ): Uint8ClampedArray {
   const out = new Uint8ClampedArray(dst);
+  // 내 사진 1px → 고른 사진 몇 px(어파인 넓이 배율의 제곱근)
+  ink = prepInk(ink, Math.sqrt(Math.abs(toRef[0] * toRef[4] - toRef[1] * toRef[3])));
   const r = ink.rect;
   const cs = [{ x: r.x, y: r.y }, { x: r.x + r.w, y: r.y }, { x: r.x, y: r.y + r.h }, { x: r.x + r.w, y: r.y + r.h }].map((p) => apply(fromRef, p));
   const x0 = Math.max(0, Math.floor(Math.min(...cs.map((p) => p.x)))), x1 = Math.min(W - 1, Math.ceil(Math.max(...cs.map((p) => p.x))));
