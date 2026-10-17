@@ -441,12 +441,20 @@ export function strandTexture(
   let x0 = w, x1 = 0, y0 = h;
   for (let i = 0; i < n; i++) if (alpha[i] > 0.5) { const x = i % w, y = (i / w) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; }
   const crownX = (x0 + x1) / 2, crownY = y0 + (x1 - x0) * 0.15;
+  const cohOf = (i: number): number => {
+    const a = j11[i], b = j22[i], c = j12[i], tr = a + b;
+    return tr > 1e-3 ? Math.sqrt((a - b) * (a - b) + 4 * c * c) / tr : 0;
+  };
+  // 곱슬(아프로·컬): 머리 속 결 방향이 흩어진(일관성 0.2 아래) 픽셀이 많다(아프로 46%, 생머리·검은 짧은 머리 1~10%)
+  // → 정수리에서 뻗는 방향을 대신 쓰면 사방으로 뻗은 직선 줄무늬가 된다. 제 자리 방향으로 짧게만 문지른다
+  let nCore = 0, nLow = 0;
+  for (let i = 0; i < n; i++) if (alpha[i] >= 0.9) { nCore++; if (cohOf(i) < 0.2) nLow++; }
+  const coily = nCore > 0 ? Math.max(0, Math.min(1, (nLow / nCore - 0.2) / 0.15)) : 0;
   const dx = new Float32Array(n), dy = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     if (alpha[i] < 0.01) continue;
     const a = j11[i], b = j22[i], c = j12[i];
-    const tr = a + b;
-    const coh = tr > 1e-3 ? Math.sqrt((a - b) * (a - b) + 4 * c * c) / tr : 0;
+    const coh = cohOf(i);
     // 기울기 주방향 θ, 올 방향은 그에 수직
     const th = 0.5 * Math.atan2(2 * c, a - b) + Math.PI / 2;
     let ux = Math.cos(th), uy = Math.sin(th);
@@ -454,7 +462,7 @@ export function strandTexture(
     const pl = Math.hypot(px, py) || 1;
     const fx = px / pl, fy = py / pl;
     if (ux * fx + uy * fy < 0) { ux = -ux; uy = -uy; }
-    const k = Math.max(0, Math.min(1, (coh - 0.2) / 0.4));
+    const k = Math.max(coily, Math.min(1, (coh - 0.2) / 0.4));
     const vx = ux * k + fx * (1 - k), vy = uy * k + fy * (1 - k);
     const vl = Math.hypot(vx, vy) || 1;
     dx[i] = vx / vl;
@@ -466,7 +474,7 @@ export function strandTexture(
   for (let i = 0; i < n; i++) { sd = (sd * 1664525 + 1013904223) >>> 0; noise[i] = sd / 4294967296 - 0.5; }
   // width: 잡음 덩어리 반지름(가는 올 1px, 하이라이트 리본은 더 굵게), length: 흐름을 따라 문지르는 걸음 수
   const nz = boxBlur(noise, w, h, opt.width ?? 1);
-  const L = Math.max(6, Math.round(opt.length ?? Math.min(w, h) / 60));
+  const L = Math.max(6, Math.round((opt.length ?? Math.min(w, h) / 60) * (1 - 0.75 * coily)));
   const out = new Float32Array(n);
   let sum = 0, sum2 = 0, cnt = 0;
   for (let i = 0; i < n; i++) {

@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, colorGate, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair } from '../src/beauty/still-hair.ts';
+import { Q, colorGate, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -297,4 +297,32 @@ test('검은 머리 밝게 염색: 반쯤 섞인 가장자리(알파 0.5)는 검
   const ideal = (inner + 240) / 2;
   assert.ok(rim > ideal - 15, `가장자리 ${rim.toFixed(0)}, 기대 ${ideal.toFixed(0)}`);
   assert.ok(maxRim < Math.max(inner, 240) + 3, `가장자리 최대 ${maxRim.toFixed(0)}`);
+});
+
+test('올 무늬: 곱슬(결 방향이 흩어짐)은 정수리에서 사방으로 뻗는 긴 줄무늬가 아니라 짧은 결로', () => {
+  const w = 160, h = 120, n = w * h;
+  const alpha = new Float32Array(n).fill(1);
+  // 흩어진 작은 고리(곱슬): 방향이 제각각인 2~3px 점 무늬
+  let sd = 7;
+  const rnd = () => ((sd = (sd * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const luma = new Float32Array(n);
+  for (let k = 0; k < 900; k++) {
+    const cx = rnd() * w, cy = rnd() * h, r = 1.5 + rnd() * 1.5;
+    for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(h - 1, cy + r); y++) for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(w - 1, cx + r); x++) {
+      if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r) luma[y * w + x] = 60;
+    }
+  }
+  const t = strandTexture(luma, w, h, alpha, 3);
+  // 정수리(가운데 위)에서 바깥으로 6px 떨어진 픽셀끼리의 상관: 사방 줄무늬면 높다
+  const crownX = w / 2, crownY = 0.15 * w;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let y = 30; y < h - 10; y += 2) for (let x = 20; x < w - 20; x += 2) {
+    const px = x - crownX, py = y - crownY, pl = Math.hypot(px, py);
+    const x2 = Math.round(x + (px / pl) * 6), y2 = Math.round(y + (py / pl) * 6);
+    if (x2 < 0 || y2 < 0 || x2 >= w || y2 >= h) continue;
+    const a = t[y * w + x], b = t[y2 * w + x2];
+    sxy += a * b; sxx += a * a; syy += b * b;
+  }
+  const corr = sxy / Math.sqrt(sxx * syy);
+  assert.ok(corr < 0.3, `정수리 방향 상관 ${corr.toFixed(2)}`);
 });
