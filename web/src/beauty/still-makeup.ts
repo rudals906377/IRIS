@@ -132,6 +132,22 @@ export function transferMakeup(
   };
   myBase[1] = pct(myL[1], 0.05); rfBase[1] = pct(rfL[1], 0.05);
   myBase[2] = pct(myL[2], 0.5); rfBase[2] = pct(rfL[2], 0.5);
+  // 고른 사진에서 피부 바탕보다 L 25~40 넘게 어두운 곳(눈가·입술·눈썹 밖)은 화장이 아니다: 볼에 댄 손의 검은 손톱,
+  // 이마에 흘러내린 머리카락, 손가락 그늘. 손 지도에서 반쯤만 빠진 검은 손톱이 둘레 메우기에 섞여 볼에 회색 얼룩이 됐다
+  // (눈 둘레 전체·입술·눈썹·콧구멍은 원래 어둡다: 속눈썹·아이라인·입 안 선은 그대로 믿는다)
+  {
+    const nb = [64, 98, 240, 2, 460, 327, 294].map((k) => dp[k]);
+    const mg = fw * 0.03;
+    const nx0 = Math.min(...nb.map((p) => p.x)) - mg, nx1 = Math.max(...nb.map((p) => p.x)) + mg;
+    const ny0 = Math.min(...nb.map((p) => p.y)) - mg, ny1 = Math.max(...nb.map((p) => p.y)) + mg;
+    for (let i = 0; i < n; i++) {
+      if (V[i] <= 0) continue;
+      const x = i % w, y = (i / w) | 0;
+      if (x >= nx0 && x <= nx1 && y >= ny0 && y <= ny1) continue;
+      const zone = Math.max(lipB[i], ramp(zoneB[i], 0.02, 0.15), browM[i]);
+      V[i] *= 1 - ramp(rfBase[0][i] - rfL[0][i], 25, 40) * (1 - zone);
+    }
+  }
   const myLow = myL.map((c) => wblur(c, V, w, h, rL));
   const rfLow = rfL.map((c) => wblur(c, V, w, h, rL));
   // 화장 차이. 손·앞머리로 가려 고른 사진 화장을 모르는 곳(입술 위 손가락 등)은 둘레 값으로 메운다
