@@ -341,6 +341,12 @@ export class PhotoAnalyzer {
       all.sort((a, b) => widthOf(b) - widthOf(a));
       facePts = all[0] ?? null;
       out.faces = all.length;
+      // 전신 사진처럼 얼굴이 작아 못 찾으면 몸 관절점으로 머리를 잘라 다시(안 하면 그 사진 화장을 '없음'으로 읽어
+      // 얼굴 바꾸기에서 립·아이라인이 빠지고 화장 옮기기도 꺼졌다)
+      if (!facePts) {
+        facePts = await this.faceLandmarks(canvas).catch(() => null);
+        if (facePts) out.faces = 1;
+      }
     }
     let segMasks: SegMasks | null = null;
     if (wantHair || wantTattoo || wantNail || wantFace) {

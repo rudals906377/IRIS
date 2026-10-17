@@ -1818,7 +1818,11 @@ async function makeSwap(mine: ImageBitmap, ref: ImageBitmap): Promise<ImageBitma
   // (실시간 화장을 얹으면 고른 사진 화장 위에 둥근 블러셔가 겹쳐 무거워진다)
   setStatus('그 사진의 화장을 바뀐 얼굴에 옮기는 중…');
   await new Promise((r) => setTimeout(r, 30));
-  out = transferMakeup(out, rc.width, rc.height, rp, rd, rc.width, rc.height, rp, FACE_OVAL, mkAmounts(), skin, skin, hands, undefined, 1);
+  // 사진 분석이 화장을 못 읽었으면(전신 사진처럼 얼굴이 작아 화장 칩이 없음) 진하기만큼 모두 옮긴다:
+  // 얼굴 바꾸기는 그 사진 얼굴의 화장 차이를 그대로 옮기므로 잰 색이 필요 없다(안 하면 빨간 립·아이라인이 빠져 창백했다)
+  const v = Math.min(1, strength);
+  const amts = lastStyle?.makeup ? mkAmounts() : { lip: v, eye: v, skin: v };
+  out = transferMakeup(out, rc.width, rc.height, rp, rd, rc.width, rc.height, rp, FACE_OVAL, amts, skin, skin, hands, undefined, 1);
   const bmp = await createImageBitmap(new ImageData(out as unknown as Uint8ClampedArray<ArrayBuffer>, rc.width, rc.height));
   const myW = Math.hypot(mp[454].x - mp[234].x, mp[454].y - mp[234].y);
   swapSmall = fw / Math.max(1, myW) > 2;
