@@ -132,3 +132,31 @@ test('메이크업(얼굴 바꾸기): 내 얼굴 굴곡 그늘의 따뜻한 색�
   rgb2lab(out[o], out[o + 1], out[o + 2], b);
   assert.ok(b[1] - a[1] > -3, `붉은 기 변화 ${(b[1] - a[1]).toFixed(1)}`);
 });
+
+test('메이크업: 밝은 피부 사진의 장밋빛 립을 어두운 피부에 옮겨도 누렇고 어두운 벽돌색이 되지 않는다', () => {
+  const W = 200, H = 220;
+  const pts = face(100, 110, 60);
+  const my = new Uint8ClampedArray(W * H * 4), ref = new Uint8ClampedArray(W * H * 4);
+  const inLip = (x: number, y: number) => ((x - 100) / 17) ** 2 + ((y - 146) / 5) ** 2 < 1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4, lip = inLip(x, y);
+    // 웃는 입: 입술 안쪽 띠(입 안 선 둘레)에 흰 이
+    const tooth = lip && Math.abs(y - 145) <= 1 && Math.abs(x - 100) <= 9;
+    my.set(tooth ? [236, 232, 224, 255] : lip ? [112, 66, 60, 255] : [125, 82, 56, 255], o);
+    ref.set(lip ? [215, 125, 140, 255] : [236, 214, 204, 255], o);
+  }
+  const out = transferMakeup(my, W, H, pts, ref, W, H, pts, FACE_OVAL, { lip: 1, eye: 1, skin: 1 });
+  // 아랫입술 가운데(입 안 선은 y 146)
+  const lab = new Float32Array(3), o = (149 * W + 100) * 4;
+  rgb2lab(out[o], out[o + 1], out[o + 2], lab);
+  const L = lab[0], b = lab[2];
+  rgb2lab(my[o], my[o + 1], my[o + 2], lab);
+  const myL = lab[0];
+  // 고른 립은 붉고 노란 기가 적다(b ≈ 4): 내 입술(b ≈ 15)보다 노래지면 벽돌색, 내 입술보다 크게 어두우면 탁하다
+  assert.ok(b < 14, `입술 b ${b.toFixed(1)}`);
+  assert.ok(L > myL - 4, `입술 L ${L.toFixed(1)}, 원래 ${myL.toFixed(1)}`);
+  // 이는 분홍으로 물들지 않는다
+  const t = (145 * W + 104) * 4;
+  rgb2lab(out[t], out[t + 1], out[t + 2], lab);
+  assert.ok(lab[1] < 6, `이 a ${lab[1].toFixed(1)}`);
+});

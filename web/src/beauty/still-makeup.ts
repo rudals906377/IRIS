@@ -23,6 +23,8 @@ export interface MakeupAmounts {
 const BASE_SHIFT = 0.4;
 /** 화장 차이 범위(L, a, b) */
 const LIMIT: [number, number][] = [[-40, 18], [-5, 30], [-10, 14]];
+/** 입술에서 고른 사진 입술 색을 그대로 쓰는 몫(L, a, b) */
+const LIP_ABS = [0.35, 0.6, 0.6];
 
 const ramp = (v: number, a: number, b: number) => Math.max(0, Math.min(1, (v - a) / (b - a)));
 
@@ -151,7 +153,13 @@ export function transferMakeup(
       // 피부(입술·눈가 밖)는 노란 기를 3 넘게 빼지 않는다: 화장은 피부를 파랗게 만들지 않는데, 고른 사진 조명
       // (밝게 비친 콧등·이마는 하얗게, 즉 b 가 낮게 찍힌다)이 차이로 옮겨져 얼굴이 잿빛으로 떴다. 섀도·립은 차가운 색도 그대로
       const lo2 = c === 2 ? lo * zm - 3 * (1 - zm) : lo;
-      d[i] = Math.max(lo2, Math.min(hi, v));
+      // 입술: 립스틱은 입술 위에 얹는 색이라, 내 피부가 고른 사진보다 훨씬 어두우면 '고른 사진 피부와의 차이'를 옮길 때
+      // 내 피부의 누런 기와 큰 명암 차이가 그대로 더해진다(어두운 피부에 장밋빛 립 → 어둡고 누런 벽돌색).
+      // 그때만(피부 바탕 L 차이 10~22) 고른 사진 입술 색 그대로(내 잔무늬는 남김)를 밝기 35%·색 60% 섞는다.
+      // 피부 밝기가 비슷하면 차이 방식 그대로: 그대로 쓰면 고른 사진 조명(차가운 화이트밸런스)까지 옮겨져 입술이 회보라로 탁해진다
+      const kAbs = lipM[i] > 0 ? lipM[i] * ramp(rfBase[0][i] - myBase[0][i], 10, 22) : 0;
+      const va = kAbs > 0 ? v + (rfLow[c][i] - myLow[c][i] - v) * LIP_ABS[c] * kAbs : v;
+      d[i] = Math.max(lo2, Math.min(hi, va));
     }
     return d;
   });
@@ -242,12 +250,21 @@ export function transferMakeup(
     }
   }
   const frOn = ramp(nDots, 40, 80);
+  // 치아: 웃는 사진은 입 안 선이 보이는 이를 다 못 감싸 입술·피부 화장 자리에 이가 들어온다 → 입 둘레에서 내 입술 가운데
+  // 밝기보다 12~24 넘게 밝고 색이 옅은(채도 14~24 아래) 픽셀은 화장 색을 입히지 않는다(이가 분홍으로 물들었다)
+  let lipMedL = 0;
+  {
+    const v: number[] = [];
+    for (let i = 0; i < n; i += 2) if (lipM[i] > 0.5) v.push(myL[0][i]);
+    if (v.length) { v.sort((p, q) => p - q); lipMedL = v[v.length >> 1]; }
+  }
   if (dbg) dbg.nDots = nDots;
   // ⑤ 옮기기
   const o = new Uint8ClampedArray(4);
   for (let i = 0; i < n; i++) {
     // 눈 안(흰자·눈동자)은 어떤 화장도 옮기지 않는다
-    const keep = (1 - browM[i]) * ramp(Cf[i], 0.03, 0.15) * faceM[i] * (1 - ramp(openB[i], 0.5, 0.85));
+    const teeth = mouthB[i] > 0 && lipMedL > 0 ? ramp(mouthB[i], 0.2, 0.5) * ramp(myL[0][i] - lipMedL, 12, 24) * (1 - ramp(Math.hypot(myL[1][i], myL[2][i]), 14, 24)) : 0;
+    const keep = (1 - browM[i]) * ramp(Cf[i], 0.03, 0.15) * faceM[i] * (1 - ramp(openB[i], 0.5, 0.85)) * (1 - teeth);
     if (keep <= 0.002) continue;
     // 얼굴 위로 내려온 머리카락(피부 바탕보다 훨씬 어두운 픽셀)에는 화장 색을 입히지 않는다: 검은 앞머리가 붉게 물들었다
     // (눈가는 속눈썹·아이라인이라 빼지 않는다. 아이라인은 아래에서 따로 옮긴다)
