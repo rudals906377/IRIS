@@ -151,6 +151,8 @@ export function transferMakeup(
   const myLow = myL.map((c) => wblur(c, V, w, h, rL));
   const rfLow = rfL.map((c) => wblur(c, V, w, h, rL));
   // 화장 차이. 손·앞머리로 가려 고른 사진 화장을 모르는 곳(입술 위 손가락 등)은 둘레 값으로 메운다
+  const mouthNear = boxBlur(lipO, w, h, rf(0.06));
+  for (let i = 0; i < n; i++) mouthNear[i] = ramp(mouthNear[i], 0, 0.05);
   const D = [0, 1, 2].map((c) => {
     const d = new Float32Array(n);
     // 색은 바탕 차이(베이스 화장·톤)도 일부(BASE_SHIFT) 옮긴다. 다만 바탕이 없는 곳(입술·눈 안)은 그 자리 차이만
@@ -165,7 +167,11 @@ export function transferMakeup(
       const shade = ramp(myBase[0][i] - myLow[0][i], 2, 8) * (1 - zm);
       const wm = (skinOwn + (1 - skinOwn) * zm) * (1 - shade);
       // 바탕색 차이 몫은 ±3 까지만: 얼굴에만 입히므로 크면 귀·목과 갈려 가면처럼 보인다(빨간 조명 사진은 피부가 붉게 찍힌다)
-      const v = (rfLow[c][i] - rfBase[c][i]) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
+      // 고른 사진 쪽 그늘도 같다: 입술 밖 입 둘레(얼굴 폭 6% 안)에서 고른 피부 바탕보다 L 4~12 넘게 어두운 곳
+      // (아랫입술 밑·입꼬리 그늘)의 붉은 기는 화장이 아니라 그늘색이다(밝은 분홍빛 피부는 그늘이 붉다): 색 차이를 70%까지 덜 옮긴다.
+      // (아랫입술 밑 그늘(L −18, a +25)이 내 턱에 그대로 옮겨져 립이 번진 듯한 분홍 얼룩이 됐다. 볼 블러셔는 입 둘레 밖이라 그대로)
+      const rShade = c === 0 ? 0 : 0.7 * ramp(rfBase[0][i] - rfLow[0][i], 4, 12) * mouthNear[i] * (1 - ramp(lipB[i], 0.05, 0.5));
+      const v = (rfLow[c][i] - rfBase[c][i]) * (1 - rShade) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
       // 피부(입술·눈가 밖)는 노란 기를 3 넘게 빼지 않는다: 화장은 피부를 파랗게 만들지 않는데, 고른 사진 조명
       // (밝게 비친 콧등·이마는 하얗게, 즉 b 가 낮게 찍힌다)이 차이로 옮겨져 얼굴이 잿빛으로 떴다. 섀도·립은 차가운 색도 그대로
       const lo2 = c === 2 ? lo * zm - 3 * (1 - zm) : lo;
@@ -194,15 +200,27 @@ export function transferMakeup(
       }
     }
   }
-  // 가까운 둘레(얼굴 폭 6%)로 먼저, 손이 넓게 가린 곳은 먼 둘레(18%)로
+  // 가까운 둘레(얼굴 폭 6%)로 먼저, 손이 넓게 가린 곳은 먼 둘레(18%)로.
+  // 입술 밖은 입술 값을 빼고 메운다: 섞으면 턱에 댄 손가락으로 가린 아랫입술 밑이 립 색(a +15)으로 메워져
+  // 턱에 분홍 얼룩이 번졌다. 입술 자리는 지금처럼 둘레 전체로(눈가는 빼지 않는다: 눈 밑 블러셔가 볼 메우기에 필요)
+  const zoneW = new Float32Array(n), Vs = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    zoneW[i] = ramp(lipB[i], 0, 0.2);
+    Vs[i] = V[i] * (1 - zoneW[i]);
+  }
   const Df = D.map((d) => wblur(d, V, w, h, rf(0.06)));
   const Dg = D.map((d) => wblur(d, V, w, h, rf(0.18)));
-  const C1 = boxBlur(V, w, h, rf(0.06));
+  const Dfs = D.map((d) => wblur(d, Vs, w, h, rf(0.06)));
+  const Dgs = D.map((d) => wblur(d, Vs, w, h, rf(0.18)));
+  const C1 = boxBlur(V, w, h, rf(0.06)), C1s = boxBlur(Vs, w, h, rf(0.06));
   const Cf = boxBlur(V, w, h, rf(0.18));
   const Vb = boxBlur(V, w, h, rf(0.012));
   for (let i = 0; i < n; i++) {
-    const v = ramp(Vb[i], 0.3, 0.9), c1 = ramp(C1[i], 0.05, 0.3);
-    for (let c = 0; c < 3; c++) D[c][i] = D[c][i] * v + (Df[c][i] * c1 + Dg[c][i] * (1 - c1)) * (1 - v);
+    const v = ramp(Vb[i], 0.3, 0.9), c1 = ramp(C1[i], 0.05, 0.3), c1s = ramp(C1s[i], 0.05, 0.3), z = zoneW[i];
+    for (let c = 0; c < 3; c++) {
+      const all = Df[c][i] * c1 + Dg[c][i] * (1 - c1), skin = Dfs[c][i] * c1s + Dgs[c][i] * (1 - c1s);
+      D[c][i] = D[c][i] * v + (all * z + skin * (1 - z)) * (1 - v);
+    }
     Vb[i] = v;
   }
   if (dbg) {

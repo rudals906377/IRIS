@@ -178,3 +178,23 @@ test('메이크업: 고른 사진 볼 위의 검은 것(손톱·머리카락)은
   rgb2lab(my[o], my[o + 1], my[o + 2], lab);
   assert.ok(L > lab[0] - 3, `볼 L ${L.toFixed(1)}, 원래 ${lab[0].toFixed(1)}`);
 });
+
+test('메이크업: 고른 사진 아랫입술 밑 붉은 그늘은 립이 아니다 — 내 턱에 분홍 얼룩으로 옮기지 않는다', () => {
+  const W = 200, H = 220;
+  const pts = face(100, 110, 60);
+  const my = new Uint8ClampedArray(W * H * 4), ref = new Uint8ClampedArray(W * H * 4);
+  const inLip = (x: number, y: number) => ((x - 100) / 17) ** 2 + ((y - 146) / 5) ** 2 < 1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4, lip = inLip(x, y);
+    my.set(lip ? [190, 130, 125, 255] : [215, 180, 160, 255], o);
+    // 고른 사진: 밝은 분홍빛 피부, 장밋빛 립, 아랫입술 바로 밑(y 152~158)에 붉은 그늘
+    const shade = !lip && y >= 152 && y <= 158 && Math.abs(x - 100) <= 12;
+    ref.set(lip ? [215, 125, 140, 255] : shade ? [200, 150, 150, 255] : [242, 224, 220, 255], o);
+  }
+  const out = transferMakeup(my, W, H, pts, ref, W, H, pts, FACE_OVAL, { lip: 1, eye: 1, skin: 1 });
+  const lab = new Float32Array(3), o = (155 * W + 100) * 4;
+  rgb2lab(out[o], out[o + 1], out[o + 2], lab);
+  const a = lab[1];
+  rgb2lab(my[o], my[o + 1], my[o + 2], lab);
+  assert.ok(a < lab[1] + 6, `아랫입술 밑 a ${a.toFixed(1)}, 원래 ${lab[1].toFixed(1)}`);
+});
