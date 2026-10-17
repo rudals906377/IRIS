@@ -1534,15 +1534,15 @@ async function ensureNailsOnce(): Promise<void> {
   }
   if (nailsAuto === photoOriginal) return;
   nailsAuto = photoOriginal;
-  // 손 점이 잡힐 때까지 잠깐
-  // 실제 시간으로 2초까지만(큰 사진은 기다림 한 번이 길어진다)
-  const th0 = performance.now();
-  while (!engine.lastHands.length && performance.now() - th0 < 2000) await new Promise((r) => setTimeout(r, 100));
-  // 실시간 손 추적이 못 잡으면(손만 가까이 찍힌 사진 등) 사진용 손 찾기(크기·여백 바꿔 여러 번)로
-  let handsMine = engine.lastHands;
+  // 사진용 손 찾기(정지 사진 모드, 크기·여백 바꿔 여러 번)를 먼저: 실시간 추적은 영상용이라 사진에서도 실행 때마다
+  // 손 점이 조금씩 달라(긴 네일 손은 한곳에 몰리기도) 찾는 손톱 수가 2~4개로 들쭉날쭉했다.
+  // 못 찾으면 실시간 손 점이 잡힐 때까지 잠깐(실제 시간으로 2초까지만: 큰 사진은 기다림 한 번이 길어진다)
+  photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+  let handsMine = await photoAnalyzer.handPoints(stillCanvas()).catch(() => []);
   if (!handsMine.length) {
-    photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
-    handsMine = await photoAnalyzer.handPoints(stillCanvas()).catch(() => []);
+    const th0 = performance.now();
+    while (!engine.lastHands.length && performance.now() - th0 < 2000) await new Promise((r) => setTimeout(r, 100));
+    handsMine = engine.lastHands;
   }
   // 사진은 거울상이 아니라 왼손·오른손 판단이 뒤바뀌기도 한다: 손등 방향 두 가지 중 손톱이 더 잘 보이는 쪽
   const quads = handsMine.flatMap(bestQuads).filter((q) => q.vis > 0.3);
