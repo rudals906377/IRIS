@@ -265,16 +265,67 @@ export function swapFace(
     gA.push(sw > 0 ? sa / sw : 0); gB.push(sw > 0 ? sb / sw : 0);
     mA.push(boxBlur(a, W, H, rb)); mB.push(boxBlur(b, W, H, rb));
   }
+  // 중간 크기 그늘(얼굴 폭 4~12%: 콧대 옆 그림자·한쪽 볼 그늘)은 내 사진 조명이다: 고른 사진의 같은 크기 명암으로 바꾼다.
+  // 내 얼굴은 이미 고른 사진 얼굴 모양으로 휘어 있어 고른 사진 명암이 제자리(코·볼)에 놓인다. 이목구비(눈·눈썹·입술·콧구멍)는
+  // 원래 어두워 조명이 아니므로 흐림에서 빼고 둘레 피부 명암으로 잰다.
+  // (옆에서 센 빛을 받은 내 사진을 부드러운 빛의 사진에 넣으면 콧대 옆 검은 띠·반쪽 그늘이 얼룩처럼 남았다)
+  const rs = Math.max(2, Math.round(fw * 0.025));
+  const featM = new Float32Array(W * H);
+  if (N >= 468) {
+    for (const ids of [[...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)], [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)], [...BROW_R_LOWER, ...BROW_R_UPPER], [...BROW_L_LOWER, ...BROW_L_UPPER], LIPS_OUTER, [64, 98, 240, 2, 460, 327, 294, 4]]) {
+      const m = fillPoly(ids.map((k) => dp[k]), W, H);
+      for (let i = 0; i < m.length; i++) if (m[i]) featM[i] = 1;
+    }
+  }
+  const featW = boxBlur(featM, W, H, Math.max(1, Math.round(fw * 0.015)));
+  const sw2 = new Float32Array(W * H), lv = new Float32Array(W * H), ld = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    sw2[i] = wt[i] * (1 - Math.min(1, featW[i] * 2));
+    lv[i] = labV[i * 3] * sw2[i];
+    ld[i] = labD[i * 3] * sw2[i];
+  }
+  const sS = boxBlur(sw2, W, H, rs), sL = boxBlur(sw2, W, H, rb);
+  const vS = boxBlur(lv, W, H, rs), vL = boxBlur(lv, W, H, rb), dS = boxBlur(ld, W, H, rs), dL = boxBlur(ld, W, H, rb);
+  // 내 쪽 색(2.5% 흐림)이 둘레 피부(12%)와 같은 색조·채도면 그늘, 채도가 크게 낮으면(수염 자국·짙은 눈썹 둘레) 그늘이 아니다:
+  // 수염 자국까지 밝혀 푸른 잿빛 얼룩이 됐다
+  const av = new Float32Array(W * H), bv = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) { av[i] = labV[i * 3 + 1] * sw2[i]; bv[i] = labV[i * 3 + 2] * sw2[i]; }
+  const aS = boxBlur(av, W, H, rs), bS = boxBlur(bv, W, H, rs), aL = boxBlur(av, W, H, rb), bL = boxBlur(bv, W, H, rb);
+  // 내 사진 그늘이 고른 사진보다 뚜렷이 셀 때만(옆에서 센 빛: 중간 크기 명암 표준편차 비 1.6~2.2 넘게): 보통 사진끼리는
+  // 밝힌 그늘의 붉은 기(콧볼 옆)가 주황빛으로 떠서 그대로 두는 편이 자연스럽다
+  let shadeOn = 0;
+  {
+    let n = 0, s1 = 0, s2 = 0;
+    for (let i = 0; i < W * H; i += 2) {
+      if (sw2[i] < 0.5 || sS[i] < 0.2 || sL[i] < 0.2) continue;
+      const a1 = vS[i] / sS[i] - vL[i] / sL[i], a2 = dS[i] / sS[i] - dL[i] / sL[i];
+      s1 += a1 * a1; s2 += a2 * a2; n++;
+    }
+    if (n > 50) shadeOn = Math.max(0, Math.min(1, (Math.sqrt(s1 / n) / Math.max(0.5, Math.sqrt(s2 / n)) - 1.6) / 0.6));
+  }
   const o3 = new Uint8ClampedArray(3);
   for (let i = 0; i < W * H; i++) {
     const m = mask[i];
     if (m <= 0.002) continue;
+    // 두 크기 흐림 모두 피부가 충분할 때만(가장자리·가린 곳은 지금처럼)
+    let ok = shadeOn * Math.min(1, sS[i] / 0.2) * Math.min(1, sL[i] / 0.2);
+    if (ok > 0) {
+      const as = aS[i] / sS[i], bs = bS[i] / sS[i], al = aL[i] / sL[i], bl = bL[i] / sL[i];
+      const cs = Math.hypot(as, bs), cl = Math.hypot(al, bl);
+      const cosH = cs > 1e-3 && cl > 1e-3 ? (as * al + bs * bl) / (cs * cl) : 1;
+      // 채도 비 0.5~0.8, 색조 차 25~45°
+      ok *= Math.max(0, Math.min(1, (cs / Math.max(1e-3, cl) - 0.5) / 0.3)) * Math.max(0, Math.min(1, (cosH - 0.707) / (0.906 - 0.707)));
+    }
+    const devMy = ok > 0 ? vS[i] / sS[i] - vL[i] / sL[i] : 0, devRef = ok > 0 ? dS[i] / sS[i] - dL[i] / sL[i] : 0;
     const t = Math.min(1, wb[i] / 0.15);
     const ma = [0, 1, 2].map((c) => t * (mA[c][i] / (wb[i] + 1e-6)) + (1 - t) * gA[c]);
     const mb = [0, 1, 2].map((c) => t * (mB[c][i] / (wb[i] + 1e-6)) + (1 - t) * gB[c]);
     const s = Math.max(0.7, Math.min(1.5, (mb[0] + 16) / (ma[0] + 16)));
-    const L = mb[0] + (labV[i * 3] - ma[0]) * s;
-    lab2rgb(Math.max(0, Math.min(100, L)), labV[i * 3 + 1] + mb[1] - ma[1], labV[i * 3 + 2] + mb[2] - ma[2], o3, 0);
+    const L0 = mb[0] + (labV[i * 3] - ma[0]) * s;
+    const L = L0 + (devRef - devMy * s) * ok;
+    // 그늘을 밝힌 만큼 색도도 같이(그늘진 피부는 색도가 낮다): 밝기만 올리면 어두운 피부가 잿빛 얼룩이 됐다
+    const kc = Math.max(0.9, Math.min(1.1, (Math.max(0, L) + 16) / (Math.max(0, L0) + 16)));
+    lab2rgb(Math.max(0, Math.min(100, L)), (labV[i * 3 + 1] + mb[1] - ma[1]) * kc, (labV[i * 3 + 2] + mb[2] - ma[2]) * kc, o3, 0);
     for (let c = 0; c < 3; c++) {
       const d0 = dst[i * 4 + c];
       out[i * 4 + c] = d0 + (o3[c] - d0) * m;

@@ -113,3 +113,36 @@ test('얼굴 바꾸기: 어두운 피부 → 밝은 피부 사진이어도 명�
   const o = (40 * W + 60) * 4;
   assert.ok(Math.min(out[o], out[o + 1], out[o + 2]) < 250, `반사 ${out[o]},${out[o + 1]},${out[o + 2]}`);
 });
+
+test('얼굴 바꾸기: 옆에서 센 빛을 받은 내 사진의 그늘 띠(콧대 옆)는 고른 사진의 고른 빛에 맞춰 옅어진다', () => {
+  const mk = (cx: number, cy: number, r: number) => {
+    const p = [];
+    for (let i = 0; i < 468; i++) {
+      if (i < 36) p.push({ x: cx + r * Math.cos((i / 36) * Math.PI * 2), y: cy + r * Math.sin((i / 36) * Math.PI * 2) });
+      else { const k = i - 36; p.push({ x: cx + ((k % 21) / 20 - 0.5) * r, y: cy + ((Math.floor(k / 21) % 21) / 20 - 0.5) * r }); }
+    }
+    return p;
+  };
+  const oval = Array.from({ length: 36 }, (_, i) => i);
+  const W = 160, H = 160;
+  const dp = mk(80, 80, 60), sp = mk(80, 80, 60);
+  dp[234] = dp[18]; dp[454] = dp[0]; sp[234] = sp[18]; sp[454] = sp[0];
+  // 고른 사진: 고르게 밝은 피부 / 내 얼굴: 밝은 피부에 세로 그늘 띠(x 88~93, 가는 잔무늬 ±6)
+  const dst = new Uint8ClampedArray(W * H * 4);
+  const src = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4;
+    dst.set([220, 185, 165, 255], o);
+    const v = (x >= 88 && x <= 93 ? 95 : 200) + (Math.floor(y / 2) % 2 ? 6 : -6);
+    src.set([v, Math.round(v * 0.82), Math.round(v * 0.7), 255], o);
+  }
+  // 짙은 그늘은 내 피부 분할이 반쯤만 잡는다
+  const mySkin = new Float32Array(W * H).fill(1);
+  for (let y = 0; y < H; y++) for (let x = 88; x <= 93; x++) mySkin[y * W + x] = 0.5;
+  // 가짜 얼굴 점은 격자라 이목구비 다각형이 얼굴을 덮는다: 점 460개만 넘겨 이목구비 빼기는 건너뛴다
+  const out = swapFace(dst, W, H, dp.slice(0, 460), src, W, H, sp.slice(0, 460), oval, null, null, mySkin);
+  const lum = (x: number, y: number) => { let s = 0; for (let k = -2; k <= 2; k++) { const o = ((y + k) * W + x) * 4; s += 0.299 * out[o] + 0.587 * out[o + 1] + 0.114 * out[o + 2]; } return s / 5; };
+  // 띠 가운데와 옆 피부 차이: 원래 루마 ≈ 90 → 고른 사진 고른 빛에 맞춰 30 아래로
+  const gap = lum(70, 80) - lum(90, 80);
+  assert.ok(gap < 30, `그늘 띠 차이 ${gap.toFixed(0)}`);
+});
