@@ -190,6 +190,9 @@ export function hintsFromStyleAI(r: StyleAIResult): StyleHints {
       if (place && pm[place]) t.place = pm[place];
       else if (place && /허벅지/.test(place)) t.place = 'thighL';
       else if (place && /종아리|정강이|발목|다리/.test(place)) t.place = 'calfL';
+      // 몸통(옆구리·갈비뼈·등·가슴·배·허리): 몸통 자리는 하나(chest)뿐이라 그리로. 매기지 않으면 기본 자리(아래팔)로 남아
+      // 관절점을 못 찾은 옆구리 사진의 몸통이 '팔'로 읽혀 도안이 아래팔에 조각나 늘어났다
+      else if (place && /옆구리|갈비|등|가슴|배|허리|복부/.test(place)) t.place = 'chest';
       const size = get('size');
       if (size === '미니') t.size = 0.15;
       else if (size === '스몰') t.size = 0.3;

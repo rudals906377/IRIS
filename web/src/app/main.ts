@@ -1149,7 +1149,7 @@ async function updateStillHair(): Promise<void> {
     if (arm) {
       tattoo.place = arm;
       tattoo.along = tattoo.across = undefined;
-      tatNote = '고른 타투 자리(가슴·목)가 내 사진에선 옷에 가려 있어요. 보이는 팔에 미리 보여 드려요(📍 자리 고르기로 옮길 수 있어요)';
+      tatNote = '고른 타투 자리(몸통·목)가 내 사진에선 옷에 가려 있어요. 보이는 팔에 미리 보여 드려요(📍 자리 고르기로 옮길 수 있어요)';
       applyTattooToEngine();
     }
   }
