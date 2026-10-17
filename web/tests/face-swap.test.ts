@@ -80,3 +80,36 @@ test('휘기: 내 쪽 삼각형이 뒤집히면(고개 돌린 사진에서 가�
   assert.equal(same.fold[i], 0);
   assert.equal(mirror.fold[i], 1);
 });
+
+test('얼굴 바꾸기: 어두운 피부 → 밝은 피부 사진이어도 명암 대비가 크게 부풀거나 밝은 곳이 하얗게 날아가지 않는다', () => {
+  const mk = (cx: number, cy: number, r: number) => {
+    const p = [];
+    for (let i = 0; i < 468; i++) {
+      if (i < 36) p.push({ x: cx + r * Math.cos((i / 36) * Math.PI * 2), y: cy + r * Math.sin((i / 36) * Math.PI * 2) });
+      else { const k = i - 36; p.push({ x: cx + ((k % 21) / 20 - 0.5) * r, y: cy + ((Math.floor(k / 21) % 21) / 20 - 0.5) * r }); }
+    }
+    return p;
+  };
+  const oval = Array.from({ length: 36 }, (_, i) => i);
+  const W = 120, H = 120;
+  const dp = mk(60, 60, 40), sp = mk(60, 60, 40);
+  dp[234] = dp[18]; dp[454] = dp[0]; sp[234] = sp[18]; sp[454] = sp[0];
+  // 고른 사진: 밝은 피부(215) / 내 얼굴: 어두운 피부(70, 가는 줄무늬 ±12) + 이마에 밝은 반사(140)
+  const dst = new Uint8ClampedArray(W * H * 4).fill(215);
+  const src = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4;
+    const v = (x - 60) ** 2 + (y - 40) ** 2 < 16 ? 140 : (Math.floor(x / 2) % 2 ? 82 : 58);
+    src[o] = v; src[o + 1] = Math.round(v * 0.8); src[o + 2] = Math.round(v * 0.65); src[o + 3] = 255;
+  }
+  const out = swapFace(dst, W, H, dp, src, W, H, sp, oval);
+  const lum = (x: number, y: number) => { const o = (y * W + x) * 4; return 0.299 * out[o] + 0.587 * out[o + 1] + 0.114 * out[o + 2]; };
+  let mn = 255, mx = 0;
+  for (let x = 50; x < 70; x++) { const v = lum(x, 70); mn = Math.min(mn, v); mx = Math.max(mx, v); }
+  // 원래 줄무늬 대비(루마 ≈ 20)가 3배(비를 곱하던 때 ≈ 60)로 부풀지 않는다
+  assert.ok(mx - mn < 36, `무늬 대비 ${(mx - mn).toFixed(0)}`);
+  assert.ok(mx - mn > 10, `무늬는 남는다 ${(mx - mn).toFixed(0)}`);
+  // 반사 자리가 하얗게 날아가지 않는다
+  const o = (40 * W + 60) * 4;
+  assert.ok(Math.min(out[o], out[o + 1], out[o + 2]) < 250, `반사 ${out[o]},${out[o + 1]},${out[o + 2]}`);
+});

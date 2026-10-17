@@ -6,7 +6,7 @@
 // 순수 계산(DOM 없음).
 
 import { BROW_L_LOWER, BROW_L_UPPER, BROW_R_LOWER, BROW_R_UPPER, EYE_L_LOWER, EYE_L_UPPER, EYE_R_LOWER, EYE_R_UPPER, LIPS_INNER, LIPS_OUTER } from './face-regions.ts';
-import { boxBlur } from './still-hair.ts';
+import { boxBlur, lab2rgb, rgb2lab } from './still-hair.ts';
 
 export type P = { x: number; y: number };
 
@@ -238,26 +238,46 @@ export function swapFace(
   }
   const wb = boxBlur(wt, W, H, rb);
   const out = new Uint8ClampedArray(dst);
+  // 비를 RGB 에 곱하면 피부색이 크게 다른 두 사진(어두운 피부 → 밝은 피부, 비 2.5~3)에서 명암 대비까지 그만큼 커지고
+  // 밝은 곳은 하얗게 날아가 얼굴이 얼룩덜룩한 가면이 됐다 → Lab 에서 둘레 평균을 옮긴다:
+  // 색(a·b)은 평균 차이만큼 더하고, 밝기는 평균을 맞추되 대비는 (L+16) 비만큼만(0.7~1.5: 빛의 세기 비를 L 로 옮긴 몫)
+  const labV = new Float32Array(W * H * 3), labD = new Float32Array(W * H * 3);
+  const t3 = new Float32Array(3);
+  for (let i = 0; i < W * H; i++) {
+    if (mask[i] <= 0.002 && wt[i] <= 0) continue;
+    const v = cover[i] ? [warped[i * 3], warped[i * 3 + 1], warped[i * 3 + 2]] : [dst[i * 4], dst[i * 4 + 1], dst[i * 4 + 2]];
+    rgb2lab(Math.round(Math.max(0, Math.min(255, v[0]))), Math.round(Math.max(0, Math.min(255, v[1]))), Math.round(Math.max(0, Math.min(255, v[2]))), t3);
+    labV.set(t3, i * 3);
+    rgb2lab(dst[i * 4], dst[i * 4 + 1], dst[i * 4 + 2], t3);
+    labD.set(t3, i * 3);
+  }
+  const mA: Float32Array[] = [], mB: Float32Array[] = [], gA: number[] = [], gB: number[] = [];
   for (let c = 0; c < 3; c++) {
     const a = new Float32Array(W * H), b = new Float32Array(W * H);
-    let sa = 0, sb = 0;
+    let sa = 0, sb = 0, sw = 0;
     for (let i = 0; i < W * H; i++) {
-      b[i] = dst[i * 4 + c] * wt[i];
-      a[i] = (cover[i] ? warped[i * 3 + c] : dst[i * 4 + c]) * wt[i];
-      sa += a[i];
-      sb += b[i];
+      if (wt[i] <= 0) continue;
+      a[i] = labV[i * 3 + c] * wt[i];
+      b[i] = labD[i * 3 + c] * wt[i];
+      sa += a[i]; sb += b[i]; sw += wt[i];
     }
-    // 피부가 거의 없는 곳(가장자리)은 얼굴 전체 비를 쓴다
-    const gr = (sb + 4) / (sa + 4);
-    const ab = boxBlur(a, W, H, rb), bb = boxBlur(b, W, H, rb);
-    for (let i = 0; i < W * H; i++) {
-      const m = mask[i];
-      if (m <= 0.002) continue;
-      const v = cover[i] ? warped[i * 3 + c] : dst[i * 4 + c];
-      const t = Math.min(1, wb[i] / 0.15);
-      const r = t * ((bb[i] + 4 * wb[i]) / (ab[i] + 4 * wb[i] + 1e-6)) + (1 - t) * gr;
+    // 피부가 거의 없는 곳(가장자리)은 얼굴 전체 평균을 쓴다
+    gA.push(sw > 0 ? sa / sw : 0); gB.push(sw > 0 ? sb / sw : 0);
+    mA.push(boxBlur(a, W, H, rb)); mB.push(boxBlur(b, W, H, rb));
+  }
+  const o3 = new Uint8ClampedArray(3);
+  for (let i = 0; i < W * H; i++) {
+    const m = mask[i];
+    if (m <= 0.002) continue;
+    const t = Math.min(1, wb[i] / 0.15);
+    const ma = [0, 1, 2].map((c) => t * (mA[c][i] / (wb[i] + 1e-6)) + (1 - t) * gA[c]);
+    const mb = [0, 1, 2].map((c) => t * (mB[c][i] / (wb[i] + 1e-6)) + (1 - t) * gB[c]);
+    const s = Math.max(0.7, Math.min(1.5, (mb[0] + 16) / (ma[0] + 16)));
+    const L = mb[0] + (labV[i * 3] - ma[0]) * s;
+    lab2rgb(Math.max(0, Math.min(100, L)), labV[i * 3 + 1] + mb[1] - ma[1], labV[i * 3 + 2] + mb[2] - ma[2], o3, 0);
+    for (let c = 0; c < 3; c++) {
       const d0 = dst[i * 4 + c];
-      out[i * 4 + c] = d0 + (Math.max(0, Math.min(255, v * r)) - d0) * m;
+      out[i * 4 + c] = d0 + (o3[c] - d0) * m;
     }
   }
   // 크게 늘린 얼굴(내 사진 얼굴이 작음)은 피부결이 없어 매끈한 인형처럼 보인다 → 고른 사진 피부의 아주 작은 결(밝기 잔무늬)만 얹는다.
