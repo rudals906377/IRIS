@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, colorGate, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture } from '../src/beauty/still-hair.ts';
+import { Q, colorGate, fillInterior, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -325,4 +325,17 @@ test('올 무늬: 곱슬(결 방향이 흩어짐)은 정수리에서 사방으�
   }
   const corr = sxy / Math.sqrt(sxx * syy);
   assert.ok(corr < 0.3, `정수리 방향 상관 ${corr.toFixed(2)}`);
+});
+
+test('머리 속 채우기: 둘레가 다 머리카락인 곳의 덜 확신한 알파(0.85·구멍 0.5)는 1 로, 가장자리는 그대로', () => {
+  const w = 80, h = 60, n = w * h;
+  const a = new Float32Array(n);
+  // 머리 덩어리(x 10~69, y 5~54)는 알파 0.85, 가운데 12×8 구멍은 0.5, 바깥은 0
+  for (let y = 5; y < 55; y++) for (let x = 10; x < 70; x++) a[y * w + x] = x >= 34 && x < 46 && y >= 26 && y < 34 ? 0.5 : 0.85;
+  const edge = a[30 * w + 10];
+  fillInterior(a, w, h, 6);
+  assert.ok(a[30 * w + 40] > 0.97, `구멍 ${a[30 * w + 40].toFixed(2)}`);
+  assert.ok(a[15 * w + 25] > 0.97, `머리 속 ${a[15 * w + 25].toFixed(2)}`);
+  assert.equal(a[30 * w + 10], edge, '가장자리 그대로');
+  assert.equal(a[2 * w + 40], 0, '바깥 그대로');
 });

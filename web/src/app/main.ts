@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { boxBlur, closeHoles, colorGate, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, fillInterior, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { growNailMask, hullFill, maskContrast, nailFrame, splitPolished, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
@@ -716,6 +716,9 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   for (let i = 0; i < alpha.length; i++) alpha[i] = closed[i];
   // 가장자리에서 내 머리색과 다른 픽셀(어두운 배경)은 뺀다
   colorGate(rgba, alpha, coarse);
+  // 머리 속(둘레가 다 머리카락)은 알파를 1 쪽으로: 분할이 덜 확신한(뒤로 넘긴 머리) 머리 속이 0.85, 정수리 윤기는
+  // 색 거르기에서 0.5 로 빠져 원래 색이 비쳤다(밝게 염색하면 탁하고 가르마 옆이 회색 얼룩). 색 거르기 뒤에 한다
+  fillInterior(alpha, W, H, Math.max(4, Math.round(rect.size / 25)));
   // 밖으로 날린 가는 잔머리도 같이 물들인다(안 하면 밝은 염색에서 머리 둘레가 검은 테두리처럼 남는다)
   flyaways(rgba, W, H, alpha, rect.size / 20, faceP);
   // 가르마 두피·시스루 앞머리 사이 이마처럼 피부색인 곳은 덜 물들인다(밝게 염색하면 거친 밝은 얼룩이 됐다)

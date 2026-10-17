@@ -395,6 +395,21 @@ export function guidedFilter(guide: Float32Array, p: Float32Array, w: number, h:
 }
 
 /** 회색조 닫기(팽창 후 침식, 반지름 r): 알파 안의 작은 구멍(아주 어두운 머리카락 덩어리)을 메운다 */
+/**
+ * 머리 속(둘레 반지름 r 안이 거의 다 머리카락: 알파 0.35 이상 92~99.5%)은 알파를 1 쪽으로 채운다(제자리 수정).
+ * 머리를 뒤로 넘긴 머리처럼 분할이 덜 확신하면 머리 속 알파가 0.85 에 머물고 정수리 한쪽은 0.5 까지 떨어져,
+ * 밝게 염색하면 원래 갈색이 비쳐 전체가 탁하고 가르마 옆이 회색 얼룩이 됐다. 가장자리(둘레에 배경)는 그대로
+ */
+export function fillInterior(a: Float32Array, w: number, h: number, r: number): void {
+  const m = new Float32Array(a.length);
+  for (let i = 0; i < a.length; i++) m[i] = a[i] >= 0.35 ? 1 : 0;
+  const d = boxBlur(m, w, h, r);
+  for (let i = 0; i < a.length; i++) {
+    const k = Math.max(0, Math.min(1, (d[i] - 0.92) / 0.075));
+    if (k > 0 && a[i] >= 0.35) a[i] += (1 - a[i]) * k;
+  }
+}
+
 export function closeHoles(a: Float32Array, w: number, h: number, r: number): Float32Array {
   const pass = (src: Float32Array, horiz: boolean, max: boolean): Float32Array => {
     const out = new Float32Array(src.length);
