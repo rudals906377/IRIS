@@ -1397,10 +1397,18 @@ async function findRefNails(): Promise<void> {
       const len = f.t1 - f.t0, wid = 2 * Math.max(...f.prof);
       const elong = len / Math.max(1, wid), solid = area / Math.max(1, len * wid);
       if (elong < 1.1 || elong > 5 || solid < 0.5) continue;
+      // 둘레와 색이 거의 같으면 손톱이 아니다(손 점이 엉뚱한 곳에 잡혀 손등·배경 덩어리를 오렸다)
+      if (maskContrast(rgba, w, h, r.mask) < 8) continue;
       got.push({ mask: r.mask, frame: f });
     }
-    if (got.length >= 2) {
+    // 몇 개만 찾았으면(손 점이 일부만·엉뚱하게 잡힘) 색 덩어리 방식도 해 보고 더 많이 찾은 쪽을 쓴다
+    if (got.length >= 4) {
       refNails = { src, rgba, w, h, nails: got };
+      return;
+    }
+    if (got.length >= 2) {
+      const byColor = await nailsByColor(rgba, w, h, () => samImage(cv), '고른 사진에서 손톱을 찾는 중…');
+      refNails = { src, rgba, w, h, nails: byColor.length > got.length ? byColor : got };
       return;
     }
   }
