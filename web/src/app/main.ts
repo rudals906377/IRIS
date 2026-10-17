@@ -1529,10 +1529,12 @@ async function nailsByColor(
         // 무늬 칸은 손톱 안에 사방으로 테두리를 두고 들어 있고 손톱과 같은 방향이다: 넓힌 것이 한쪽(옆 손톱 쪽)으로만 늘어나거나
         // 방향이 틀어지면(가로로 이어진 두 손톱) 손톱이 아니다
         const f0 = nailFrame(r.mask, w, h, null, rgba);
-        if (!f0 || Math.abs(f0.ax * cf.ax + f0.ay * cf.ay) < 0.8) continue;
         const bb = (m: Uint8Array) => { let x0 = w, y0 = h, x1 = -1, y1 = -1; for (let i = 0; i < m.length; i++) if (m[i]) { const x = i % w, y = (i - x) / w; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } return [x0, y0, x1, y1]; };
         const bi = bb(r.mask), bo = bb(cm);
-        const mg = Math.max(2, 0.05 * Math.max(bo[2] - bo[0], bo[3] - bo[1]));
+        // 사방 여백은 넓힌 상자의 3%(옆 손톱으로 늘어난 것은 한쪽 여백이 0~1px, 무늬 칸은 12px 넘게), 방향은 코사인 0.6 넘게
+        // (무늬 칸은 둥글어 손톱 축과 30° 남짓 어긋나기도 한다)
+        const mg = Math.max(2, 0.03 * Math.max(bo[2] - bo[0], bo[3] - bo[1]));
+        if (!f0 || Math.abs(f0.ax * cf.ax + f0.ay * cf.ay) < 0.6) continue;
         if (bi[0] - bo[0] < mg || bi[1] - bo[1] < mg || bo[2] - bi[2] < mg || bo[3] - bi[3] < mg) continue;
         r.mask = cm;
         area = ca;
