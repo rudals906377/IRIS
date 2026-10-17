@@ -255,8 +255,7 @@ export function recolorHair(
     for (let i = 0; i < w * h; i++) {
       if (U[i] < 0) continue;
       if (luma[i] < 24) dark++;
-      // 순위는 머리 속(알파 0.8 이상)에서만 빌린다: 가장자리는 배경이 섞여 밝아 높은 순위라, 빌리면 테두리 검정이 하얀 선이 됐다
-      else if (alpha[i] >= 0.8) { ok[i] = 1; uv[i] = U[i]; }
+      else { ok[i] = 1; uv[i] = U[i]; }
     }
     if (dark > 0) {
       const r = Math.max(4, Math.round(Math.min(w, h) / 60));
@@ -270,19 +269,6 @@ export function recolorHair(
         const fill = Math.max(U[i], near * 0.85);
         U[i] += (fill - U[i]) * k;
       }
-    }
-  }
-  // 가장자리(알파 0.8 아래)는 배경·피부가 섞여 제 밝기 순위가 부풀어 있다: 둘레 머리 속 순위 +0.1 까지만
-  // (검은 짧은 머리를 밝게 염색하면 머리 둘레가 가장 밝은 머리색 = 하얀 테두리가 됐다)
-  {
-    const cm = new Float32Array(w * h), cu = new Float32Array(w * h);
-    for (let i = 0; i < w * h; i++) if (U[i] >= 0 && alpha[i] >= 0.8 && luma[i] >= 24) { cm[i] = 1; cu[i] = U[i]; }
-    const r = Math.max(3, Math.round(Math.min(w, h) / 80));
-    const cd = boxBlur(cm, w, h, r), cn = boxBlur(cu, w, h, r);
-    for (let i = 0; i < w * h; i++) {
-      if (U[i] < 0 || alpha[i] >= 0.8 || cd[i] < 0.02) continue;
-      const cap = cn[i] / cd[i] + 0.1;
-      if (U[i] > cap) U[i] = cap;
     }
   }
   // (리본은 순위를 위로만 미므로 다시 고르게 펴지 않는다: 펴면 가장 어두운 쪽이 다른 픽셀로 바뀌어 검은 점이 생긴다)
