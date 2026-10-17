@@ -531,17 +531,6 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
     const s = (bg - luma[i]) / c;
     alpha[i] *= Math.max(0, Math.min(1, (s - 0.1) / 0.35));
   }
-  // 색까지 본다: 가닥은 배경색과 머리색 사이(그 선 위)에 있다. 벽에 진 회색 그림자는 밝기만 내려가 선에서 벗어난다
-  // (밝은 금발을 검게 염색하면 머리 옆 벽 그림자가 검은 얼룩이 됐다)
-  const hc = [0, 0, 0];
-  let hn = 0;
-  for (let i = 0; i < n; i += 3) if (alpha[i] >= 0.9) { hc[0] += rgba[i * 4]; hc[1] += rgba[i * 4 + 1]; hc[2] += rgba[i * 4 + 2]; hn++; }
-  for (let c = 0; c < 3; c++) hc[c] /= Math.max(1, hn);
-  const bgc = [0, 1, 2].map((c) => {
-    const v = new Float32Array(n);
-    for (let i = 0; i < n; i++) if (bgw[i]) v[i] = rgba[i * 4 + c];
-    return boxBlur(v, w, h, r);
-  });
   for (let i = 0; i < n; i++) {
     if (alpha[i] >= 0.5 || near[i] <= 0 || den[i] < 0.15 || (block && block[i] > 0.4)) continue;
     const bg = num[i] / den[i];
@@ -550,17 +539,8 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
     if (Math.abs(c) < 25) continue;
     const s = Math.max(0, Math.min(1, ((bg - luma[i]) / c - 0.25) / 0.55));
     if (s <= 0) continue;
-    // 배경색 → 머리색 선에서 벗어난 거리(RGB), 선 길이의 15%(최소 10) 넘게 벗어나면 덜, 2배면 가닥이 아니다
-    const b0 = bgc[0][i] / den[i], b1 = bgc[1][i] / den[i], b2 = bgc[2][i] / den[i];
-    const d0 = hc[0] - b0, d1 = hc[1] - b1, d2 = hc[2] - b2, dl2 = d0 * d0 + d1 * d1 + d2 * d2;
-    const q0 = rgba[i * 4] - b0, q1 = rgba[i * 4 + 1] - b1, q2 = rgba[i * 4 + 2] - b2;
-    const t = Math.max(0, Math.min(1, (q0 * d0 + q1 * d1 + q2 * d2) / Math.max(1, dl2)));
-    const off = Math.hypot(q0 - d0 * t, q1 - d1 * t, q2 - d2 * t);
-    const lim = Math.max(10, Math.sqrt(dl2) * 0.15);
-    const cs = Math.max(0, Math.min(1, 1 - (off - lim) / lim));
-    if (cs <= 0) continue;
     const prox = Math.min(1, near[i] * 20);
-    alpha[i] = Math.max(alpha[i], s * prox * cs);
+    alpha[i] = Math.max(alpha[i], s * prox);
   }
 }
 
