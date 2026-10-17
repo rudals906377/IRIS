@@ -859,11 +859,11 @@ async function coveredTorsoArm(): Promise<'forearmL' | 'forearmR' | null> {
 }
 let tatPlanOk = false;
 /** 다리 타투용 피부: 두 팔·손 자리를 뺀다(다리 앞에 놓인 손·손목에 다리 타투가 칠해졌음) */
-function legSkin(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Float32Array, W: number, H: number): Float32Array {
+function legSkin(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Float32Array, W: number, H: number, handsOnly = false): Float32Array {
   const caps: { a: { x: number; y: number }; b: { x: number; y: number }; r: number }[] = [];
   armsOf(pose, skin, W, H).forEach(({ arm }, k) => {
     const P = pose.p;
-    caps.push({ a: arm.s, b: arm.e, r: arm.rUp * 1.15 }, { a: arm.e, b: arm.w, r: arm.rLo * 1.15 });
+    if (!handsOnly) caps.push({ a: arm.s, b: arm.e, r: arm.rUp * 1.15 }, { a: arm.e, b: arm.w, r: arm.rLo * 1.15 });
     // 손: 새끼·검지 뿌리 가운데 쪽으로 손가락 끝까지(손 점이 안 보이면 아래팔 방향으로)
     const [pk, ix] = k === 0 ? [17, 19] : [18, 20];
     const handOk = Math.min(pose.vis[pk] ?? 0, pose.vis[ix] ?? 0) > 0.3;
@@ -988,7 +988,8 @@ async function armTattooPlan(): Promise<TatPlan | null> {
             dbgTat({ torsoVisible: torsoVis });
           }
           // 가려 있으면 몸통은 건너뛰고 아래 팔 대 팔로(가슴·팔 같이 있는 사진의 소매는 옮길 수 있다)
-          if (torsoVis >= 0.25) return { torso: { toRef, fromRef }, skin: ms, ink };
+          // 몸통 도안은 손에는 굽지 않는다(허리에 얹은 손등에 글씨가 찍혔다)
+          if (torsoVis >= 0.25) return { torso: { toRef, fromRef }, skin: legSkin(mp, ms, mc.width, mc.height, true), ink };
         }
       }
       // 팔 점을 못 찾으면(몸이 안 나온 팔 사진) 아래 '띠' 방식으로
