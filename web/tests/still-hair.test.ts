@@ -388,3 +388,24 @@ test('하이라이트 리본: 큰 사진 속 작은 머리에서도 리본(밝�
   }
   assert.ok(blob / bright < 0.1, `밝은 덩어리 몫 ${(blob / bright).toFixed(2)}`);
 });
+
+test('흑발 사진으로 바꾸기: 검은 머리(배경이 섞여 분포가 더 어두움)는 회색으로 밝아지지 않는다', () => {
+  const w = 60, h = 40, n = w * h;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    // 왼쪽 절반은 검은 배경이 머리로 읽힌 곳(루마 3~6), 오른쪽은 실제 검은 머리(루마 28~40)
+    const v = x < 30 ? 3 + (x % 4) : 28 + ((x * 5 + y * 3) % 13);
+    rgba.set([v, v, v, 255], i * 4);
+    alpha[i] = 1;
+  }
+  // 고른 사진: 밝은 스튜디오의 흑발(가운데 L ≈ 15, 윤기 L ≈ 35)
+  const rn = 3000, ref = new Uint8ClampedArray(rn * 4);
+  for (let i = 0; i < rn; i++) { const v = i % 10 === 0 ? 85 : 20 + (i % 25); ref.set([v, v, v + 3, 255], i * 4); }
+  const mine = hairDist(rgba, alpha, 0.6, 50)!, rd = hairDist(ref, new Float32Array(rn).fill(1), 0.6, 50)!;
+  assert.ok(rd.L[Q / 2] < 25, `고른 사진 가운데 L ${rd.L[Q / 2].toFixed(1)}`);
+  const out = recolorHair(rgba, w, h, alpha, mine, rd, 1);
+  let worst = 0;
+  for (let y = 5; y < 35; y++) for (let x = 35; x < 55; x++) { const o = (y * w + x) * 4; worst = Math.max(worst, out[o] - rgba[o]); }
+  assert.ok(worst < 14, `원래보다 밝아진 정도 ${worst}`);
+});

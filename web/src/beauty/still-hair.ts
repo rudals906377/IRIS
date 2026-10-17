@@ -225,6 +225,7 @@ export function recolorHair(
   const hairSz = Math.min(Math.min(w, h), Math.max(hx1 - hx0, hy1 - hy0, 1));
   const ribbons = hl > 0.05 ? strandTexture(luma, w, h, alpha, seed + 7, { width: Math.max(1, Math.round(hairSz / 150)), length: hairSz / 4 }) : null;
   const wr = 0.85 * hl;
+  const blackRef = Math.max(0, Math.min(1, (28 - ref.L[Q / 2]) / 6));
   // ① 픽셀마다 순위(0~1)
   const U = new Float32Array(w * h).fill(-1);
   // 내 머리 밝기 분포 위쪽(97%)보다 훨씬 밝은 픽셀은 머리카락이 아니라 가르마 두피·배경일 때가 많다(알파 줄일 몫, 0~1)
@@ -341,6 +342,12 @@ export function recolorHair(
       const rr = Math.max(-0.2, Math.min(0.12, Math.log((fine[i] + 6) / (box[i] + 6))));
       const info = Math.max(0, Math.min(1, (luma[i] - 16) / 16));
       L *= Math.exp((rr < 0 ? rr * 0.6 : rr) * 0.6 * lift * info);
+    }
+    // 흑발 사진(가운데 밝기 L 25 아래)으로 바꿀 때는 원래보다 밝게 하지 않는다(검은 염색은 머리를 밝히지 못한다):
+    // 검은 배경에 번진 알파까지 내 머리 분포에 섞이면 내 검은 머리가 분포 위쪽 = 고른 사진 윤기 밝기로 대응돼 회색 덩어리가 됐다
+    if (blackRef > 0) {
+      rgb2lab(rgba[o], rgba[o + 1], rgba[o + 2], lab);
+      if (L > lab[0] + 4) L -= (L - lab[0] - 4) * blackRef;
     }
     lab2rgb(Math.max(0, Math.min(100, L)), bandAt('a'), bandAt('b'), tmp, 0);
     // 알파 0.5 아래는 둘레 속머리 색을 전부, 1 에 가까울수록 제 색을(안쪽은 지금과 같다).
