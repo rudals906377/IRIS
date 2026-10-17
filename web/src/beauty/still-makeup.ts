@@ -142,7 +142,10 @@ export function transferMakeup(
     const [lo, hi] = LIMIT[c];
     for (let i = 0; i < n; i++) {
       const zm = Math.max(lipM[i], eyeM[i]);
-      const wm = skinOwn + (1 - skinOwn) * zm;
+      // 그늘(피부 바탕보다 L 2~8 넘게 어두움: 콧대 옆·턱 밑)의 따뜻한 색은 화장이 아니라 내 얼굴 굴곡의 그늘이다:
+      // 피부에서는 그 몫을 빼지 않는다(다 빼면 얼굴 바꾸기에서 콧대 옆이 누런 회색 띠가 됐다)
+      const shade = ramp(myBase[0][i] - myLow[0][i], 2, 8) * (1 - zm);
+      const wm = (skinOwn + (1 - skinOwn) * zm) * (1 - shade);
       // 바탕색 차이 몫은 ±3 까지만: 얼굴에만 입히므로 크면 귀·목과 갈려 가면처럼 보인다(빨간 조명 사진은 피부가 붉게 찍힌다)
       const v = (rfLow[c][i] - rfBase[c][i]) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
       // 피부(입술·눈가 밖)는 노란 기를 3 넘게 빼지 않는다: 화장은 피부를 파랗게 만들지 않는데, 고른 사진 조명

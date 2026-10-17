@@ -113,3 +113,22 @@ test('메이크업: 맨얼굴의 점 몇 개(점·여드름)는 옮기지 않고
   const p90 = ds[Math.floor(ds.length * 0.9)];
   assert.ok(p90 > 100, `주근깨 ${p90} (점 ${dbg.nDots}개, ${many.length}개 그림)`);
 });
+
+test('메이크업(얼굴 바꾸기): 내 얼굴 굴곡 그늘의 따뜻한 색은 화색으로 보고 빼지 않는다(누런 회색 띠 방지)', () => {
+  const W = 200, H = 220;
+  const pts = face(100, 110, 60);
+  const skin = [215, 180, 160];
+  const my = new Uint8ClampedArray(W * H * 4);
+  const ref = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < W * H; i++) {
+    for (let c = 0; c < 3; c++) { my[i * 4 + c] = skin[c]; ref[i * 4 + c] = skin[c]; }
+    my[i * 4 + 3] = ref[i * 4 + 3] = 255;
+  }
+  // 내 얼굴(바뀐 얼굴): 코 옆 세로로 따뜻한 그늘. 고른 사진은 같은 자리에 그늘 없음
+  for (let y = 100; y < 150; y++) for (let x = 78; x < 88; x++) my.set([180, 130, 110], (y * W + x) * 4);
+  const out = transferMakeup(my, W, H, pts, ref, W, H, pts, FACE_OVAL, { lip: 1, eye: 1, skin: 1 }, null, null, null, undefined, 1);
+  const o = (125 * W + 83) * 4, a = new Float32Array(3), b = new Float32Array(3);
+  rgb2lab(my[o], my[o + 1], my[o + 2], a);
+  rgb2lab(out[o], out[o + 1], out[o + 2], b);
+  assert.ok(b[1] - a[1] > -3, `붉은 기 변화 ${(b[1] - a[1]).toFixed(1)}`);
+});
