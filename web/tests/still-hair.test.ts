@@ -274,3 +274,27 @@ test('검은 머리 밝게 염색: 배경에 닿은 가장자리(알파 높아�
   inner /= 30; rim /= 30;
   assert.ok(rim < inner + 15, `가장자리 ${rim.toFixed(0)}, 머리 속 ${inner.toFixed(0)}`);
 });
+
+test('검은 머리 밝게 염색: 반쯤 섞인 가장자리(알파 0.5)는 검은 선이 되지 않고, 새 색·배경보다 밝아지지도 않는다', () => {
+  const w = 60, h = 40, n = w * h;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    // 검은 머리(루마 26~34) | 두 줄은 머리 반·배경 반(루마 ≈ 135, 알파 0.5) | 밝은 배경 240
+    const c = x < 30 ? 26 + ((x * 7 + y * 3) % 9) : x < 32 ? 135 : 240;
+    rgba.set([c, c, c, 255], i * 4);
+    alpha[i] = x < 30 ? 1 : x < 32 ? 0.5 : 0;
+  }
+  const ref = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) { const v = 190 + (i % 30); ref.set([v + 20, v, v - 5, 255], i * 4); }
+  const mine = hairDist(rgba, alpha, 0.6, 50)!, rd = hairDist(ref, new Float32Array(n).fill(1), 0.6, 50)!;
+  const out = recolorHair(rgba, w, h, alpha, mine, rd, 1);
+  const lum = (i: number) => 0.2126 * out[i * 4] + 0.7152 * out[i * 4 + 1] + 0.0722 * out[i * 4 + 2];
+  let inner = 0, rim = 0, maxRim = 0;
+  for (let y = 5; y < 35; y++) { inner += lum(y * w + 20); const r = lum(y * w + 31); rim += r; maxRim = Math.max(maxRim, r); }
+  inner /= 30; rim /= 30;
+  // 이상적인 값은 머리 반(새 색) + 배경 반 ≈ (머리 속 + 240) / 2. 픽셀 전체를 당기면 그보다 30 넘게 어둡다
+  const ideal = (inner + 240) / 2;
+  assert.ok(rim > ideal - 15, `가장자리 ${rim.toFixed(0)}, 기대 ${ideal.toFixed(0)}`);
+  assert.ok(maxRim < Math.max(inner, 240) + 3, `가장자리 최대 ${maxRim.toFixed(0)}`);
+});

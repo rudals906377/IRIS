@@ -291,10 +291,19 @@ export function recolorHair(
   // (리본은 순위를 위로만 미므로 다시 고르게 펴지 않는다: 펴면 가장 어두운 쪽이 다른 픽셀로 바뀌어 검은 점이 생긴다)
   // 머리카락 안쪽(둘레 알파가 꽉 찬 곳)의 어두운 픽셀은 알파가 덜 차도 원래 검정이 비쳐 얼룩이 된다 → 둘레 알파로 채운다
   const aBlur = boxBlur(alpha, w, h, 3);
+  // 가장자리(알파 1 아래)는 머리카락과 배경이 섞인 픽셀: 픽셀 전체를 새 색 쪽으로 알파만큼 당기면 배경 몫까지 덜어져
+  // 원래 머리색이 c(1−c)(배경−머리)만큼 남는다(검은 머리를 밝게 하면 둘레가 검은 선) → 머리 몫만 바꾼다:
+  // 원본 + 알파 × (새 색 − 둘레 속머리 색). 속머리 색은 알파 0.8 이상 픽셀의 둘레 평균
+  const coreW = new Float32Array(w * h), cR = new Float32Array(w * h), cG = new Float32Array(w * h), cB = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) if (alpha[i] >= 0.8) { coreW[i] = 1; cR[i] = rgba[i * 4]; cG[i] = rgba[i * 4 + 1]; cB[i] = rgba[i * 4 + 2]; }
+  const er = Math.max(3, Math.round(Math.min(w, h) / 80));
+  const cWb = boxBlur(coreW, w, h, er), cRb = boxBlur(cR, w, h, er), cGb = boxBlur(cG, w, h, er), cBb = boxBlur(cB, w, h, er);
   for (let i = 0; i < w * h; i++) {
     const a0 = luma[i] < 24 && aBlur[i] > 0.85 ? Math.max(alpha[i], aBlur[i]) : alpha[i];
     // 크게 밝힐 때 가르마 두피처럼 내 머리보다 훨씬 밝은 곳은 가장 밝은 머리색으로 바뀌어 하얀 솜털 얼룩이 된다 → 덜 물들인다
-    const al = a0 * amt * (1 - 0.8 * over[i]);
+    // 배경이 섞인 가장자리(ew)는 밝은 게 배경 몫이라 덜 물들이지 않는다(아래에서 머리 몫만 바꾸고 새 색 안으로 묶는다)
+    const ew = cWb[i] >= 0.02 ? Math.max(0, Math.min(1, (1 - a0) / 0.5)) : 0;
+    const al = a0 * amt * (1 - 0.8 * over[i] * (1 - ew));
     if (al < 0.004 || U[i] < 0) continue;
     const o = i * 4;
     // 양 끝 분위(그림자·배경·반사가 섞인 곳)는 버리고 3%~97% 사이로 대응시킨다(검은 점·흰 점 방지)
@@ -329,9 +338,13 @@ export function recolorHair(
       L *= Math.exp((rr < 0 ? rr * 0.6 : rr) * 0.6 * lift * info);
     }
     lab2rgb(Math.max(0, Math.min(100, L)), bandAt('a'), bandAt('b'), tmp, 0);
-    out[o] = rgba[o] + (tmp[0] - rgba[o]) * al;
-    out[o + 1] = rgba[o + 1] + (tmp[1] - rgba[o + 1]) * al;
-    out[o + 2] = rgba[o + 2] + (tmp[2] - rgba[o + 2]) * al;
+    // 알파 0.5 아래는 둘레 속머리 색을 전부, 1 에 가까울수록 제 색을(안쪽은 지금과 같다).
+    // 결과는 원본과 새 색 사이로 묶는다(알파가 부푼 배경 픽셀이 새 색보다 밝아져 하얀 테가 되지 않게)
+    for (let c = 0; c < 3; c++) {
+      const hc = ew > 0 ? rgba[o + c] + ((c === 0 ? cRb[i] : c === 1 ? cGb[i] : cBb[i]) / cWb[i] - rgba[o + c]) * ew : rgba[o + c];
+      const v = rgba[o + c] + (tmp[c] - hc) * al;
+      out[o + c] = Math.max(Math.min(rgba[o + c], tmp[c]), Math.min(Math.max(rgba[o + c], tmp[c]), v));
+    }
   }
   return out;
 }
