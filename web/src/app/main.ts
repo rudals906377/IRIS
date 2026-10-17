@@ -1525,6 +1525,8 @@ async function nailsByColor(
         const cl = cf.t1 - cf.t0, cwid = 2 * Math.max(...cf.prof);
         let ca = 0;
         for (let i = 0; i < cm.length; i++) ca += cm[i];
+        // 껍질로 채운 뒤에도 5배 안(흩어진 조각 후보는 껍질이 손 전체만큼 커진다: 07번 손 6757 → 146230)
+        if (ca > area * 5) continue;
         if (cl / Math.max(1, cwid) < 1.15 || cl / Math.max(1, cwid) > 5 || ca / Math.max(1, cl * cwid) < 0.55) continue;
         // 무늬 칸은 손톱 안에 사방으로 테두리를 두고 들어 있고 손톱과 같은 방향이다: 넓힌 것이 한쪽(옆 손톱 쪽)으로만 늘어나거나
         // 방향이 틀어지면(가로로 이어진 두 손톱) 손톱이 아니다
