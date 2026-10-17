@@ -611,7 +611,10 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   if (mineHair) return mineHair;
   // 얼굴 점이 잡힐 때까지 잠깐 기다린다
   let r: { x: number; y: number; size: number } | null = null;
-  for (let i = 0; i < 80 && !(r = engine.tracker.headRect(engine.source.width, engine.source.height)); i++) await new Promise((res) => setTimeout(res, 100));
+  // 실제 시간으로 2.5초까지만(큰 사진은 화면 처리에 밀려 100ms 기다림이 0.5초씩 걸려 80번이면 30초 넘게 기다렸다).
+  // 못 잡으면 아래 사진용 얼굴 점으로
+  const t0 = performance.now();
+  while (!(r = engine.tracker.headRect(engine.source.width, engine.source.height)) && performance.now() - t0 < 2500) await new Promise((res) => setTimeout(res, 100));
   if (photoOriginal !== orig) return null;
   // 실시간 얼굴 추적이 못 잡는 작은 얼굴(전신 사진)은 사진용 얼굴 점(몸 관절점으로 머리를 잘라 다시 찾음)으로 머리 상자를 만든다
   if (!r) {
@@ -1470,7 +1473,9 @@ async function ensureNailsOnce(): Promise<void> {
   if (nailsAuto === photoOriginal) return;
   nailsAuto = photoOriginal;
   // 손 점이 잡힐 때까지 잠깐
-  for (let i = 0; i < 20 && !engine.lastHands.length; i++) await new Promise((r) => setTimeout(r, 100));
+  // 실제 시간으로 2초까지만(큰 사진은 기다림 한 번이 길어진다)
+  const th0 = performance.now();
+  while (!engine.lastHands.length && performance.now() - th0 < 2000) await new Promise((r) => setTimeout(r, 100));
   // 실시간 손 추적이 못 잡으면(손만 가까이 찍힌 사진 등) 사진용 손 찾기(크기·여백 바꿔 여러 번)로
   let handsMine = engine.lastHands;
   if (!handsMine.length) {
