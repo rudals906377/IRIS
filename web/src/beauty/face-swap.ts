@@ -144,18 +144,23 @@ export function swapFace(
     // 눈·눈썹·입술·콧구멍 둘레는 이목구비 선이라 뺀다
     if (N >= 468) {
       const feat = new Float32Array(W * H);
-      for (const ids of [[...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)], [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)], [...BROW_R_LOWER, ...BROW_R_UPPER], [...BROW_L_LOWER, ...BROW_L_UPPER], LIPS_OUTER, [64, 98, 240, 2, 460, 327, 294, 4]]) {
+      // 눈꺼풀(눈썹 아래 ~ 눈 위)도 뺀다: 쌍꺼풀 주름이 가는 어두운 선이라 머리카락으로 잡혀 평평한 살색 조각으로 메워졌다
+      for (const ids of [[...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)], [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)], [...BROW_R_LOWER, ...BROW_R_UPPER], [...BROW_L_LOWER, ...BROW_L_UPPER], [...BROW_R_LOWER, ...[...EYE_R_UPPER].reverse()], [...BROW_L_LOWER, ...[...EYE_L_UPPER].reverse()], LIPS_OUTER, [64, 98, 240, 2, 460, 327, 294, 4]]) {
         const m = fillPoly(ids.map((i) => dp[i]), W, H);
         for (let i = 0; i < m.length; i++) if (m[i]) feat[i] = 1;
       }
       const featB = boxBlur(feat, W, H, Math.max(2, Math.round(fw0 * 0.04)));
+      // 얼굴을 가로지른 가닥은 머리카락 곁에만 있다: 내 피부가 아닌 곳(머리카락)이 얼굴 폭 6% 안에 없으면 주름·이목구비 선으로 보고 그대로
+      const notSkin = new Float32Array(W * H);
+      for (let i = 0; i < notSkin.length; i++) notSkin[i] = cover[i] && wSkin[i] < 0.3 ? 1 : 0;
+      const hairNear = boxBlur(notSkin, W, H, Math.max(3, Math.round(fw0 * 0.06)));
       const Lw = new Float32Array(W * H);
       for (let i = 0; i < Lw.length; i++) Lw[i] = 0.299 * warped[i * 3] + 0.587 * warped[i * 3 + 1] + 0.114 * warped[i * 3 + 2];
       const S = boxBlur(boxBlur(Lw, W, H, 1), W, H, 1);
       const line = new Float32Array(W * H);
       for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
         const i = y * W + x;
-        if (!valid[i] || featB[i] > 0) continue;
+        if (!valid[i] || featB[i] > 0 || hairNear[i] < 0.02) continue;
         const hxx = S[i + 2] - 2 * S[i] + S[i - 2], hyy = S[i + 2 * W] - 2 * S[i] + S[i - 2 * W];
         const hxy = (S[i + 2 + 2 * W] - S[i + 2 - 2 * W] - S[i - 2 + 2 * W] + S[i - 2 - 2 * W]) / 4;
         const tr = hxx + hyy, dd = Math.sqrt((hxx - hyy) ** 2 + 4 * hxy * hxy);
