@@ -358,3 +358,33 @@ test('잔머리: 머리 옆 가는 선이라도 색이 배경·머리 사이가 
   assert.ok(alpha[y * w + 34] > 0.5, `갈색 가닥 ${alpha[y * w + 34].toFixed(2)}`);
   assert.ok(alpha[y * w + 37] < 0.15, `보라색 선 ${alpha[y * w + 37].toFixed(2)}`);
 });
+
+test('하이라이트 리본: 큰 사진 속 작은 머리에서도 리본(밝은 가닥)은 머리 크기에 맞게 가늘다', () => {
+  // 900×900 사진 가운데 80×80 갈색 머리(결은 약하게). 고른 사진은 어두운 바탕 + 밝은 가닥(밝기 폭이 넓은 하이라이트)
+  const W = 900, H = 900, n = W * H;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n);
+  for (let i = 0; i < n; i++) rgba.set([235, 235, 235, 255], i * 4);
+  for (let y = 410; y < 490; y++) for (let x = 410; x < 490; x++) {
+    const i = y * W + x, v = 100 + ((x * 7 + y * 13) % 3);
+    rgba.set([v, Math.round(v * 0.75), Math.round(v * 0.5), 255], i * 4);
+    alpha[i] = 1;
+  }
+  const rn = 4000, ref = new Uint8ClampedArray(rn * 4);
+  for (let i = 0; i < rn; i++) { const v = i % 5 === 0 ? 215 : 70 + (i % 30); ref.set([v, v - 5, v - 12, 255], i * 4); }
+  const mine = hairDist(rgba, alpha, 0.6, 50)!, rd = hairDist(ref, new Float32Array(rn).fill(1), 0.6, 50)!;
+  const out = recolorHair(rgba, W, H, alpha, mine, rd, 1);
+  // 머리 속 밝은 픽셀(상위 15%) 가운데 둘레 7×7 의 60% 넘게 밝은 '덩어리' 몫: 리본이 머리에 비해 굵으면 넓은 덩어리가 된다
+  const lum = (i: number) => 0.299 * out[i * 4] + 0.587 * out[i * 4 + 1] + 0.114 * out[i * 4 + 2];
+  const vals: number[] = [];
+  for (let y = 415; y < 485; y++) for (let x = 415; x < 485; x++) vals.push(lum(y * W + x));
+  const thr = [...vals].sort((a, b) => a - b)[Math.floor(vals.length * 0.85)];
+  let bright = 0, blob = 0;
+  for (let y = 418; y < 482; y++) for (let x = 418; x < 482; x++) {
+    if (lum(y * W + x) < thr) continue;
+    bright++;
+    let c = 0;
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) if (lum((y + dy) * W + x + dx) >= thr) c++;
+    if (c > 49 * 0.6) blob++;
+  }
+  assert.ok(blob / bright < 0.1, `밝은 덩어리 몫 ${(blob / bright).toFixed(2)}`);
+});
