@@ -858,6 +858,7 @@ async function coveredTorsoArm(): Promise<'forearmL' | 'forearmR' | null> {
   return arms[k].seen ? (k === 0 ? 'forearmL' : 'forearmR') : null;
 }
 let tatPlanOk = false;
+const TAT_LOOKING = '타투가 팔 어디에 있는지 보는 중…';
 /** 다리 타투용 피부: 두 팔·손 자리를 뺀다(다리 앞에 놓인 손·손목에 다리 타투가 칠해졌음) */
 function legSkin(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Float32Array, W: number, H: number, handsOnly = false): Float32Array {
   const caps: { a: { x: number; y: number }; b: { x: number; y: number }; r: number }[] = [];
@@ -901,7 +902,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
     tatNote = '';
     const p = (async (): Promise<TatPlan | null> => {
       photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
-      setStatus('타투가 팔 어디에 있는지 보는 중…');
+      setStatus(TAT_LOOKING);
       // 고른 사진: 도안 뽑기와 같은 크기로
       const rc = document.createElement('canvas');
       rc.width = ref.w;
@@ -1241,6 +1242,8 @@ async function updateStillHair(): Promise<void> {
   }
   // 몸통 타투를 반대쪽(앞/뒤) 사진에 넣으려던 경우 안내
   if (tatOn && (placed || !plan) && tatNote) setStatus(tatNote);
+  // 굽기 계획 없이 끝났으면(고른 사진에서 몸·팔을 못 찾음 → 실시간 타투) '보는 중' 안내를 남기지 않는다
+  else if (statusEl.textContent === TAT_LOOKING) setStatus('');
 }
 
 /** 처리 해상도의 원본 사진 RGBA(한 번만) */
