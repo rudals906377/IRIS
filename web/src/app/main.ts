@@ -39,7 +39,7 @@ import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
 import { extractDesign, findInk, type InkSource } from '../beauty/tattoo-extract.ts';
-import { affine3, armStrip, inkOnArm, limbRegion, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
+import { affine3, armStrip, inkOnArm, limbRegion, maskOutLimbs, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
 
@@ -790,7 +790,7 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
     if (u < 0 || u > 1 || v < 0 || v > 1) return null;
     return { x: X * c.width, y: Y * c.height };
   };
-  return { dst: arm, skin: body.skin, ink, src };
+  return { dst: arm, skin: legs ? legSkin(body.pose, body.skin, engine.source.width, engine.source.height) : body.skin, ink, src };
 }
 
 /** 내 사진에서 가슴(어깨 사이 아래)이 옷에 가려 있으면 미리 보기할 팔 자리, 보이면 null */
@@ -816,6 +816,23 @@ async function coveredTorsoArm(): Promise<'forearmL' | 'forearmR' | null> {
   return arms[k].seen ? (k === 0 ? 'forearmL' : 'forearmR') : null;
 }
 let tatPlanOk = false;
+/** 다리 타투용 피부: 두 팔·손 자리를 뺀다(다리 앞에 놓인 손·손목에 다리 타투가 칠해졌음) */
+function legSkin(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Float32Array, W: number, H: number): Float32Array {
+  const caps: { a: { x: number; y: number }; b: { x: number; y: number }; r: number }[] = [];
+  armsOf(pose, skin, W, H).forEach(({ arm }, k) => {
+    const P = pose.p;
+    caps.push({ a: arm.s, b: arm.e, r: arm.rUp * 1.15 }, { a: arm.e, b: arm.w, r: arm.rLo * 1.15 });
+    // 손: 새끼·검지 뿌리 가운데 쪽으로 손가락 끝까지(손 점이 안 보이면 아래팔 방향으로)
+    const [pk, ix] = k === 0 ? [17, 19] : [18, 20];
+    const handOk = Math.min(pose.vis[pk] ?? 0, pose.vis[ix] ?? 0) > 0.3;
+    const dir = handOk
+      ? { x: (P[pk].x + P[ix].x) / 2 - arm.w.x, y: (P[pk].y + P[ix].y) / 2 - arm.w.y }
+      : { x: (arm.w.x - arm.e.x) * 0.35, y: (arm.w.y - arm.e.y) * 0.35 };
+    caps.push({ a: arm.w, b: { x: arm.w.x + dir.x * 2, y: arm.w.y + dir.y * 2 }, r: arm.rLo * 1.6 });
+  });
+  return maskOutLimbs(skin, W, H, caps);
+}
+
 /** 사진 관절점 → 팔(왼·오른, 사람 기준) */
 function armsOf(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Float32Array, W: number, H: number, legs = false): { arm: Arm; vis: number; seen: boolean }[] {
   // 다리도 같은 3점 사슬(엉덩이·무릎·발목)로 본다
@@ -976,7 +993,8 @@ async function armTattooPlan(): Promise<TatPlan | null> {
       dbgTat({ mArms: mArms.map((a) => ({ ...a.arm, vis: a.vis, seen: a.seen })), mine2, poseOk });
       if (mine2 < 0) return null;
       const dst = mArms[mine2].arm;
-      if (!strip) return { dst, skin: ms, ink, src: ra!.arm };
+      const dSkin = legs ? legSkin(mp, ms, mc.width, mc.height) : ms;
+      if (!strip) return { dst, skin: dSkin, ink, src: ra!.arm };
       // 띠: 어깨에서 시작(전체 소매) 또는 아래팔 가운데(작은 도안, 굵기 비로 크기)
       const st = strip;
       const upLen = Math.hypot(dst.e.x - dst.s.x, dst.e.y - dst.s.y), loLen = Math.hypot(dst.w.x - dst.e.x, dst.w.y - dst.e.y);
@@ -993,7 +1011,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
       const k = full ? wristTau / (upLen + loLen) : st.mean / ((dst.rUp + dst.rLo) / 2);
       const L = st.len / k;
       const l0 = full ? 0 : upLen + loLen / 2 - L / 2;
-      return { dst, skin: ms, ink, src: (l: number, sg: number) => stripPoint(st, (l - l0) * k, sg) };
+      return { dst, skin: dSkin, ink, src: (l: number, sg: number) => stripPoint(st, (l - l0) * k, sg) };
     })().catch((err) => {
       console.warn('팔 타투 옮기기 실패(실시간 타투로)', err);
       return null;

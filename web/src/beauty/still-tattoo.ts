@@ -28,6 +28,29 @@ function at(a: P, b: P, r: number, t: number, s: number): P {
 }
 
 /**
+ * 피부 확률에서 캡슐(a→b 선분, 반지름 r) 안을 지운다(r~1.3r 사이는 부드럽게).
+ * 다리 타투를 구울 때 다리 앞에 놓인 손·팔(같은 피부라 다리로 잡혔음)을 빼는 데 쓴다.
+ */
+export function maskOutLimbs(skin: Float32Array, W: number, H: number, caps: { a: P; b: P; r: number }[]): Float32Array {
+  const out = new Float32Array(skin);
+  for (const { a, b, r } of caps) {
+    if (!(r > 0)) continue;
+    const R = r * 1.3;
+    const x0 = Math.max(0, Math.floor(Math.min(a.x, b.x) - R)), x1 = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x) + R));
+    const y0 = Math.max(0, Math.floor(Math.min(a.y, b.y) - R)), y1 = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y) + R));
+    const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / L2));
+      const d = Math.hypot(x - a.x - dx * t, y - a.y - dy * t);
+      if (d >= R) continue;
+      const k = Math.max(0, Math.min(1, (d - r) / (R - r)));
+      out[y * W + x] *= k;
+    }
+  }
+  return out;
+}
+
+/**
  * 몸 피부 확률에서 팔 마디 반폭을 잰다(축의 35·50·65% 자리에서 옆으로 피부가 끊기는 곳까지, 가운데 값).
  * 피부가 안 보이면 null
  */

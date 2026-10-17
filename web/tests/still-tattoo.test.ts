@@ -2,7 +2,7 @@
 // 사진 모드 팔 타투 옮기기 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { armStrip, inkMip, measureHalfWidth, stripPoint, transferArmInk, type Arm, type InkMap } from '../src/beauty/still-tattoo.ts';
+import { armStrip, inkMip, maskOutLimbs, measureHalfWidth, stripPoint, transferArmInk, type Arm, type InkMap } from '../src/beauty/still-tattoo.ts';
 
 test('팔 반폭 재기: 폭 20 인 세로 띠 → 10 근처', () => {
   const W = 100, H = 100, skin = new Float32Array(W * H);
@@ -114,4 +114,15 @@ test('잉크 맵 미리 줄이기: 1px 가는 선이 끊기지 않고 옅게 이
     assert.ok(Math.abs(m.rgba[i + 3] - 64) <= 1, `진하기 ${m.rgba[i + 3]}`);
     assert.ok(m.rgba[i] < 40, '잉크 색은 그대로');
   }
+});
+
+test('다리 피부에서 손·팔 빼기: 캡슐 안은 0, 바깥은 그대로, 가장자리는 부드럽게', () => {
+  const W = 60, H = 60, skin = new Float32Array(W * H).fill(1);
+  const m = maskOutLimbs(skin, W, H, [{ a: { x: 30, y: 10 }, b: { x: 30, y: 40 }, r: 5 }]);
+  assert.equal(m[25 * W + 30], 0);
+  assert.equal(m[25 * W + 33], 0);
+  assert.equal(m[25 * W + 50], 1);
+  const edge = m[25 * W + 36];
+  assert.ok(edge > 0 && edge < 1, `가장자리 ${edge}`);
+  assert.equal(skin[25 * W + 30], 1, '원본은 그대로');
 });
