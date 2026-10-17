@@ -1516,8 +1516,18 @@ async function nailsByColor(
       for (const c of expandRim ? r.alts : []) {
         if (c.area <= area * 1.15 || c.area > area * 5 || c.score < 0.5 || overlapFrac(c.mask, r.mask) < 0.9) continue;
         if (rimContrast(rgba, w, h, r.mask, c.mask) < 12 || skinFrac(rgba, c.mask, r.mask) > 0.3) continue;
-        r.mask = c.mask;
-        area = c.area;
+        // 넓힌 것도 손톱 모양이어야(아래와 같은 기준): 이미 손톱 전체인 윤기 나는 손톱의 큰 후보는 옆 손톱·그늘까지 잡은
+        // 울퉁불퉁한 덩어리라(채움 0.1~0.45) 넓히면 손톱이 통째로 빠졌다
+        const cm = new Uint8Array(c.mask);
+        hullFill(cm, w, h);
+        const cf = nailFrame(cm, w, h, null, rgba);
+        if (!cf) continue;
+        const cl = cf.t1 - cf.t0, cwid = 2 * Math.max(...cf.prof);
+        let ca = 0;
+        for (let i = 0; i < cm.length; i++) ca += cm[i];
+        if (cl / Math.max(1, cwid) < 1.15 || cl / Math.max(1, cwid) > 5 || ca / Math.max(1, cl * cwid) < 0.55) continue;
+        r.mask = cm;
+        area = ca;
         break;
       }
       // 작은 손톱(손이 사진의 일부)도: 최소 넓이는 사진의 0.06%(모양·대비로 거른다)
