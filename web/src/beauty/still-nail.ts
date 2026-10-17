@@ -419,3 +419,35 @@ export function growNailMask(mask: Uint8Array, w: number, h: number, rgba: Uint8
     for (const i of add) mask[i] = 1;
   }
 }
+
+/**
+ * 큰 마스크(outer)에서 작은 마스크(inner)를 뺀 테두리 부분의 평균 색과, outer 바깥 r 칸 띠의 평균 색 사이 ΔE(Lab).
+ * 크면 테두리는 둘레(손가락 피부)가 아니라 손톱의 일부(크롬 테두리·프렌치 끝)다.
+ */
+export function rimContrast(rgba: Uint8ClampedArray, w: number, h: number, inner: Uint8Array, outer: Uint8Array, r = 4): number {
+  let x0 = w, y0 = h, x1 = 0, y1 = 0;
+  for (let i = 0; i < outer.length; i++) if (outer[i]) { const x = i % w, y = (i - x) / w; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < x0) return 0;
+  const lab = new Float32Array(3);
+  const rim = [0, 0, 0], out = [0, 0, 0];
+  let nRim = 0, nOut = 0;
+  for (let y = Math.max(0, y0 - r); y <= Math.min(h - 1, y1 + r); y++) for (let x = Math.max(0, x0 - r); x <= Math.min(w - 1, x1 + r); x++) {
+    const i = y * w + x;
+    if (outer[i]) {
+      if (inner[i]) continue;
+      rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+      rim[0] += lab[0]; rim[1] += lab[1]; rim[2] += lab[2]; nRim++;
+      continue;
+    }
+    let near = false;
+    for (let j = -r; j <= r && !near; j += r) for (let k = -r; k <= r; k += r) {
+      const xx = x + k, yy = y + j;
+      if (xx >= 0 && yy >= 0 && xx < w && yy < h && outer[yy * w + xx]) { near = true; break; }
+    }
+    if (!near) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    out[0] += lab[0]; out[1] += lab[1]; out[2] += lab[2]; nOut++;
+  }
+  if (!nRim || !nOut) return 0;
+  return Math.hypot(rim[0] / nRim - out[0] / nOut, rim[1] / nRim - out[1] / nOut, rim[2] / nRim - out[2] / nOut);
+}

@@ -34,7 +34,7 @@ import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../en
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
 import { boxBlur, closeHoles, colorGate, fillInterior, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
-import { growNailMask, hullFill, maskContrast, nailFrame, splitPolished, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
+import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPolished, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
@@ -1373,6 +1373,18 @@ async function glintsToNails(): Promise<void> {
     else if (rep) myNails[k] = rep;
   }
 }
+/** outer 에서 inner 를 뺀 픽셀 가운데 피부색(YCbCr) 비율 */
+function skinFrac(rgba: Uint8ClampedArray, outer: Uint8Array, inner: Uint8Array): number {
+  let n = 0, sk = 0;
+  for (let i = 0; i < outer.length; i++) {
+    if (!outer[i] || inner[i]) continue;
+    const r = rgba[i * 4], g = rgba[i * 4 + 1], b = rgba[i * 4 + 2];
+    const Y = 0.299 * r + 0.587 * g + 0.114 * b, Cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b, Cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b;
+    n++;
+    if (Y > 60 && Cr > 135 && Cr < 175 && Cb > 85 && Cb < 128 && r > g) sk++;
+  }
+  return n ? sk / n : 1;
+}
 /** 마스크에서 밝은 쪽 40% 픽셀이 거의 흰색(밝기 L 88 넘게, 채도 10 아래)인가(윤기 반사: 넓힌 가장자리는 둘레 손톱색이 섞인다) */
 function nearWhite(rgba: Uint8ClampedArray, mask: Uint8Array): boolean {
   const lab = new Float32Array(3);
@@ -1495,6 +1507,16 @@ async function nailsByColor(
           r.score = Math.max(r.score, big.score);
           area = big.area;
         }
+      }
+      // 손톱 안 무늬 한 칸(크롬 테두리 안 색 칸·프렌치 바탕)만 잡았으면 그 칸을 품은 손톱 전체로: 5배 안으로 크고,
+      // 늘어난 테두리가 바깥 둘레와 색이 뚜렷이 다르고(ΔE 12 넘게) 피부색 픽셀이 30% 아래면 손톱의 일부다
+      // (손가락까지 잡은 후보는 테두리가 피부색. 크롬 스틸레토는 안쪽 청록 칸만 잡혀 손톱의 1/4 만 칠해졌다)
+      for (const c of r.alts) {
+        if (c.area <= area * 1.15 || c.area > area * 5 || c.score < 0.5 || overlapFrac(c.mask, r.mask) < 0.9) continue;
+        if (rimContrast(rgba, w, h, r.mask, c.mask) < 12 || skinFrac(rgba, c.mask, r.mask) > 0.3) continue;
+        r.mask = c.mask;
+        area = c.area;
+        break;
       }
       // 작은 손톱(손이 사진의 일부)도: 최소 넓이는 사진의 0.06%(모양·대비로 거른다)
       if (r.score < 0.6 || area < w * h * 0.0006 || area > w * h * 0.08) continue;
