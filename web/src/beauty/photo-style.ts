@@ -222,8 +222,20 @@ export class PhotoAnalyzer {
     }
     const r = this.poseLm.detect(canvas);
     const lm = r.landmarks[0];
-    if (!lm) return null;
-    return { p: toPx(lm, canvas.width, canvas.height), vis: lm.map((l) => l.visibility ?? 0) };
+    if (lm) return { p: toPx(lm, canvas.width, canvas.height), vis: lm.map((l) => l.visibility ?? 0) };
+    // 몸이 사진 가장자리에 꽉 찬 사진(팔·몸통만 크게 찍은 타투 사진 09·12번)은 관절점을 못 찾는다 → 둘레에 회색 여백 15% 를
+    // 두르고 다시(파이썬 MediaPipe 로 재현: 원본 셋 다 실패, 여백 30% 에서 09·12번 어깨·팔꿈치·손목 찾음). 좌표는 되돌린다
+    const m = Math.round(Math.max(canvas.width, canvas.height) * 0.15);
+    const pad = document.createElement('canvas');
+    pad.width = canvas.width + 2 * m;
+    pad.height = canvas.height + 2 * m;
+    const ctx = pad.getContext('2d')!;
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, pad.width, pad.height);
+    ctx.drawImage(canvas, m, m);
+    const lm2 = this.poseLm.detect(pad).landmarks[0];
+    if (!lm2) return null;
+    return { p: toPx(lm2, pad.width, pad.height).map((q) => ({ x: q.x - m, y: q.y - m })), vis: lm2.map((l) => l.visibility ?? 0) };
   }
 
   /** 손 점(픽셀 21점·깊이·왼오른손). 고른 사진에서 손톱 자리를 찾는 데 쓴다 */
