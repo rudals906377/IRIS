@@ -1332,9 +1332,13 @@ async function updateStillHair(): Promise<void> {
   const mkOn = !!(lastSource && lastStyle?.makeup && (mk.lip || mk.eye || mk.skin));
   const mkp = mkOn ? await makeupPlan() : null;
   const key = `${mkp ? `${mk.lip}:${mk.eye}:${mk.skin}` : 0}|${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen : 0}|${plan ? strength.toFixed(2) : 0}|${placed ? pk : ''}`;
+  // 네일을 골랐는데 내 손톱을 하나도 못 찾았으면(손이 작게 나온 전신 사진 등) 굽기 끝에 안내가 지워져 아무 일도 없는 듯 보였다
+  // → 못 찾았다고 남긴다(손톱을 눌러 더하는 길도 함께). 같은 결과라 다시 굽지 않을 때도 다시 띄운다
+  const nailNote = chosen.nail.color && !off.has('nail') && nailsAuto === photoOriginal && !myNails.length ? '내 사진에서 손톱을 찾지 못했어요. 손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)' : '';
   if (key === stillHairKey && refHair?.src === lastSource) {
     // 같은 결과면 다시 굽지 않지만, 타투를 못 옮긴 안내(옷에 가림 등)는 다른 안내에 지워졌을 수 있어 다시 띄운다
     if (tatOn && !plan && tatNote) setStatus(tatNote);
+    else if (nailNote) setStatus(nailNote);
     return;
   }
   // 작업이 곧바로 끝나는 경우(할 일 없음)에도 표시가 남지 않게, 끝난 뒤 '그 작업이면' 지운다
@@ -1350,6 +1354,7 @@ async function updateStillHair(): Promise<void> {
           applyTattooToEngine();
         }
         stillHairKey = key;
+        if (nailNote) setStatus(nailNote);
         return;
       }
       const base = stillRGBA();
@@ -1403,7 +1408,7 @@ async function updateStillHair(): Promise<void> {
         applyTattooToEngine();
       }
       stillHairKey = key;
-      setStatus('');
+      setStatus(nailNote);
     } catch (err) {
       console.warn('사진 염색 실패', err);
       setStatus('');
