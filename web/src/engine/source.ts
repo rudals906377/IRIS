@@ -112,8 +112,10 @@ export class VideoSource {
   async openImage(img: ImageBitmap, maxSide = 1600): Promise<void> {
     this.close();
     const s = Math.min(1, maxSide / Math.max(img.width, img.height));
-    const w = Math.max(2, Math.round((img.width * s) / 2) * 2);
-    const h = Math.max(2, Math.round((img.height * s) / 2) * 2);
+    // 크기를 짝수로 맞추지 않는다: 홀수 변(465px) 사진을 466 으로 1px 늘리면 사진 전체가 반 픽셀씩 재샘플돼
+    // 얼굴·옷까지 뿌옇게 됐음(라플라시안 분산 0.38배). 캔버스 스트림은 홀수 크기도 되고 엔진은 캔버스를 직접 읽는다
+    const w = Math.max(2, Math.round(img.width * s));
+    const h = Math.max(2, Math.round(img.height * s));
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
