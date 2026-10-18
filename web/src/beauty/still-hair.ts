@@ -209,7 +209,6 @@ export function recolorHair(
   const blur2 = lift > 0 ? boxBlur(luma, w, h, Math.max(2, Math.round(Math.min(w, h) / 150))) : luma;
   const fine = lift > 0 ? boxBlur(luma, w, h, 1) : null;
   const mineDark = mine.L[Math.round(Q * 0.15)], mineMid = mine.L[Q / 2];
-  const strands = lift > 0.05 ? strandTexture(luma, w, h, alpha, seed) : null;
   // 거의 검은 머리(머리 속 루마 24 아래가 절반 넘음: 아프로 69%): 어두운 픽셀 순위를 둘레 평균으로 메우면 곱슬 결이 통째로
   // 지워져 물감처럼 평평한 얼룩이 된다 → 메우기는 정말 새까만 곳(루마 12 아래)만, 대신 중간 크기(2px/8px) 결을 비로 되살린다
   let darkFrac = 0;
@@ -235,6 +234,9 @@ export function recolorHair(
   const hairSz = Math.min(Math.min(w, h), Math.max(hx1 - hx0, hy1 - hy0, 1));
   const ribbons = hl > 0.05 ? strandTexture(luma, w, h, alpha, seed + 7, { width: Math.max(1, Math.round(hairSz / 150)), length: hairSz / 4 }) : null;
   const wr = 0.85 * hl;
+  // 가는 올 무늬는 크게 밝힐 때(올 결 되살리기)뿐 아니라 리본을 쓸 때도 필요: 갈색→잿빛처럼 밝기 변화가 없는 염색(lift 0)에서는
+  // 올 무늬가 없어 리본이 통째로 밝아진 평평한 판(폭 7px, 순위 0.45 → 0.9)이 정수리에 물감 자국처럼 남았음
+  const strands = lift > 0.05 || (hl > 0.05) ? strandTexture(luma, w, h, alpha, seed) : null;
   const blackRef = Math.max(0, Math.min(1, (28 - ref.L[Q / 2]) / 6));
   // ① 픽셀마다 순위(0~1)
   const U = new Float32Array(w * h).fill(-1);
