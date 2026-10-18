@@ -626,6 +626,10 @@ const btnMyPhotoEl = $<HTMLButtonElement>('btn-myphoto');
  */
 let photoOriginal: ImageBitmap | null = null;
 let mineHair: { alpha: Float32Array; rgba: Uint8ClampedArray; w: number; h: number; dist: HairDist } | null = null;
+/** 내 머리카락 매트를 못 만든 까닭(사용자 안내). 머리카락 픽셀이 300 도 안 되는 아주 짧은·탈색한 머리 */
+let mineHairNote = '';
+/** 이번 굽기에서 염색을 건너뛴 까닭(새까만 머리 + 밝은 염색). 굽기 끝에 안내가 지워지지 않게 남긴다 */
+let hairSkipNote = '';
 let refHair: { src: ImageBitmap; dist: HairDist | null; bands: HairBands | null } | null = null;
 let stillHairTimer = 0;
 let stillHairBusy: Promise<void> | null = null;
@@ -745,7 +749,13 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   // 가르마 두피·시스루 앞머리 사이 이마처럼 피부색인 곳은 덜 물들인다(밝게 염색하면 거친 밝은 얼룩이 됐다)
   skinGate(rgba, alpha, faceP);
   const dist = hairDist(rgba, alpha);
-  if (!dist) return null;
+  if (!dist) {
+    // 확실한 머리카락이 300px 도 안 됨(밝게 탈색한 버즈컷 00121): 실시간 염색으로 떨어뜨려도 아무것도 안 바뀌고 안내도 없어
+    // '아무 일도 없는' 화면이 됐다 → 못 한다고 알린다
+    mineHairNote = '내 사진에서 머리카락을 거의 찾지 못해 염색할 수 없어요(아주 짧거나 밝게 탈색한 머리). 머리가 잘 보이는 사진을 써 주세요';
+    return null;
+  }
+  mineHairNote = '';
   mineHair = { alpha, rgba, w: W, h: H, dist };
   return mineHair;
 }
@@ -1335,10 +1345,12 @@ async function updateStillHair(): Promise<void> {
   // 네일을 골랐는데 내 손톱을 하나도 못 찾았으면(손이 작게 나온 전신 사진 등) 굽기 끝에 안내가 지워져 아무 일도 없는 듯 보였다
   // → 못 찾았다고 남긴다(손톱을 눌러 더하는 길도 함께). 같은 결과라 다시 굽지 않을 때도 다시 띄운다
   const nailNote = chosen.nail.color && !off.has('nail') && nailsAuto === photoOriginal && !myNails.length ? '내 사진에서 손톱을 찾지 못했어요. 손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)' : '';
+  // 굽기 끝에 남길 안내: 손톱 못 찾음 > 머리카락 못 찾음(염색을 골랐을 때)
+  const bakeNote = (): string => nailNote || (amount > 0 ? mineHairNote || hairSkipNote : '');
   if (key === stillHairKey && refHair?.src === lastSource) {
     // 같은 결과면 다시 굽지 않지만, 타투를 못 옮긴 안내(옷에 가림 등)는 다른 안내에 지워졌을 수 있어 다시 띄운다
     if (tatOn && !plan && tatNote) setStatus(tatNote);
-    else if (nailNote) setStatus(nailNote);
+    else if (bakeNote()) setStatus(bakeNote());
     return;
   }
   // 작업이 곧바로 끝나는 경우(할 일 없음)에도 표시가 남지 않게, 끝난 뒤 '그 작업이면' 지운다
@@ -1354,7 +1366,7 @@ async function updateStillHair(): Promise<void> {
           applyTattooToEngine();
         }
         stillHairKey = key;
-        if (nailNote) setStatus(nailNote);
+        if (bakeNote()) setStatus(bakeNote());
         return;
       }
       const base = stillRGBA();
@@ -1365,9 +1377,14 @@ async function updateStillHair(): Promise<void> {
         // 내 머리카락이 새까맣게 찍혀 결이 없으면(밝기 상위 10% 가 L 14 아래: sam1 어두운 사진 9.9, 아프로 00035 는 28) 밝은 염색(고른 사진
         // 가운데 L 35 넘음)은 결 없는 하얀 석고 덩어리가 된다(배경과 머리를 가를 근거도 없음) → 하지 않고 이유를 알린다
         const nQ = mine ? mine.dist.L.length - 1 : 0;
+        hairSkipNote = '';
         if (mine && ref && mine.dist.L[Math.round(nQ * 0.9)] < 14 && ref.L[nQ >> 1] > 35) {
-          setStatus('내 사진의 머리카락이 너무 어둡게 찍혀 결이 보이지 않아, 밝은 색 염색은 자연스럽게 할 수 없어요. 밝은 곳에서 찍은 사진을 써 주세요');
+          hairSkipNote = '내 사진의 머리카락이 너무 어둡게 찍혀 결이 보이지 않아, 밝은 색 염색은 자연스럽게 할 수 없어요. 밝은 곳에서 찍은 사진을 써 주세요';
+          setStatus(hairSkipNote);
           console.log('[hair] 새까만 머리 + 밝은 염색: 건너뜀', mine.dist.L[Math.round(nQ * 0.9)].toFixed(1), ref.L[nQ >> 1].toFixed(1));
+        } else if (!mine && mineHairNote) {
+          // 내 머리카락이 거의 없으면 실시간 염색도 할 게 없다: 하지 않고 이유를 알린다
+          setStatus(mineHairNote);
         } else if (!mine || !ref) {
           // 정밀 방식이 안 되면(얼굴·머리카락을 못 찾음) 실시간 염색으로
           engine.hair = { color: h.color!, amount: amt(h.amount), tip: hairTip ?? undefined };
@@ -1408,7 +1425,7 @@ async function updateStillHair(): Promise<void> {
         applyTattooToEngine();
       }
       stillHairKey = key;
-      setStatus(nailNote);
+      setStatus(bakeNote());
     } catch (err) {
       console.warn('사진 염색 실패', err);
       setStatus('');
