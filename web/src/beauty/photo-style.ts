@@ -418,7 +418,7 @@ export class PhotoAnalyzer {
       onStatus?.('손 찾는 중…');
       const hm = await this.handModel();
       const r = hm.detect(canvas);
-      const n = measureNail(px, r.landmarks.map((lm) => toPx(lm, px.w, px.h)), mode === 'nail', segMasks);
+      const n = measureNail(px, r.landmarks.map((lm) => toPx(lm, px.w, px.h)), mode === 'nail', segMasks, mode === 'nail' || !out.hair);
       if (n) {
         out.nail = n;
         parts.push('네일');
@@ -667,6 +667,7 @@ function measureNail(
   hands: Vec2[][],
   forced: boolean,
   seg: { body: Float32Array; w: number; h: number } | null,
+  noHandsOk = true,
 ): { color: RGB; style: NailStyle } | null {
   let samples: RGB[] = [];
   const perNail: RGB[] = [];
@@ -687,8 +688,9 @@ function measureNail(
     // 손톱 색 중 중간 밝기의 것(손톱이 아닌 곳을 찍은 표본을 피함)
     perNail.sort((a, b) => luma(a) - luma(b));
     color = perNail[Math.floor(perNail.length / 2)];
-  } else if (forced || hands.length === 0) {
-    // 손 점이 없으면: 피부·흰 배경을 뺀 주요 색(가까이 찍은 손톱 사진)
+  } else if (forced || (hands.length === 0 && noHandsOk)) {
+    // 손 점이 없으면: 피부·흰 배경을 뺀 주요 색(가까이 찍은 손톱 사진). 다만 머리카락을 찾은 사진(미용실 뒷모습 염색 사진)에서는
+    // 머리색이 '네일 색'으로 잡혀 손도 없는 사진에 네일이 있다고 했으므로 자동 모드에서는 쓰지 않는다(네일 사진으로 다시 볼 때는 씀)
     const all: RGB[] = [];
     const step = Math.max(1, Math.floor(px.w / 120));
     for (let y = 0; y < px.h; y += step)
