@@ -38,7 +38,7 @@ import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPoli
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { fillPoly, swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
-import { extractDesign, findInk, type InkSource } from '../beauty/tattoo-extract.ts';
+import { extractDesign, findInk, isDesignSheet, type InkSource } from '../beauty/tattoo-extract.ts';
 import { affine3, armStrip, chestInkScale, inkOnArm, limbRegion, maskOutLimbs, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
@@ -365,7 +365,10 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   const aiTattoo = r.ai?.raw?.category === 'tattoo' || r.ai?.raw?.secondary?.category === 'tattoo';
   if (!r.makeup && !r.hair && !r.nail && !r.tattoo && !r.faces && (aiTattoo || mode === 'tattoo') && photoAnalyzer.lastInk) {
     const ps = paperInk(photoAnalyzer.lastInk);
-    const t = tattooFromSource(ps, null, PHOTO_MODE ? 1600 : 512);
+    // 도안 수십 개가 빽빽한 시트는 자동으로 하나를 고르지 않는다(시트 전체는 바코드처럼, 한 덩어리는 조각난 도안이 됐음)
+    const sheet = isDesignSheet(ps);
+    const t = sheet ? null : tattooFromSource(ps, null, PHOTO_MODE ? 1600 : 512);
+    if (sheet) r.summary = '도안이 여러 개인 시트라 하나를 고르지 못했어요 · ✂️ 도안 고르기로 원하는 도안 하나를 감싸 주세요';
     if (t) {
       r.tattoo = t.design;
       r.tattooSrc = { src: ps, rect: t.rect, inkMask: t.inkMask, paper: true };
@@ -451,7 +454,7 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   // 못 찾은 분야 안내는 최종 결과 기준(도안 그림·종이 도안으로 나중에 타투가 잡힌 경우 '타투는 찾지 못했어요'가 남았음)
   const got: Record<string, unknown> = { 메이크업: r.makeup, 헤어: r.hair, 네일: r.nail, 타투: r.tattoo };
   const missed = (r.missed ?? []).filter((k) => !got[k]);
-  const missedNote = missed.length && !r.summary.includes('찾지 못했어요') ? ` · ${missed.join('·')}${josa(missed[missed.length - 1], '은', '는')} 이 사진에서 찾지 못했어요` : '';
+  const missedNote = missed.length && !r.summary.includes('못했어요') ? ` · ${missed.join('·')}${josa(missed[missed.length - 1], '은', '는')} 이 사진에서 찾지 못했어요` : '';
   refTextEl.textContent = (r.ai?.headline ? `${r.summary} · ${r.ai.headline}` : r.summary) + (r.faces && r.faces > 1 ? ` · 얼굴 ${r.faces}명 중 큰 얼굴(다른 사람은 ✂️ 영역)` : '') + missedNote;
   refEl.hidden = false;
   setStatus(running ? '' : PHOTO_MODE ? '내 사진을 올리면 바로 합쳐져요' : '카메라를 시작하면 바로 입혀져요');

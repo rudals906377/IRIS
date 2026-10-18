@@ -216,6 +216,44 @@ export function proposeRect(src: InkSource, found = findInk(src)): Rect | null {
   return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
 }
 
+/** 도안 시트인가: 한 장에 도안 수십 개가 빽빽한 플래시 시트. 잉크를 2% 넓히면 전부 한 덩어리(그림의 절반 넘게)인데
+ * 0.8% 만 넓히면 여섯 덩어리 넘게 갈라진다. 시트 전체를 도안으로 쓰면 팔에 바코드처럼 작게 찍히고, 그중 하나를 고르면
+ * 색 채움이 잉크로 안 잡혀 조각난 도안이 되므로(둘 다 시험함) 자동으로 고르지 않고 사용자가 ✂️ 로 고르게 한다 */
+export function isDesignSheet(src: InkSource, found = findInk(src)): boolean {
+  const { w, h } = src;
+  const short = Math.min(w, h);
+  const { ink } = found;
+  const f = new Float32Array(ink.length);
+  for (let i = 0; i < ink.length; i++) f[i] = ink[i] || found.rimLine[i];
+  const parts = (growFrac: number): { n: number; bigBox: number } => {
+    const grown = boxBlur(f, w, h, Math.max(2, short * growFrac));
+    const gm = new Uint8Array(ink.length);
+    for (let i = 0; i < ink.length; i++) gm[i] = grown[i] > 0 ? 1 : 0;
+    const { lab, n } = label(gm, w, h);
+    const amt = new Int32Array(n + 1);
+    const x0 = new Int32Array(n + 1).fill(w), y0 = new Int32Array(n + 1).fill(h), x1 = new Int32Array(n + 1), y1 = new Int32Array(n + 1);
+    for (let i = 0; i < ink.length; i++) {
+      if (!ink[i]) continue;
+      const c = lab[i], x = i % w, y = (i / w) | 0;
+      amt[c]++;
+      if (x < x0[c]) x0[c] = x;
+      if (x > x1[c]) x1[c] = x;
+      if (y < y0[c]) y0[c] = y;
+      if (y > y1[c]) y1[c] = y;
+    }
+    let cnt = 0, bigBox = 0;
+    for (let c = 1; c <= n; c++) {
+      if (amt[c] < 20) continue;
+      cnt++;
+      bigBox = Math.max(bigBox, (x1[c] - x0[c] + 1) * (y1[c] - y0[c] + 1));
+    }
+    return { n: cnt, bigBox };
+  };
+  const coarse = parts(0.02);
+  if (coarse.bigBox <= w * h * 0.5) return false;
+  return parts(0.008).n >= 6;
+}
+
 /**
  * 영역 안의 도안을 뽑는다. rect 가 없으면 자동 제안 영역.
  * maxSide: 도안 텍스처 최대 변(GPU 업로드 크기)
