@@ -386,7 +386,9 @@ export function recolorHair(
     // 검은 배경에 번진 알파까지 내 머리 분포에 섞이면 내 검은 머리가 분포 위쪽 = 고른 사진 윤기 밝기로 대응돼 회색 덩어리가 됐다
     if (blackRef > 0) {
       rgb2lab(rgba[o], rgba[o + 1], rgba[o + 2], lab);
-      if (L > lab[0] + 4) L -= (L - lab[0] - 4) * blackRef;
+      // 여유 4 는 새까만 픽셀(L 10 아래: 배경으로 번진 매트·깊은 그늘)에서는 줄인다: 거기서 +4 는 밝기 4배라 남색 얼룩이 됐다
+      const slack = 4 * Math.min(1, lab[0] / 10);
+      if (L > lab[0] + slack) L -= (L - lab[0] - slack) * blackRef;
     }
     // 흑발로 묶어 밝기를 내렸으면 색도 그 밝기에 해당하는 분위에서: 윤기 분위(고른 사진 정수리 반사, 라벤더 a +5~10·b −10)의
     // 색을 어두운 픽셀에 입히면 검은 머리가 보라빛이 됐다(sam1 × 19)
