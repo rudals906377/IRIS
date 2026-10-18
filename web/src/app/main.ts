@@ -1353,7 +1353,13 @@ async function updateStillHair(): Promise<void> {
       if (amount > 0) {
         const mine = await mineHairMatte();
         const ref = await refHairDist();
-        if (!mine || !ref) {
+        // 내 머리카락이 새까맣게 찍혀 결이 없으면(밝기 상위 10% 가 L 14 아래: sam1 어두운 사진 9.9, 아프로 00035 는 28) 밝은 염색(고른 사진
+        // 가운데 L 35 넘음)은 결 없는 하얀 석고 덩어리가 된다(배경과 머리를 가를 근거도 없음) → 하지 않고 이유를 알린다
+        const nQ = mine ? mine.dist.L.length - 1 : 0;
+        if (mine && ref && mine.dist.L[Math.round(nQ * 0.9)] < 14 && ref.L[nQ >> 1] > 35) {
+          setStatus('내 사진의 머리카락이 너무 어둡게 찍혀 결이 보이지 않아, 밝은 색 염색은 자연스럽게 할 수 없어요. 밝은 곳에서 찍은 사진을 써 주세요');
+          console.log('[hair] 새까만 머리 + 밝은 염색: 건너뜀', mine.dist.L[Math.round(nQ * 0.9)].toFixed(1), ref.L[nQ >> 1].toFixed(1));
+        } else if (!mine || !ref) {
           // 정밀 방식이 안 되면(얼굴·머리카락을 못 찾음) 실시간 염색으로
           engine.hair = { color: h.color!, amount: amt(h.amount), tip: hairTip ?? undefined };
           setStatus(mine ? '고른 사진에서 머리카락을 찾지 못해 머리색만 옮겼어요' : '');
