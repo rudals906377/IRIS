@@ -638,17 +638,7 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
   const num = boxBlur(bgv, w, h, r), den = boxBlur(bgw, w, h, r);
   // ② 반대로 머리 가장자리 안쪽인데 배경 밝기 그대로인 곳(가닥 사이로 보이는 벽)은 알파를 뺀다
   //    안 빼면 가장 밝은 분위로 대응돼 머리 둘레에 하얀 줄이 생긴다. 배경이 둘레에 충분히 있는 곳(가장자리)만
-  const r2 = Math.max(4, Math.round(reach / 1.5));
-  const num2 = boxBlur(bgv, w, h, r2), den2 = boxBlur(bgw, w, h, r2);
-  for (let i = 0; i < n; i++) {
-    if (alpha[i] < 0.05 || den2[i] < 0.05 || (block && block[i] > 0.4)) continue;
-    const bg = num2[i] / den2[i];
-    const c = bg - hL;
-    if (Math.abs(c) < 25) continue;
-    const s = (bg - luma[i]) / c;
-    alpha[i] *= Math.max(0, Math.min(1, (s - 0.1) / 0.35));
-  }
-  // 색 검사: 잔머리는 배경과 머리의 섞임이라 색(a·b)도 그 사이에 있다. 머리 옆 가는 어두운 선이라도 색이 동떨어지면
+  // 색 검사용: 잔머리는 배경과 머리의 섞임이라 색(a·b)도 그 사이에 있다. 머리 옆 가는 어두운 선이라도 색이 동떨어지면
   // (머리 끝에 닿은 보라색 옷깃) 잔머리가 아니다 — 옷깃이 머리색 줄로 칠해졌다
   const lab = new Float32Array(3);
   const ha: number[] = [], hb: number[] = [];
@@ -658,6 +648,41 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
   const bga = new Float32Array(n), bgb = new Float32Array(n);
   for (let i = 0; i < n; i++) if (bgw[i]) { rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab); bga[i] = lab[1]; bgb[i] = lab[2]; }
   const numA = boxBlur(bga, w, h, r), numB = boxBlur(bgb, w, h, r);
+  const r2 = Math.max(4, Math.round(reach / 1.5));
+  const num2 = boxBlur(bgv, w, h, r2), den2 = boxBlur(bgw, w, h, r2);
+  const numA2 = boxBlur(bga, w, h, r2), numB2 = boxBlur(bgb, w, h, r2);
+  // 후보(배경 밝기·색인 머리 픽셀)의 알파 배율을 모아 둔 뒤, 배경과 이어진 후보만 뺀다: 금발의 흰 윤기 가닥은 밝기도 색도
+  // 흰 벽과 같아 '가닥 사이 벽'으로 빠졌고(염색 뒤 원래 금발 줄 2행 구멍), 벽은 머리 밖 배경과 이어져 있지만 윤기는 머리에 둘러싸여 있다
+  const keep = new Float32Array(n).fill(1);
+  for (let i = 0; i < n; i++) {
+    if (alpha[i] < 0.05 || den2[i] < 0.05 || (block && block[i] > 0.4)) continue;
+    const bg = num2[i] / den2[i];
+    const c = bg - hL;
+    if (Math.abs(c) < 25) continue;
+    const s = (bg - luma[i]) / c;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    const chroma = Math.hypot(lab[1] - numA2[i] / den2[i], lab[2] - numB2[i] / den2[i]);
+    const k = Math.max(0, Math.min(1, (s - 0.1) / 0.35));
+    keep[i] = k + (1 - k) * Math.max(0, Math.min(1, (chroma - 10) / 8));
+  }
+  // 배경(알파 0.05 아래)에서 후보(keep<1)를 따라 번져 닿은 후보, 또는 배경 바로 곁(reach/4 안)의 후보만 '벽'
+  const den3 = boxBlur(bgw, w, h, Math.max(2, Math.round(reach / 4)));
+  const seen = new Uint8Array(n);
+  const stack: number[] = [];
+  for (let i = 0; i < n; i++) if (alpha[i] < 0.05 || (keep[i] < 1 && den3[i] > 0)) { seen[i] = 1; stack.push(i); }
+  while (stack.length) {
+    const i = stack.pop()!;
+    const x = i % w, y = (i - x) / w;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const xx = x + dx, yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+      const j = yy * w + xx;
+      if (seen[j] || keep[j] >= 1) continue;
+      seen[j] = 1;
+      stack.push(j);
+    }
+  }
+  for (let i = 0; i < n; i++) if (keep[i] < 1 && seen[i]) alpha[i] *= keep[i];
   for (let i = 0; i < n; i++) {
     if (alpha[i] >= 0.5 || near[i] <= 0 || den[i] < 0.15 || (block && block[i] > 0.4)) continue;
     const bg = num[i] / den[i];
