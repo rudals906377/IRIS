@@ -630,6 +630,8 @@ let mineHair: { alpha: Float32Array; rgba: Uint8ClampedArray; w: number; h: numb
 let mineHairNote = '';
 /** 이번 굽기에서 염색을 건너뛴 까닭(새까만 머리 + 밝은 염색). 굽기 끝에 안내가 지워지지 않게 남긴다 */
 let hairSkipNote = '';
+/** 화장 계획을 못 세운 까닭(얼굴 점 없음). 굽기 끝에 알린다 */
+let mkPlanNote = '';
 let refHair: { src: ImageBitmap; dist: HairDist | null; bands: HairBands | null } | null = null;
 let stillHairTimer = 0;
 let stillHairBusy: Promise<void> | null = null;
@@ -1283,6 +1285,10 @@ async function makeupPlan(): Promise<MkPlan | null> {
     const mc = stillCanvas(), rc = toCanvas(ref, 1600);
     const myPts = await photoAnalyzer.faceLandmarks(mc);
     const refPts = await photoAnalyzer.faceLandmarks(rc);
+    // 얼굴 점을 못 찾으면 화장을 못 옮긴다(실시간 화장으로 떨어지지만 사진에선 대개 아무것도 안 바뀜) → 까닭을 남겨 굽기 끝에 알린다
+    mkPlanNote = !myPts ? '내 사진에서 얼굴을 찾지 못해 화장을 옮길 수 없어요. 얼굴이 정면으로 크게 보이는 사진을 써 주세요'
+      : !refPts ? '고른 사진의 얼굴이 작거나 옆을 보고 있어 화장을 옮길 수 없어요(헤어 등 다른 것은 그대로 입혀요)' : '';
+    console.debug('[makeup] 얼굴 점', { mine: !!myPts, ref: !!refPts });
     if (!myPts || !refPts) return null;
     setStatus('화장을 얼굴 모양에 맞추는 중…');
     const mySkin = await skinOf(mc, myPts, 5);
@@ -1346,7 +1352,7 @@ async function updateStillHair(): Promise<void> {
   // → 못 찾았다고 남긴다(손톱을 눌러 더하는 길도 함께). 같은 결과라 다시 굽지 않을 때도 다시 띄운다
   const nailNote = chosen.nail.color && !off.has('nail') && nailsAuto === photoOriginal && !myNails.length ? '내 사진에서 손톱을 찾지 못했어요. 손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)' : '';
   // 굽기 끝에 남길 안내: 손톱 못 찾음 > 머리카락 못 찾음(염색을 골랐을 때)
-  const bakeNote = (): string => nailNote || (amount > 0 ? mineHairNote || hairSkipNote : '');
+  const bakeNote = (): string => nailNote || (amount > 0 ? mineHairNote || hairSkipNote : '') || (mkOn && !mkp ? mkPlanNote : '');
   if (key === stillHairKey && refHair?.src === lastSource) {
     // 같은 결과면 다시 굽지 않지만, 타투를 못 옮긴 안내(옷에 가림 등)는 다른 안내에 지워졌을 수 있어 다시 띄운다
     if (tatOn && !plan && tatNote) setStatus(tatNote);
