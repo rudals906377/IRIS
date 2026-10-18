@@ -191,7 +191,14 @@ export function transferMakeup(
       // 그때만(피부 바탕 L 차이 10~22) 고른 사진 입술 색 그대로(내 잔무늬는 남김)를 밝기 35%·색 60% 섞는다.
       // 피부 밝기가 비슷하면 차이 방식 그대로: 그대로 쓰면 고른 사진 조명(차가운 화이트밸런스)까지 옮겨져 입술이 회보라로 탁해진다
       const kAbs = lipM[i] > 0 ? lipM[i] * ramp(rfBase[0][i] - myBase[0][i], 10, 22) : 0;
-      const va = kAbs > 0 ? v + (rfLow[c][i] - myLow[c][i] - v) * LIP_ABS[c] * kAbs : v;
+      let va = kAbs > 0 ? v + (rfLow[c][i] - myLow[c][i] - v) * LIP_ABS[c] * kAbs : v;
+      // 그때 밝기는 고른 사진 입술 자체보다 어둡게 하지 않는다(내 입술보다 밝은 립이면 어둡게 하지 않음): 고른 사진의
+      // '피부보다 31 어두운 립'을 차이로 옮기면 어두운 피부의 입술이 L 52 → 37 의 검붉은 립이 됐다(립스틱은 얹는 색이라
+      // 고른 사진에서 보이는 밝기(L 45)보다 어두워질 까닭이 없다)
+      if (c === 0 && kAbs > 0) {
+        const floor = Math.min(0, rfLow[0][i] - myLow[0][i]);
+        if (va < floor) va += (floor - va) * kAbs;
+      }
       d[i] = Math.max(lo2, Math.min(hi, va));
     }
     return d;
