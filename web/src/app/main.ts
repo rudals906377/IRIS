@@ -995,7 +995,28 @@ async function armTattooPlan(): Promise<TatPlan | null> {
           faceM = fillPoly(pts, ref.w, ref.h);
         }
       }
-      dbgTat({ refFacePts: !!refFacePts, faceM: !!faceM });
+      // 얼굴 점도 관절점도 못 찾을 때가 있다(같은 셀카도 실행마다 다름 → 얼굴이 그대로 잉크로 남아 내 손목에 입술·콧구멍 조각):
+      // 정밀 분할(BiSeNet)의 얼굴 채널(피부·눈·눈썹·코·입)로도 찾아 합친다. 사진 전체를 정사각형(검은 여백)으로 넣는다
+      let faceParse = 0;
+      try {
+        const size = Math.max(ref.w, ref.h), x0 = (ref.w - size) / 2, y0 = (ref.h - size) / 2;
+        const fp = await parseFace(rc, { x: x0, y: y0, size });
+        const m = new Float32Array(ref.w * ref.h);
+        for (let y = 0; y < ref.h; y++) for (let x = 0; x < ref.w; x++) {
+          const u = Math.floor(((x - x0) / size) * fp.size), v = Math.floor(((y - y0) / size) * fp.size);
+          if (fp.face[v * fp.size + u] > 128) { m[y * ref.w + x] = 1; faceParse++; }
+        }
+        // 작은 조각(사진의 0.2% 미만: 뒤에 선 다른 사람·오검출)은 무시, 둘레 2% 넓혀 눈썹·입술 가장자리까지
+        if (faceParse >= ref.w * ref.h * 0.002) {
+          const bl = boxBlur(m, ref.w, ref.h, Math.max(2, Math.round(size * 0.02)));
+          const fm = faceM ?? new Float32Array(ref.w * ref.h);
+          for (let i = 0; i < fm.length; i++) if (bl[i] > 0.01) fm[i] = 1;
+          faceM = fm;
+        }
+      } catch {
+        // 분할 모델을 못 불러오면 얼굴 점·관절점 타원만
+      }
+      dbgTat({ refFacePts: !!refFacePts, faceM: !!faceM, faceParse });
       const eraseFace = (im: InkMap): void => {
         if (!faceM) return;
         for (let y = 0; y < im.h; y++) for (let x = 0; x < im.w; x++) {
