@@ -173,7 +173,14 @@ export function transferMakeup(
       // (아랫입술 밑·입꼬리 그늘)의 붉은 기는 화장이 아니라 그늘색이다(밝은 분홍빛 피부는 그늘이 붉다): 색 차이를 70%까지 덜 옮긴다.
       // (아랫입술 밑 그늘(L −18, a +25)이 내 턱에 그대로 옮겨져 립이 번진 듯한 분홍 얼룩이 됐다. 볼 블러셔는 입 둘레 밖이라 그대로)
       const rShade = c === 0 ? 0 : 0.7 * ramp(rfBase[0][i] - rfLow[0][i], 4, 12) * mouthNear[i] * (1 - ramp(lipB[i], 0.05, 0.5));
-      const v = (rfLow[c][i] - rfBase[c][i]) * (1 - rShade) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
+      let v = (rfLow[c][i] - rfBase[c][i]) * (1 - rShade) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
+      // 눈가에서 내 그늘(눈 안쪽 구석·눈 밑, 바탕보다 L 15~25 어두움)을 다 빼면 고른 사진에 그 그늘이 없는 자리가 +10~13 밝아진다:
+      // 깊은 눈·어두운 피부(will1, 바탕 L 54)에서는 그늘이 사라진 주황 얼룩이 됐다. 컨실러도 그늘을 다 못 지우므로
+      // 눈가의 순 밝힘은 고른 사진 자체의 밝힘(하이라이트) + 4 까지만
+      if (c === 0 && eyeM[i] > 0) {
+        const cap = 4 + Math.max(0, rfLow[0][i] - rfBase[0][i]);
+        if (v > cap) v = cap + (v - cap) * (1 - eyeM[i]);
+      }
       // 피부(입술·눈가 밖)는 노란 기를 3 넘게 빼지 않는다: 화장은 피부를 파랗게 만들지 않는데, 고른 사진 조명
       // (밝게 비친 콧등·이마는 하얗게, 즉 b 가 낮게 찍힌다)이 차이로 옮겨져 얼굴이 잿빛으로 떴다. 섀도·립은 차가운 색도 그대로
       const lo2 = c === 2 ? lo * zm - 3 * (1 - zm) : lo;
