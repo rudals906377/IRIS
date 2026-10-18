@@ -152,7 +152,9 @@ export function transferMakeup(
   const rfLow = rfL.map((c) => wblur(c, V, w, h, rL));
   // 화장 차이. 손·앞머리로 가려 고른 사진 화장을 모르는 곳(입술 위 손가락 등)은 둘레 값으로 메운다
   const mouthNear = boxBlur(lipO, w, h, rf(0.06));
-  for (let i = 0; i < n; i++) mouthNear[i] = ramp(mouthNear[i], 0, 0.05);
+  // 콧방울·콧구멍 둘레도 같다: 고른 사진의 콧구멍 테·코 밑 그늘(L −6~−12, a +10)이 바뀐 얼굴에 붉은 멍처럼 옮겨졌다
+  const noseNear = boxBlur(poly([64, 98, 240, 2, 460, 327, 294]), w, h, rf(0.06));
+  for (let i = 0; i < n; i++) mouthNear[i] = Math.max(ramp(mouthNear[i], 0, 0.05), ramp(noseNear[i], 0, 0.05));
   const D = [0, 1, 2].map((c) => {
     const d = new Float32Array(n);
     // 색은 바탕 차이(베이스 화장·톤)도 일부(BASE_SHIFT) 옮긴다. 다만 바탕이 없는 곳(입술·눈 안)은 그 자리 차이만
