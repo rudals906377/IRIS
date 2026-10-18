@@ -210,6 +210,16 @@ export function recolorHair(
   const fine = lift > 0 ? boxBlur(luma, w, h, 1) : null;
   const mineDark = mine.L[Math.round(Q * 0.15)], mineMid = mine.L[Q / 2];
   const strands = lift > 0.05 ? strandTexture(luma, w, h, alpha, seed) : null;
+  // 거의 검은 머리(머리 속 루마 24 아래가 절반 넘음: 아프로 69%): 어두운 픽셀 순위를 둘레 평균으로 메우면 곱슬 결이 통째로
+  // 지워져 물감처럼 평평한 얼룩이 된다 → 메우기는 정말 새까만 곳(루마 12 아래)만, 대신 중간 크기(2px/8px) 결을 비로 되살린다
+  let darkFrac = 0;
+  if (lift > 0) {
+    let nc = 0, nd = 0;
+    for (let i = 0; i < w * h; i++) if (alpha[i] >= 0.9) { nc++; if (luma[i] < 24) nd++; }
+    darkFrac = nc ? nd / nc : 0;
+  }
+  const mostlyDark = Math.max(0, Math.min(1, (darkFrac - 0.4) / 0.2)) * (lift > 0 ? 1 : 0);
+  const mid2 = mostlyDark > 0 ? boxBlur(luma, w, h, 2) : null, mid8 = mostlyDark > 0 ? boxBlur(luma, w, h, Math.max(6, Math.round(Math.min(w, h) / 100))) : null;
   const local = lift > 0.05 ? boxBlur(luma.map((v, i) => (v - box[i]) ** 2), w, h, 3) : null;
   const refSpread = ref.L[Math.round(Q * 0.9)] - ref.L[Math.round(Q * 0.1)];
   // 하이라이트·발레아쥬(어두운 바탕에 밝은 가닥): 고른 사진 밝기 폭이 넓고 내 머리는 고르면, 분위만 옮기면 한 색으로 평평해진다
@@ -285,9 +295,10 @@ export function recolorHair(
       const num = boxBlur(uv, w, h, r), den = boxBlur(ok, w, h, r);
       // 넓게 다 어두운 곳은 4배 넓은 둘레에서, 그래도 없으면 가운데 순위
       const num2 = boxBlur(uv, w, h, r * 4), den2 = boxBlur(ok, w, h, r * 4);
+      const th = 24 - 12 * mostlyDark;
       for (let i = 0; i < w * h; i++) {
-        if (U[i] < 0 || luma[i] >= 24) continue;
-        const k = Math.max(0, Math.min(1, (24 - luma[i]) / 16));
+        if (U[i] < 0 || luma[i] >= th) continue;
+        const k = Math.max(0, Math.min(1, (th - luma[i]) / (th * 2 / 3)));
         const near = den[i] >= 0.02 ? num[i] / den[i] : den2[i] >= 0.005 ? num2[i] / den2[i] : 0.5;
         const fill = Math.max(U[i], near * 0.85);
         U[i] += (fill - U[i]) * k;
@@ -342,6 +353,11 @@ export function recolorHair(
       const rr = Math.max(-0.2, Math.min(0.12, Math.log((fine[i] + 6) / (box[i] + 6))));
       const info = Math.max(0, Math.min(1, (luma[i] - 16) / 16));
       L *= Math.exp((rr < 0 ? rr * 0.6 : rr) * 0.6 * lift * info);
+    }
+    if (mid2 && mid8) {
+      const r2 = Math.max(-0.25, Math.min(0.2, Math.log((mid2[i] + 6) / (mid8[i] + 6))));
+      const info2 = Math.max(0, Math.min(1, (luma[i] - 6) / 12));
+      L *= Math.exp(r2 * 0.45 * lift * info2 * mostlyDark);
     }
     // 흑발 사진(가운데 밝기 L 25 아래)으로 바꿀 때는 원래보다 밝게 하지 않는다(검은 염색은 머리를 밝히지 못한다):
     // 검은 배경에 번진 알파까지 내 머리 분포에 섞이면 내 검은 머리가 분포 위쪽 = 고른 사진 윤기 밝기로 대응돼 회색 덩어리가 됐다
