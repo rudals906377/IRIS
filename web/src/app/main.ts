@@ -17,7 +17,7 @@
 
 import { LOOKS, PALETTES, PART_LABELS, type LookName, type PartName } from '../beauty/palettes.ts';
 import type { MakeupLook, RGB } from '../beauty/makeup.ts';
-import { EYE_L_LOWER, EYE_L_UPPER, EYE_R_LOWER, EYE_R_UPPER, type LipStyle } from '../beauty/face-regions.ts';
+import { BROW_L_LOWER, BROW_L_UPPER, BROW_R_LOWER, BROW_R_UPPER, EYE_L_LOWER, EYE_L_UPPER, EYE_R_LOWER, EYE_R_UPPER, LIPS_OUTER, type LipStyle } from '../beauty/face-regions.ts';
 import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
 import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
 import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, SKIN_REF, paperInk, tattooFromSource, upscaleInkSource, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
@@ -2153,7 +2153,12 @@ function toCanvas(img: ImageBitmap, maxSide: number): HTMLCanvasElement {
   return cv;
 }
 /** 사진 속 얼굴 피부·이목구비 확률(캔버스 크기). hairPad: 머리카락 둘레를 이만큼(분할 칸) 넓혀 뺀다. 이마에 걸친 가는 가닥이 금처럼 옮겨지지 않게 */
-async function skinOf(c: HTMLCanvasElement, pts: { x: number; y: number }[], hairPad = 0): Promise<Float32Array | null> {
+/**
+ * 얼굴 둘레 피부 지도(0~1). trustFeatures: 이목구비 둘레(눈·눈썹·눈꺼풀·입술·콧구멍, 얼굴 폭 4% 흐림)는 분할이 '피부 아님'
+ * (속눈썹·쌍꺼풀 그늘을 머리카락으로)이라 해도 피부로 믿는다(안경 테 자리는 빼고): 얼굴 바꾸기에서 그 자리를 틈으로 보고
+ * 둘레 피부로 메워 눈꺼풀 위에 평평하고 들쭉날쭉한 살색 조각이 생겼다
+ */
+async function skinOf(c: HTMLCanvasElement, pts: { x: number; y: number }[], hairPad = 0, trustFeatures = false): Promise<Float32Array | null> {
   const w = Math.hypot(pts[454].x - pts[234].x, pts[454].y - pts[234].y);
   const cx = (pts[234].x + pts[454].x) / 2, cy = (pts[10].y + pts[152].y) / 2;
   const size = w * 2.2;
@@ -2186,6 +2191,16 @@ async function skinOf(c: HTMLCanvasElement, pts: { x: number; y: number }[], hai
       const hb = boxBlur(hair, p.size, p.size, hairPad);
       for (let i = 0; i < face.length; i++) face[i] *= 1 - Math.min(1, hb[i] * 4);
     }
+    if (trustFeatures) {
+      const feat = new Float32Array(p.size * p.size);
+      const toP = (i: number) => ({ x: ((pts[i].x - rect.x) / rect.size) * p.size, y: ((pts[i].y - rect.y) / rect.size) * p.size });
+      for (const ids of [[...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)], [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)], [...BROW_R_LOWER, ...BROW_R_UPPER], [...BROW_L_LOWER, ...BROW_L_UPPER], [...BROW_R_LOWER, ...[...EYE_R_UPPER].reverse()], [...BROW_L_LOWER, ...[...EYE_L_UPPER].reverse()], LIPS_OUTER, [64, 98, 240, 2, 460, 327, 294, 4]]) {
+        const fm = fillPoly(ids.map(toP), p.size, p.size);
+        for (let i = 0; i < fm.length; i++) if (fm[i]) feat[i] = 1;
+      }
+      const fb = boxBlur(feat, p.size, p.size, Math.max(2, Math.round((w / size) * p.size * 0.04)));
+      for (let i = 0; i < face.length; i++) if (fb[i] > 0.3 && (!p.glasses || p.glasses[i] < 77)) face[i] = 1;
+    }
     const m = new Float32Array(c.width * c.height);
     for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
       const u = Math.floor(((x - rect.x) / rect.size) * p.size), v = Math.floor(((y - rect.y) / rect.size) * p.size);
@@ -2210,7 +2225,7 @@ async function makeSwap(mine: ImageBitmap, ref: ImageBitmap): Promise<ImageBitma
   setStatus('얼굴 자리를 나누는 중…');
   const fw = Math.hypot(rp[454].x - rp[234].x, rp[454].y - rp[234].y);
   const skin = await skinOf(rc, rp);
-  const mySkin = await skinOf(mc, mp, 5);
+  const mySkin = await skinOf(mc, mp, 5, true);
   const hands = await photoAnalyzer.bodySkin(rc).catch(() => null);
   setStatus('얼굴을 바꾸는 중…');
   await new Promise((r) => setTimeout(r, 30));
