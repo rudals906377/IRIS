@@ -231,12 +231,15 @@ export function swapFace(
   mask = boxBlur(mask, W, H, Math.max(1, Math.round(fr * 0.7)));
   // 눈썹은 한쪽씩 '내 눈썹 전부' 아니면 '고른 사진 눈썹 전부': 내 앞머리·잔머리가 눈썹에 걸려 바꿀 자리에 구멍이 나면
   // 휜 내 눈썹 일부와 고른 사진 눈썹 일부가 어긋나 겹쳐 두 겹 눈썹이 된다 → 다 못 바꾸는 쪽은 고른 사진 눈썹을 그대로 둔다
-  for (const ids of [[...BROW_R_LOWER, ...BROW_R_UPPER], [...BROW_L_LOWER, ...BROW_L_UPPER]]) {
-    if (ids.some((i) => i >= N)) continue;
-    const zone = fillPoly(ids.map((i) => dp[i]), W, H);
+  // 두 눈썹은 한 쌍으로: 한쪽만 고른 사진 눈썹을 두면 가는 눈썹 + 굵은 눈썹이 짝짝이가 된다(고른 사진 앞머리 가닥이 한쪽
+  // 눈썹을 가린 사진) → 한쪽이라도 다 못 바꾸면 양쪽 모두 고른 사진 눈썹 그대로
+  const browZones = [[...BROW_R_LOWER, ...BROW_R_UPPER], [...BROW_L_LOWER, ...BROW_L_UPPER]].filter((ids) => ids.every((i) => i < N)).map((ids) => fillPoly(ids.map((i) => dp[i]), W, H));
+  const browKeep = browZones.some((zone) => {
     let sm = 0, cnt = 0;
     for (let i = 0; i < zone.length; i++) if (zone[i] > 0.5) { sm += mask[i]; cnt++; }
-    if (!cnt || sm / cnt >= 0.9) continue;
+    return cnt > 0 && sm / cnt < 0.9;
+  });
+  if (browKeep) for (const zone of browZones) {
     const zb = boxBlur(zone, W, H, Math.max(2, Math.round(fw * 0.04)));
     for (let i = 0; i < mask.length; i++) mask[i] *= 1 - Math.max(0, Math.min(1, (zb[i] - 0.02) / 0.25));
   }
