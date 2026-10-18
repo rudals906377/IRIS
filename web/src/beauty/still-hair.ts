@@ -273,10 +273,26 @@ export function recolorHair(
     for (let i = 0; i < w * h; i++) if (U[i] >= 0 && nearBg[i] === 0 && luma[i] >= 24) { cm[i] = 1; cu[i] = U[i]; }
     const r = Math.max(3, Math.round(Math.min(w, h) / 80));
     const cd = boxBlur(cm, w, h, r), cn = boxBlur(cu, w, h, r);
+    // 섞인 픽셀의 머리 몫 밝기: (밝기 − (1−알파)·둘레 배경 밝기) / 알파. 밝은 배경·피부에 닿은 검은 머리 가장자리는
+    // 섞여서 밝아진 밝기로 순위가 매겨져(+0.1 까지 허용해도 분포가 가파르면 L 10~15) 둘레보다 30 밝은 테가 됐다
+    // → 머리 몫 밝기의 순위보다 높게는 안 둔다(낮추기만: 어두운 배경의 금발 가장자리는 그대로)
+    const bgl = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) if (bgm[i]) bgl[i] = luma[i];
+    const bgN = boxBlur(bgm, w, h, r), bgS = boxBlur(bgl, w, h, r);
     for (let i = 0; i < w * h; i++) {
       if (U[i] < 0 || nearBg[i] === 0 || cd[i] < 0.02) continue;
       const cap = cn[i] / cd[i] + 0.1;
       if (U[i] > cap) U[i] = cap;
+    }
+    // 머리 몫 순위 제한은 좀 더 넓게(4px 안: 이마 위 성긴 머리 띠는 4~6px 폭)
+    const nearBg4 = boxBlur(bgm, w, h, 4);
+    for (let i = 0; i < w * h; i++) {
+      if (U[i] < 0 || nearBg4[i] === 0 || alpha[i] < 0.15 || alpha[i] > 0.97 || bgN[i] < 0.02) continue;
+      const lh = Math.max(0, Math.min(luma[i], (luma[i] - (1 - alpha[i]) * (bgS[i] / bgN[i])) / alpha[i]));
+      const li = Math.round(lh);
+      rgb2lab(li, li, li, lab);
+      const u2 = quantilePos(mine.L, lab[0]) / Q + 0.03;
+      if (U[i] > u2) U[i] = u2;
     }
   }
   // ①' 아주 어두운 곳(원본 루마 24 아래: 정보가 거의 없는 검정)은 가장 어두운 분위로 몰려 밝게 바꿀 때 검은 점·얼룩이 된다
