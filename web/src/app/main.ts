@@ -1892,7 +1892,14 @@ async function ensureNailsOnce(): Promise<void> {
     }
     // 너무 큰 덩어리 기준: 사진의 3%, 단 찾은 손톱 넓이 가운데 값의 1.6배가 더 크면 그쪽(8%까지: 가까이 찍은 긴 네일은 하나가 사진의 4%)
     const areas = found.map((n) => n.mask.reduce((t, v) => t + v, 0)).sort((x, y) => x - y);
-    const maxA = Math.max(base.w * base.h * 0.03, Math.min(base.w * base.h * 0.08, (areas[areas.length >> 1] ?? 0) * 1.6));
+    let maxA = Math.max(base.w * base.h * 0.03, Math.min(base.w * base.h * 0.08, (areas[areas.length >> 1] ?? 0) * 1.6));
+    // 손이 잡혔으면 손 크기로도 묶는다: 손톱은 손바닥 길이(손목→가운뎃손가락 뿌리)² 의 2~4%(긴 네일) → 10% 까지.
+    // 전신 사진(00055)에서 사진 전체 색 찾기가 어두운 보라 소매(7,700px, 사진의 1%)를 손톱 하나로 잡아 소매에 네일 아트가 칠해졌음
+    if (handsMine.length) {
+      const hm = Math.max(...handsMine.map((hp) => Math.hypot(hp.p[9].x - hp.p[0].x, hp.p[9].y - hp.p[0].y)));
+      maxA = Math.min(maxA, hm * hm * 0.1);
+    }
+    console.debug('[nail] maxA', Math.round(maxA), 'areas', areas.map((v) => Math.round(v)).join(','));
     for (const n of found) {
       let a = 0, sx = 0, sy = 0;
       for (let i = 0; i < n.mask.length; i++) if (n.mask[i]) { a++; sx += i % base.w; sy += (i / base.w) | 0; }
