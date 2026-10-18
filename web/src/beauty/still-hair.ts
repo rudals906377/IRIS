@@ -357,7 +357,7 @@ export function recolorHair(
       mix = [bands.ref.bands[k], bands.ref.bands[k + 1], f - k];
       rL = mix[0].L;
     }
-    const bandAt = (key: 'L' | 'a' | 'b'): number => (mix ? at(mix[0][key], t) * (1 - mix[2]) + at(mix[1][key], t) * mix[2] : at(key === 'L' ? rL : key === 'a' ? ra : rb, t));
+    const bandAt = (key: 'L' | 'a' | 'b', tt = t): number => (mix ? at(mix[0][key], tt) * (1 - mix[2]) + at(mix[1][key], tt) * mix[2] : at(key === 'L' ? rL : key === 'a' ? ra : rb, tt));
     let L = bandAt('L');
     if (strands && local) {
       // 원래 잔결이 약한 곳일수록(표준편차 루마 3 아래) 그린 올 무늬를 세게
@@ -388,7 +388,12 @@ export function recolorHair(
       rgb2lab(rgba[o], rgba[o + 1], rgba[o + 2], lab);
       if (L > lab[0] + 4) L -= (L - lab[0] - 4) * blackRef;
     }
-    lab2rgb(Math.max(0, Math.min(100, L)), bandAt('a'), bandAt('b'), tmp, 0);
+    // 흑발로 묶어 밝기를 내렸으면 색도 그 밝기에 해당하는 분위에서: 윤기 분위(고른 사진 정수리 반사, 라벤더 a +5~10·b −10)의
+    // 색을 어두운 픽셀에 입히면 검은 머리가 보라빛이 됐다(sam1 × 19)
+    const tc = blackRef > 0 ? Math.max(TRIM, Math.min(Q - TRIM, quantilePos(rL, Math.max(0, Math.min(100, L))))) : t;
+    // 흑발은 L 20 아래의 어두운 픽셀일수록 색기가 적다(고른 사진 검은 머리의 a +3·b −5 는 조명 색): 어두운 만큼 색을 줄인다
+    const kd = blackRef > 0 ? 1 - blackRef * (1 - Math.max(0, Math.min(1, L / 20))) : 1;
+    lab2rgb(Math.max(0, Math.min(100, L)), bandAt('a', tc) * kd, bandAt('b', tc) * kd, tmp, 0);
     // 알파 0.5 아래는 둘레 속머리 색을 전부, 1 에 가까울수록 제 색을(안쪽은 지금과 같다).
     // 결과는 원본과 새 색 사이로 묶는다(알파가 부푼 배경 픽셀이 새 색보다 밝아져 하얀 테가 되지 않게)
     for (let c = 0; c < 3; c++) {
