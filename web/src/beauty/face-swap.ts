@@ -350,7 +350,15 @@ export function swapFace(
     const L = L0 + (devRef - devMy * s) * ok;
     // 그늘을 밝힌 만큼 색도도 같이(그늘진 피부는 색도가 낮다): 밝기만 올리면 어두운 피부가 잿빛 얼룩이 됐다
     const kc = Math.max(0.9, Math.min(1.1, (Math.max(0, L) + 16) / (Math.max(0, L0) + 16)));
-    lab2rgb(Math.max(0, Math.min(100, L)), (labV[i * 3 + 1] + mb[1] - ma[1]) * kc, (labV[i * 3 + 2] + mb[2] - ma[2]) * kc, o3, 0);
+    let A = (labV[i * 3 + 1] + mb[1] - ma[1]) * kc, B = (labV[i * 3 + 2] + mb[2] - ma[2]) * kc;
+    // 피부는 둘레 피부보다 많이 덜 붉거나 덜 노랗게(잿빛·푸른빛) 되지 않는다: 내 수염 자국·그늘(둘레보다 a −8·b −11)은
+    // 평균 차이만 옮기면 그 모자람이 그대로 남아, 밝은 분홍 피부에 넣으면 입·턱 둘레가 청회색 얼룩이 됐다(고른 사진 자체는 b −4 안)
+    // → 고른 사진 둘레 평균보다 6 넘게 모자란 몫은 30%만
+    if ((skin ? skin[i] : 1) > 0.5) {
+      if (A < mb[1] - 6) A = mb[1] - 6 + (A - (mb[1] - 6)) * 0.3;
+      if (B < mb[2] - 6) B = mb[2] - 6 + (B - (mb[2] - 6)) * 0.3;
+    }
+    lab2rgb(Math.max(0, Math.min(100, L)), A, B, o3, 0);
     for (let c = 0; c < 3; c++) {
       const d0 = dst[i * 4 + c];
       out[i * 4 + c] = d0 + (o3[c] - d0) * m;
