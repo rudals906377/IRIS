@@ -55,6 +55,8 @@ export interface StyleResult {
   tattooSrc?: { src: InkSource; rect: Rect; inkMask: Float32Array; paper?: boolean };
   /** 사용자에게 보여 줄 한 줄 설명 */
   summary: string;
+  /** 찾으려 했지만 못 찾은 것('메이크업'·'헤어'·'네일'·'타투'): 화면에 못 찾았다고 알린다 */
+  missed?: string[];
   /** 사진에서 찾은 얼굴 수(2명 이상이면 영역 고르기 안내) */
   faces?: number;
   /** 분석에 쓴 축소 그림 */
@@ -87,6 +89,12 @@ export const SHADOW_KEFF = 0.35;
 
 type Pixels = { w: number; h: number; d: Uint8ClampedArray; img: ImageData };
 type SegMasks = { hair: Float32Array; body: Float32Array; face: Float32Array; bg: Float32Array; clothes?: Float32Array; w: number; h: number };
+
+/** 받침 유무로 조사 고르기('타투는'·'네일은') */
+export function josa(word: string, withBatchim: string, without: string): string {
+  const c = word.charCodeAt(word.length - 1);
+  return c >= 0xac00 && c <= 0xd7a3 && (c - 0xac00) % 28 !== 0 ? withBatchim : without;
+}
 
 export class PhotoAnalyzer {
   private fileset: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
@@ -444,7 +452,17 @@ export class PhotoAnalyzer {
         parts.push('타투 도안');
       }
     }
-    out.summary = parts.length ? `사진에서 가져왔어요: ${parts.join(' · ')}` : '사진에서 가져올 만한 스타일을 찾지 못했어요';
+    // 찾지 못한 것은 못 찾았다고 분명히 말한다(얼굴 사진이면 네일·타투는 보지 않으므로 그것도 '찾지 못함'으로)
+    const missed = [
+      wantFace && !out.makeup ? '메이크업' : '',
+      wantHair && !out.hair ? '헤어' : '',
+      wantNail && !out.nail ? '네일' : '',
+      wantTattoo && !out.tattoo ? '타투' : '',
+    ].filter(Boolean);
+    out.missed = missed;
+    out.summary = parts.length
+      ? `사진에서 가져왔어요: ${parts.join(' · ')}`
+      : `이 사진에서 ${missed.join('·')}${josa(missed[missed.length - 1] ?? '', '을', '를')} 찾지 못했어요. 얼굴·손·타투가 또렷하게 크게 보이는 사진을 골라 주세요`;
     return out;
   }
 }

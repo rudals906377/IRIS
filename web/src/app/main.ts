@@ -20,7 +20,7 @@ import type { MakeupLook, RGB } from '../beauty/makeup.ts';
 import { BROW_L_LOWER, BROW_L_UPPER, BROW_R_LOWER, BROW_R_UPPER, EYE_L_LOWER, EYE_L_UPPER, EYE_R_LOWER, EYE_R_UPPER, LIPS_OUTER, type LipStyle } from '../beauty/face-regions.ts';
 import { builtinDesigns, designFromFile, type TattooDesign } from '../beauty/tattoo-designs.ts';
 import { PLACE_LABELS, type TattooPlace } from '../beauty/tattoo-place.ts';
-import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, SKIN_REF, paperInk, tattooFromSource, upscaleInkSource, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
+import { NATURAL_APPLE, NATURAL_BROW_L, NATURAL_LINER_L, NATURAL_MID, NATURAL_SHADOW, PhotoAnalyzer, SKIN_REF, josa, paperInk, tattooFromSource, upscaleInkSource, type PhotoMode, type StyleResult } from '../beauty/photo-style.ts';
 import { FACE_OVAL, measureFace, type FaceMeasure } from '../beauty/face-measure.ts';
 import { matchDarkness, matchLip, matchTint } from '../beauty/style-match.ts';
 import { analyzeStyle } from '../beauty/style-ai.ts';
@@ -448,7 +448,8 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   lastMatch = [];
   renderChips();
   refImgEl.src = r.thumb.toDataURL('image/jpeg', 0.8);
-  refTextEl.textContent = (r.ai?.headline ? `${r.summary} · ${r.ai.headline}` : r.summary) + (r.faces && r.faces > 1 ? ` · 얼굴 ${r.faces}명 중 큰 얼굴(다른 사람은 ✂️ 영역)` : '');
+  const missedNote = r.missed?.length && !r.summary.includes('찾지 못했어요') ? ` · ${r.missed.join('·')}${josa(r.missed[r.missed.length - 1], '은', '는')} 이 사진에서 찾지 못했어요` : '';
+  refTextEl.textContent = (r.ai?.headline ? `${r.summary} · ${r.ai.headline}` : r.summary) + (r.faces && r.faces > 1 ? ` · 얼굴 ${r.faces}명 중 큰 얼굴(다른 사람은 ✂️ 영역)` : '') + missedNote;
   refEl.hidden = false;
   setStatus(running ? '' : PHOTO_MODE ? '내 사진을 올리면 바로 합쳐져요' : '카메라를 시작하면 바로 입혀져요');
   if (r.makeup && r.measure && !off.has('lip')) {
@@ -2411,7 +2412,8 @@ async function openMyPhoto(f: File): Promise<void> {
   applyAll();
   if (!running) return;
   btnMyPhotoEl.hidden = false;
-  btnSwapEl.hidden = false;
+  // 얼굴 바꾸기는 제품 기능이 아니다(헤어·네일·메이크업·타투만 옮긴다): 시험용으로 ?swap=1 일 때만 보인다
+  btnSwapEl.hidden = params.get('swap') !== '1';
   setStatus(lastStyle ? '' : '이제 📷 사진 고르기로 입히고 싶은 사진을 골라 주세요');
 }
 myPhotoFileEl.addEventListener('change', () => {
