@@ -862,24 +862,38 @@ async function chestPlacePlan(c: HTMLCanvasElement, aspect0: number): Promise<Ta
   const segStart = sw * 0.05, segLen = sw * 0.45, limbW = sw * 0.72;
   let h = segLen * (0.25 + 0.6 * tattoo.size), w = h * aspect0;
   if (w > limbW) { h *= limbW / w; w = limbW; }
-  const lc = segStart + segLen * Math.min(0.92, Math.max(0.08, tattoo.along ?? 0.5));
   const oc = Math.min(0.95, Math.max(-0.95, tattoo.across ?? 0)) * (limbW / 2);
-  const center = { x: mid.x + down.x * lc + right.x * oc, y: mid.y + down.y * lc + right.y * oc };
-  // 내 사진 px → 도안 px: u = 0.5 + ((p − 가운데)·right)/w, v = 0.5 + ((p − 가운데)·down)/h
   const sx = c.width / w, sy = c.height / h;
-  const toRef = [right.x * sx, right.y * sx, c.width * 0.5 - (center.x * right.x + center.y * right.y) * sx, down.x * sy, down.y * sy, c.height * 0.5 - (center.x * down.x + center.y * down.y) * sy];
-  const det = toRef[0] * toRef[4] - toRef[1] * toRef[3];
-  if (Math.abs(det) < 1e-9) return null;
-  const fromRef = [toRef[4] / det, -toRef[1] / det, (toRef[1] * toRef[5] - toRef[2] * toRef[4]) / det, -toRef[3] / det, toRef[0] / det, (toRef[2] * toRef[3] - toRef[0] * toRef[5]) / det];
-  // 도안 자리에 내 피부가 거의 없으면(옷) 굽어도 안 보인다: 안내만
-  let on = 0, all = 0;
-  for (let v = 0.05; v < 1; v += 0.1) for (let u = 0.05; u < 1; u += 0.1) {
-    const X = Math.round(fromRef[0] * u * c.width + fromRef[1] * v * c.height + fromRef[2]), Y = Math.round(fromRef[3] * u * c.width + fromRef[4] * v * c.height + fromRef[5]);
-    all++;
-    if (X >= 0 && Y >= 0 && X < W && Y < H && body.skin[Y * W + X] > 0.5) on++;
+  // 세로 자리 along 에 놓았을 때의 변환과 도안 자리의 내 피부 비율(10×10 격자)
+  const planAt = (along: number) => {
+    const lc = segStart + segLen * Math.min(0.92, Math.max(0.08, along));
+    const center = { x: mid.x + down.x * lc + right.x * oc, y: mid.y + down.y * lc + right.y * oc };
+    // 내 사진 px → 도안 px: u = 0.5 + ((p − 가운데)·right)/w, v = 0.5 + ((p − 가운데)·down)/h
+    const toRef = [right.x * sx, right.y * sx, c.width * 0.5 - (center.x * right.x + center.y * right.y) * sx, down.x * sy, down.y * sy, c.height * 0.5 - (center.x * down.x + center.y * down.y) * sy];
+    const det = toRef[0] * toRef[4] - toRef[1] * toRef[3];
+    if (Math.abs(det) < 1e-9) return null;
+    const fromRef = [toRef[4] / det, -toRef[1] / det, (toRef[1] * toRef[5] - toRef[2] * toRef[4]) / det, -toRef[3] / det, toRef[0] / det, (toRef[2] * toRef[3] - toRef[0] * toRef[5]) / det];
+    let on = 0, all = 0;
+    for (let v = 0.05; v < 1; v += 0.1) for (let u = 0.05; u < 1; u += 0.1) {
+      const X = Math.round(fromRef[0] * u * c.width + fromRef[1] * v * c.height + fromRef[2]), Y = Math.round(fromRef[3] * u * c.width + fromRef[4] * v * c.height + fromRef[5]);
+      all++;
+      if (X >= 0 && Y >= 0 && X < W && Y < H && body.skin[Y * W + X] > 0.5) on++;
+    }
+    return { center, toRef, fromRef, skinFrac: on / all };
+  };
+  // 세로 자리를 고르지 않았으면 피부가 가장 많이 보이는 자리로(기본 0.5 에 가까운 쪽 우선):
+  // 브이넥 사진(01992)은 가슴 피부가 아래로 갈수록 좁아져 기본 자리에선 도안 아랫부분이 옷 밑에 숨었다
+  let best = planAt(tattoo.along ?? 0.5);
+  if (!best) return null;
+  if (tattoo.along == null) {
+    for (let a = 0.08; a <= 0.92; a += 0.06) {
+      const q = planAt(a);
+      if (q && q.skinFrac > best.skinFrac + 0.02) best = q;
+    }
   }
-  dbgTat({ chestPlace: { sw, w, h, center, skinFrac: on / all } });
-  if (on < all * 0.15) {
+  const { center, toRef, fromRef, skinFrac } = best;
+  dbgTat({ chestPlace: { sw, w, h, center, skinFrac } });
+  if (skinFrac < 0.15) {
     tatNote = '고른 타투 자리(가슴)가 내 사진에선 옷에 가려 보이지 않아요. 📍 자리 고르기로 보이는 피부에 놓아 보세요';
     return null;
   }
