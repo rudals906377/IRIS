@@ -288,7 +288,12 @@ export function recolorHair(
     const nearBg4 = boxBlur(bgm, w, h, 4);
     for (let i = 0; i < w * h; i++) {
       if (U[i] < 0 || nearBg4[i] === 0 || alpha[i] < 0.15 || alpha[i] > 0.97 || bgN[i] < 0.02) continue;
-      const lh = Math.max(0, Math.min(luma[i], (luma[i] - (1 - alpha[i]) * (bgS[i] / bgN[i])) / alpha[i]));
+      const raw = (luma[i] - (1 - alpha[i]) * (bgS[i] / bgN[i])) / alpha[i];
+      let lh = Math.max(0, Math.min(luma[i], raw));
+      // 머리 몫이 음수 = 알파가 말하는 배경 몫이 픽셀 밝기보다 많다: 알파가 덜 찼을 뿐 배경이 섞여 밝아진 픽셀이 아니다
+      // (아주 짧은 검은 머리의 둘레 6px 가 알파 0.65~0.9 로 잡혀 전부 가장 어두운 순위 = 검은 테였음)
+      // → 모자란 만큼(픽셀 밝기의 절반이면 전부) 제 밝기를 머리 몫으로 본다
+      if (raw < 0) lh = luma[i] * Math.min(1, (-raw * alpha[i]) / (0.5 * luma[i] + 1));
       const li = Math.round(lh);
       rgb2lab(li, li, li, lab);
       const u2 = quantilePos(mine.L, lab[0]) / Q + 0.03;
