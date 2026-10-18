@@ -1432,6 +1432,33 @@ type NailArt = { src: ImageBitmap; rgba: Uint8ClampedArray; w: number; h: number
 let refNails: NailArt | null = null as NailArt | null;
 let refNailsBusy: Promise<void> | null = null;
 let nailsAuto: ImageBitmap | null = null;
+/** 고른 사진 손톱들을 좋은 순으로: 또렷한(라플라시안 분산) 것 먼저, 초점이 안 맞아 흐리거나(가장 또렷한 것의 30% 아래)
+ * 마스크 안에 어두운 배경이 많이 섞인(아주 어두운 픽셀 8% 넘게) 손톱은 다른 손톱이 둘 이상 있으면 뺀다.
+ * (파란 옴브레 09번: 맨 왼쪽의 초점 나간 손톱이 첫 손톱으로 쓰여 내 엄지에 흐릿한 파란 덩어리 + 검은 조각이 찍혔다) */
+function rankNails(rgba: Uint8ClampedArray, w: number, h: number, nails: { mask: Uint8Array; frame: NailFrame }[]): { mask: Uint8Array; frame: NailFrame }[] {
+  if (nails.length < 2) return nails;
+  const lum = (i: number): number => 0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2];
+  const q = nails.map((n) => {
+    let s = 0, s2 = 0, cnt = 0, dark = 0, all = 0;
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (!n.mask[i]) continue;
+      all++;
+      if (lum(i) < 40) dark++;
+      if (!n.mask[i - 1] || !n.mask[i + 1] || !n.mask[i - w] || !n.mask[i + w]) continue;
+      const lp = 4 * lum(i) - lum(i - 1) - lum(i + 1) - lum(i - w) - lum(i + w);
+      s += lp; s2 += lp * lp; cnt++;
+    }
+    const sharp = cnt ? s2 / cnt - (s / cnt) ** 2 : 0;
+    return { n, sharp, dark: all ? dark / all : 1 };
+  });
+  const best = Math.max(...q.map((v) => v.sharp));
+  const good = q.filter((v) => v.sharp >= best * 0.3 && v.dark <= 0.08);
+  const use = good.length >= 2 ? good : q;
+  use.sort((a, b) => b.sharp - a.sharp);
+  if (use.length < q.length) console.log('[nail] 고른 사진 손톱 중 흐리거나 배경 섞인 것 뺌', q.length, '→', use.length, q.map((v) => ({ sharp: +v.sharp.toFixed(0), dark: +v.dark.toFixed(2) })));
+  return use.map((v) => v.n);
+}
 function refNailArt(): NailArt | null {
   if (refNails && refNails.src === lastSource && refNails.nails.length) return refNails;
   // 손톱 모양을 못 찾았으면(색만 앎) 그 색의 가상 손톱 그림으로 굽는다: 실시간 네일은 정지 사진에서 어긋나 보인다
@@ -1804,12 +1831,12 @@ async function findRefNails(): Promise<void> {
     }
     // 몇 개만 찾았으면(손 점이 일부만·엉뚱하게 잡힘) 색 덩어리 방식도 해 보고 더 많이 찾은 쪽을 쓴다
     if (got.length >= 4) {
-      refNails = { src, rgba, w, h, nails: got };
+      refNails = { src, rgba, w, h, nails: rankNails(rgba, w, h, got) };
       return;
     }
     if (got.length >= 2) {
       const byColor = await nailsByColor(rgba, w, h, () => samImage(cv), '고른 사진에서 손톱을 찾는 중…');
-      refNails = { src, rgba, w, h, nails: byColor.length > got.length ? byColor : got };
+      refNails = { src, rgba, w, h, nails: rankNails(rgba, w, h, byColor.length > got.length ? byColor : got) };
       return;
     }
   }
@@ -1828,7 +1855,7 @@ async function findRefNails(): Promise<void> {
       return;
     }
   }
-  refNails = { src, rgba, w, h, nails: best };
+  refNails = { src, rgba, w, h, nails: rankNails(rgba, w, h, best) };
   // 사진 분석이 손을 못 찾아 손톱 색을 배경에서 잘못 읽었을 수 있다 → 찾은 손톱 픽셀의 가운데 색으로 바로잡는다
   if (best.length && chosen.nail.color) {
     const rs: number[] = [], gs: number[] = [], bs: number[] = [];
