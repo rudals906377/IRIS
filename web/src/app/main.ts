@@ -448,7 +448,10 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   lastMatch = [];
   renderChips();
   refImgEl.src = r.thumb.toDataURL('image/jpeg', 0.8);
-  const missedNote = r.missed?.length && !r.summary.includes('찾지 못했어요') ? ` · ${r.missed.join('·')}${josa(r.missed[r.missed.length - 1], '은', '는')} 이 사진에서 찾지 못했어요` : '';
+  // 못 찾은 분야 안내는 최종 결과 기준(도안 그림·종이 도안으로 나중에 타투가 잡힌 경우 '타투는 찾지 못했어요'가 남았음)
+  const got: Record<string, unknown> = { 메이크업: r.makeup, 헤어: r.hair, 네일: r.nail, 타투: r.tattoo };
+  const missed = (r.missed ?? []).filter((k) => !got[k]);
+  const missedNote = missed.length && !r.summary.includes('찾지 못했어요') ? ` · ${missed.join('·')}${josa(missed[missed.length - 1], '은', '는')} 이 사진에서 찾지 못했어요` : '';
   refTextEl.textContent = (r.ai?.headline ? `${r.summary} · ${r.ai.headline}` : r.summary) + (r.faces && r.faces > 1 ? ` · 얼굴 ${r.faces}명 중 큰 얼굴(다른 사람은 ✂️ 영역)` : '') + missedNote;
   refEl.hidden = false;
   setStatus(running ? '' : PHOTO_MODE ? '내 사진을 올리면 바로 합쳐져요' : '카메라를 시작하면 바로 입혀져요');
@@ -754,7 +757,26 @@ async function refHairDist(): Promise<HairDist | null> {
     bg[i] = 1 - Math.max(a[i], face[i], body[i]);
   }
   const core = pureHair(p.rgba, hairCore(a, p.size, p.size, 0.7, 4), [face, body, bg]);
-  refHair = { src, dist: hairDist(p.rgba, core, 0.7, 200), bands: hairBands(p.rgba, p.size, core, 0.7, 200) };
+  let dist = hairDist(p.rgba, core, 0.7, 200), bands = hairBands(p.rgba, p.size, core, 0.7, 200);
+  if (!dist) {
+    // 얼굴이 없는 사진(미용실 뒷모습 염색 사진)은 정밀 얼굴 분할이 머리카락을 거의 못 잡아 분포가 비고, 실시간 염색으로
+    // 떨어져 토막 난 줄무늬가 됐다 → 사진 분석이 쓰는 인물 분할(MediaPipe)의 머리카락 확률로 분포를 만든다
+    photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = p.size;
+    const ctx = cv.getContext('2d')!;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, p.size, p.size);
+    ctx.drawImage(src, (src.width - size) / 2, (src.height - size) / 2, size, size, 0, 0, p.size, p.size);
+    const hm = await photoAnalyzer.hairMask(cv).catch(() => null);
+    if (hm) {
+      const core2 = pureHair(p.rgba, hairCore(hm, p.size, p.size, 0.5, 4), [face, body, bg]);
+      dist = hairDist(p.rgba, core2, 0.7, 200);
+      bands = hairBands(p.rgba, p.size, core2, 0.7, 200);
+      console.log('[hair] 고른 사진 머리카락: 정밀 분할 대신 인물 분할로', dist ? '성공' : '실패');
+    }
+  }
+  refHair = { src, dist, bands };
   return refHair.dist;
 }
 // ---- 사진 모드 타투: 고른 사진의 팔 타투를 내 팔 같은 자리로(still-tattoo.ts) ----
