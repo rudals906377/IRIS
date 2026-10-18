@@ -126,6 +126,8 @@ def main() -> None:
     print("\n[5/6] 가중치 내려받기(끊기면 다시 실행: 받은 것은 건너뜀)")
     dl = os.path.join(HERE, "download_weights.py")
     args = [VPY, dl]
+    if "--no-swap" in sys.argv:
+        args.append("--no-swap")
     if not want_hair:
         args.append("--no-hair")
     if not want_makeup:

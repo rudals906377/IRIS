@@ -8,6 +8,7 @@
 | 헤어 | [HairFastGAN](https://github.com/AIRI-Institute/HairFastGAN) (MIT) | 고른 사진의 **머리 모양과 색**을 내 얼굴에 옮김(StyleGAN 기반, 정렬된 1024 얼굴) | 1~3초 |
 | 헤어 2 | [Stable-Hair](https://github.com/Xiaojiu-z/Stable-Hair) (Apache-2.0) | 내 머리를 먼저 지우고(Bald Converter) 고른 사진의 머리를 **새로 그림**(SD1.5 + 참고 머리 인코더 + ControlNet, 512). 고른 사진에서 얼굴을 못 찾아도 사진 가운데를 참고해 그린다 | 10~20초 |
 | 메이크업 | [Stable-Makeup](https://github.com/Xiaojiu-z/Stable-Makeup) (Apache-2.0) | 고른 사진의 **화장**을 내 얼굴에 옮김(SD1.5 + 디테일 인코더 + 구조 ControlNet, 512) | 10~30초 |
+| 얼굴 바꾸기 | [InsightFace](https://github.com/deepinsight/insightface) inswapper_128 (**비상업·연구용**) + [GFPGAN](https://github.com/TencentARC/GFPGAN) v1.4 ONNX (Apache-2.0, 일부 구성 요소 별도 라이선스) | 🔁 사진 속에 내 얼굴: 고른 사진 얼굴 자리에 **내 얼굴을 다시 그림**(128 정렬 얼굴) → GFPGAN 으로 또렷하게 복원(512). 점을 휘어 붙이는 브라우저 방식과 달리 코·입이 무너지지 않는다. GPU 없이도 됨(CPU 3~8초) | 1초(CPU 3~8초) |
 
 ```
 웹 앱(✨ AI 생성, 엔진: 사진처럼) → IRIS 생성 서버(8765): 섞을 자리(머리카락·얼굴 피부) 마스크, 색감 맞추기
@@ -24,6 +25,7 @@ python setup.py            (헤어만: python setup.py --no-makeup / 메이크�
 두 공식 저장소를 받고(git 이 없으면 ZIP), 전용 가상환경(`venv_realistic`)에 PyTorch 2.0.1(CUDA 11.8)과 패키지를 설치한 뒤 가중치를 내려받는다:
 헤어 6.4GB(Hugging Face), 헤어 2 6.1GB(공식 Google Drive), 메이크업 4.3GB(공식 Google Drive) + SD1.5 4GB(메이크업·헤어 2 공용) + CLIP 1.6GB(Hugging Face). 끊기면 다시 실행하면 이어받는다.
 **이미 설치한 PC** 는 `python setup.py` 를 한 번 더 실행하면 새로 추가된 헤어 2 만 받는다(빼려면 `--no-hair2`).
+얼굴 바꾸기(InsightFace inswapper + buffalo_l + GFPGAN 복원, 약 1.2GB, CPU 로도 됨)도 같이 받는다(빼려면 `--no-swap`; 서버 쪽도 `--no-swap` 으로 끌 수 있고 `--swap-dir` 로 폴더를 바꾼다). `GFPGANv1.4.onnx` 가 없으면 복원 없이(부드러운 128 얼굴) 바꾼다.
 
 설치가 윈도우에서도 되게 한 것:
 - StyleGAN 의 CUDA 확장(컴파일에 Visual Studio C++ 와 CUDA 툴킷 필요)을 **순수 PyTorch 판**(`patches/`)으로 바꿔 복사한다. 조금 느리지만 컴파일이 없다.
@@ -35,7 +37,7 @@ python setup.py            (헤어만: python setup.py --no-makeup / 메이크�
 
 ## 실행
 
-`run.bat`(= `python run.py`) → `준비 완료` 가 뜨면 http://127.0.0.1:8767/health 에서 `"hair": true, "makeup": true`.
+`run.bat`(= `python run.py`) → `준비 완료` 가 뜨면 http://127.0.0.1:8767/health 에서 `"hair": true, "makeup": true, "swap": true`.
 헤어 2 를 설치했으면 같은 창에서 `헤어 2 준비 완료` 도 뜬다(http://127.0.0.1:8768/health). 웹 앱의 헤어는 기본(자동)이 HairFastGAN 이고,
 고른 사진에서 얼굴을 못 찾으면 헤어 2 로 다시 그린다. ✨ 패널 고급 → 헤어 모델에서 **다시 그리기**(헤어 2)를 직접 고를 수도 있다.
 
@@ -51,9 +53,10 @@ IRIS 생성 서버(`tools\genserver`, 먼저 `python update.py` 로 갱신)와 �
 
 - `POST /hair` `{ face, shape, color? }` → `{ image(원래 크기), valid(덮인 곳), aligned(1024), elapsed_ms }` — color 를 비우면 shape 사진의 모양과 색을 함께
 - `POST /makeup` `{ face, makeup, steps 30, guidance 1.6, seed? }` → `{ image(원래 크기), valid(얼굴 상자), elapsed_ms }`
+- `POST /swap` `{ face, target, restore 0.75 }` → `{ image(고른 사진 크기, 얼굴 자리에 내 얼굴), valid(얼굴 상자 25% 넓힘), box, elapsed_ms }` — restore: GFPGAN 복원 비율(0 이면 안 함; `GFPGANv1.4.onnx` 가 없으면 건너뜀)
 - 헤어 2: `POST :8768/hair` `{ face, shape, steps 30, seed? }` → `{ image, valid, aligned(1024), bald(512, 머리를 지운 내 얼굴), elapsed_ms }`
 
-생성 서버(`realistic_client.py`)는 헤어 = (원래 머리카락 ∪ 결과 머리카락) 자리, 메이크업 = 얼굴 피부(구멍 메움) 자리만 부드럽게 섞는다.
+생성 서버(`realistic_client.py`)는 헤어 = (원래 머리카락 ∪ 결과 머리카락) 자리, 메이크업 = 얼굴 피부(구멍 메움) 자리만 부드럽게 섞는다. 얼굴 바꾸기 = 고른 사진 얼굴 피부 자리만 섞되, 얼굴 위를 지나는 가는 머리카락 가닥(눈 둘레 제외)은 원본을 그대로 둔다(모델이 128 해상도로 다시 그려 가닥이 끊기므로).
 
 ## 알려진 한계
 

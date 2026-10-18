@@ -44,7 +44,7 @@ export interface GenHealth {
   /** AnyDoor 합성 서버(8766)가 켜져 있는지 */
   anydoor?: boolean;
   /** 사진처럼 그리기 서버(8767)가 켜져 있으면 {hair, makeup} */
-  realistic?: { hair: boolean; makeup: boolean; hair2?: boolean } | null;
+  realistic?: { hair: boolean; makeup: boolean; hair2?: boolean; swap?: boolean } | null;
 }
 
 export const DEFAULT_GEN_URL = 'http://127.0.0.1:8765';
@@ -136,4 +136,16 @@ export function toDataUrl(src: HTMLCanvasElement | ImageData, maxSide = 1024, qu
     ctx.drawImage(src, 0, 0, c.width, c.height);
   }
   return c.toDataURL('image/jpeg', quality);
+}
+
+
+/**
+ * 얼굴 바꾸기(사진처럼 서버의 전용 모델 InsightFace inswapper): 내 사진(image)의 얼굴을 고른 사진(reference)의 얼굴 자리에.
+ * 점을 휘어 붙이는 브라우저 방식과 달리 얼굴을 다시 그려 코·입이 무너지지 않는다. 결과는 고른 사진 크기의 JPEG dataURL.
+ */
+export async function swapFaces(image: string, reference: string, url = genServerUrl()): Promise<{ image: string; elapsedMs: number }> {
+  const r = await fetch(`${url}/swap`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image, reference }) });
+  if (!r.ok) throw await errorOf(r);
+  const j = (await r.json()) as { image: string; elapsed_ms: number };
+  return { image: j.image, elapsedMs: j.elapsed_ms };
 }

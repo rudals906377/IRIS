@@ -13,6 +13,7 @@ import base64
 import io
 import json
 import os
+import urllib.error
 import urllib.request
 
 import cv2
@@ -147,3 +148,47 @@ def fill_holes(mask: np.ndarray) -> np.ndarray:
     out = np.zeros_like(m)
     cv2.fillConvexPoly(out, hull, 1)
     return out
+
+
+def hair_strands(ref_rgb: np.ndarray, face: np.ndarray, hair: np.ndarray) -> np.ndarray:
+    """얼굴 위를 가로지르는 가는 머리카락 가닥(0/1). 얼굴 크기의 3% 보다 가는 어두운 선 중, 머리카락 확률이 있는 곳에 닿은 것만.
+    눈썹·눈동자처럼 굵은 어두운 덩어리는 잡히지 않고, 속눈썹은 머리카락과 떨어져 있어 빠진다."""
+    f = (face > 0).astype(np.uint8)
+    ys, xs = np.where(f > 0)
+    if len(xs) < 50:
+        return np.zeros_like(f)
+    size = max(xs.max() - xs.min(), ys.max() - ys.min())
+    k = max(5, int(size * 0.03)) | 1
+    g = cv2.cvtColor(ref_rgb, cv2.COLOR_RGB2GRAY)
+    bh = cv2.morphologyEx(g, cv2.MORPH_BLACKHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    thin = ((bh > 28) & (f > 0)).astype(np.uint8)
+    hp = cv2.GaussianBlur(hair.astype(np.float32), (0, 0), max(1.0, size * 0.01))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(thin, connectivity=8)
+    keep = np.zeros_like(f)
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] < max(10, size * 0.05):
+            continue
+        comp = lab == i
+        if hp[comp].max() > 0.25:
+            keep[comp] = 1
+    return cv2.dilate(keep, np.ones((3, 3), np.uint8))
+
+
+def swap(img: Image.Image, ref: Image.Image, timeout: float = 120) -> tuple[Image.Image, np.ndarray, list[int]]:
+    """얼굴 바꾸기(InsightFace inswapper): 내 사진(img)의 얼굴을 고른 사진(ref)의 얼굴 자리에.
+    → (고른 사진 크기의 결과, 덮인 곳 마스크(0/1, 얼굴 상자), 얼굴 상자[x0,y0,x1,y1])"""
+    body = json.dumps({"face": _durl(img), "target": _durl(ref)}).encode()
+    req = urllib.request.Request(REALISTIC_URL + "/swap", data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            res = json.load(r)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        try:
+            detail = json.loads(detail).get("detail", detail)
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(detail) from e
+    out = _img(res["image"]).convert("RGB")
+    valid = (np.array(_img(res["valid"]).convert("L")) > 127).astype(np.uint8)
+    return out, valid, [int(v) for v in res.get("box", [0, 0, 0, 0])]

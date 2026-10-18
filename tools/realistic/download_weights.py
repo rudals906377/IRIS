@@ -81,7 +81,34 @@ def fetch(url: str, dst: str, label: str) -> None:
     raise SystemExit(f"[문제] {label} 내려받기 실패. 다시 실행하면 받던 데서 이어받습니다.")
 
 
+SWAP_DIR = os.path.join(HERE, "models", "insightface")
+# 얼굴 바꾸기: InsightFace inswapper_128(비상업·연구용) + buffalo_l(얼굴 찾기·정렬·임베딩) + GFPGAN 복원 — 약 1.2GB
+SWAP_FILES = [
+    ("https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx", "inswapper_128.onnx"),
+    ("https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip", "buffalo_l.zip"),
+    # 얼굴 복원: GFPGAN v1.4 의 ONNX 변환본(약 340MB). 128 해상도로 그려진 얼굴을 또렷하게. 없어도 얼굴 바꾸기는 된다
+    ("https://huggingface.co/HowToSD/GFPGAN-ONNX/resolve/main/GFPGANv1.4.onnx", "GFPGANv1.4.onnx"),
+]
+
+
+def download_swap() -> None:
+    import zipfile
+
+    print("[얼굴 바꾸기] InsightFace inswapper_128 + buffalo_l + GFPGAN 복원 (약 1.2GB)")
+    os.makedirs(os.path.join(SWAP_DIR, "models"), exist_ok=True)
+    for url, name in SWAP_FILES:
+        fetch(url, os.path.join(SWAP_DIR, name), name)
+    bl = os.path.join(SWAP_DIR, "models", "buffalo_l")
+    if not os.path.exists(os.path.join(bl, "w600k_r50.onnx")):
+        os.makedirs(bl, exist_ok=True)
+        with zipfile.ZipFile(os.path.join(SWAP_DIR, "buffalo_l.zip")) as z:
+            z.extractall(bl)
+    print("  완료")
+
+
 def main() -> int:
+    if "--no-swap" not in sys.argv:
+        download_swap()
     if "--no-hair" not in sys.argv:
         print("[헤어] HairFastGAN 가중치")
         for rel in HAIR_FILES:

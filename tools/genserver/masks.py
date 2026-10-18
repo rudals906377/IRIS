@@ -133,6 +133,25 @@ class Masker:
         m = np.maximum(m, hair)  # 원래 머리카락은 항상 포함
         return (m * 255).astype(np.uint8)
 
+    # ---- 눈 ----
+    EYE_L = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+    EYE_R = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+
+    def eye_zone(self, img: Image.Image, grow: float = 0.6) -> np.ndarray:
+        """두 눈(속눈썹·아이라인까지)을 덮는 타원 0/1 마스크. grow: 눈 폭 대비 넓힐 비율. 얼굴이 없으면 0."""
+        m = np.zeros((img.height, img.width), np.uint8)
+        res = self.face().detect(self._image(img))
+        if not res.face_landmarks:
+            return m
+        lm = res.face_landmarks[0]
+        for idx in (self.EYE_L, self.EYE_R):
+            xs = np.array([lm[i].x * img.width for i in idx])
+            ys = np.array([lm[i].y * img.height for i in idx])
+            w = xs.max() - xs.min()
+            cx, cy = (xs.max() + xs.min()) / 2, (ys.max() + ys.min()) / 2
+            cv2.ellipse(m, (int(cx), int(cy)), (int(w * (0.5 + grow)), int(w * (0.3 + grow * 0.5))), 0, 0, 360, 1, -1)
+        return m
+
     # ---- 네일 ----
     FINGERS = [(4, 3, 2), (8, 7, 5), (12, 11, 9), (16, 15, 13), (20, 19, 17)]
 

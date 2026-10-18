@@ -31,3 +31,6 @@ git+https://github.com/sajjjadayobi/FaceLib.git@382841efec823f059f49754e5d378abb
 # 서버
 fastapi
 uvicorn
+# 얼굴 바꾸기(InsightFace inswapper_128): 순수 파이썬 바퀴 + onnxruntime(GPU 면 onnxruntime-gpu 로 바꿔도 됨)
+insightface
+onnxruntime

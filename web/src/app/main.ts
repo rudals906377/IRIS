@@ -25,7 +25,7 @@ import { FACE_OVAL, measureFace, type FaceMeasure } from '../beauty/face-measure
 import { matchDarkness, matchLip, matchTint } from '../beauty/style-match.ts';
 import { analyzeStyle } from '../beauty/style-ai.ts';
 import { hintsFromStyleAI, promptFromStyleAI, type StyleHints } from '../beauty/style-attributes.ts';
-import { checkGenServer, generate as genGenerate, genServerUrl, setGenServerUrl, toDataUrl, type GenCategory } from '../beauty/gen-mode.ts';
+import { checkGenServer, generate as genGenerate, genServerUrl, setGenServerUrl, swapFaces, toDataUrl, type GenCategory } from '../beauty/gen-mode.ts';
 import { gam, lin, lipTarget, luma } from '../beauty/style-math.ts';
 import type { NailStyle } from '../beauty/nail.ts';
 import { BeautyEngine } from '../engine/engine.ts';
@@ -2284,8 +2284,29 @@ async function skinOf(c: HTMLCanvasElement, pts: { x: number; y: number }[], hai
   }
 }
 
+/** 사진처럼 서버의 전용 얼굴 바꾸기 모델(inswapper)이 켜져 있으면 그걸로: 얼굴을 다시 그려 코·입이 무너지지 않는다 */
+async function makeSwapServer(mine: ImageBitmap, ref: ImageBitmap): Promise<ImageBitmap | null> {
+  const h = await checkGenServer();
+  if (!h?.realistic?.swap) return null;
+  setStatus('AI 생성 서버의 얼굴 바꾸기 모델로 그리는 중…');
+  try {
+    const res = await swapFaces(toDataUrl(bitmapToImageData(mine), 1600), toDataUrl(bitmapToImageData(ref), 2400));
+    const blob = await (await fetch(res.image)).blob();
+    return await createImageBitmap(blob);
+  } catch (e) {
+    setStatus(`서버 얼굴 바꾸기를 못 해서(${(e as Error).message}) 브라우저 방식으로 바꿔요`);
+    await new Promise((r) => setTimeout(r, 30));
+    return null;
+  }
+}
 async function makeSwap(mine: ImageBitmap, ref: ImageBitmap): Promise<ImageBitmap | string> {
   if (swapCache?.mine === mine && swapCache.ref === ref) return swapCache.bmp;
+  const srv = await makeSwapServer(mine, ref);
+  if (srv) {
+    swapSmall = false;
+    swapCache = { mine, ref, bmp: srv };
+    return srv;
+  }
   photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
   setStatus('두 사진의 얼굴을 찾는 중…');
   const mc = toCanvas(mine, 1600), rc = toCanvas(ref, 2400);

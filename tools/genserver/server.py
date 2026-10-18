@@ -119,7 +119,7 @@ def _realistic_health() -> dict | None:
     if not h and not h2:
         return None
     hair2 = bool(h2 and h2.get("hair"))
-    return {"hair": bool(h and h.get("hair")) or hair2, "makeup": bool(h and h.get("makeup")), "hair2": hair2}
+    return {"hair": bool(h and h.get("hair")) or hair2, "makeup": bool(h and h.get("makeup")), "hair2": hair2, "swap": bool(h and h.get("swap"))}
 
 
 # 비동기 작업: 무료 터널(trycloudflare)은 응답을 100초까지만 기다리므로, 오래 걸리는 생성은
@@ -274,6 +274,42 @@ def _extend_long_hair(body: "GenerateBody", img: Image.Image, out: Image.Image, 
         log(f"  긴 머리 이어 그리기 실패(잘린 채로 둠): {e}")
         return out, mask
     return res["image"], np.maximum(mask, (paint * 255).astype(np.uint8))
+
+
+class SwapBody(BaseModel):
+    image: str  # 내 사진(dataURL)
+    reference: str  # 고른 사진(dataURL): 이 얼굴 자리에 내 얼굴을 넣는다
+
+
+@app.post("/swap")
+def swap(body: SwapBody) -> dict:
+    """얼굴 바꾸기(사진처럼 서버의 InsightFace inswapper): 결과에서 고른 사진의 얼굴 피부 자리만 부드럽게 섞는다.
+    모델은 얼굴 상자 전체(앞머리·배경 포함)를 128 해상도로 다시 그려 되돌리므로, 머리카락 가닥·배경은 고른 사진 원본을 그대로 둔다."""
+    h = _realistic_health()
+    if not h or not h.get("swap"):
+        raise HTTPException(503, "사진처럼 그리기 서버의 얼굴 바꾸기 모델이 꺼져 있습니다(tools/realistic/run.bat, setup.py)")
+    t0 = time.time()
+    img = decode(body.image).convert("RGB")
+    ref = decode(body.reference).convert("RGB")
+    log("얼굴 바꾸기(inswapper)")
+    try:
+        out, valid, box = realistic_client.swap(img, ref)
+    except RuntimeError as e:
+        raise HTTPException(422, str(e)) from e
+    if out.size != ref.size:
+        out = out.resize(ref.size)
+    seg = masker.segment(ref)
+    face = realistic_client.fill_holes((seg["face"] > 0.5).astype(np.uint8)) & valid
+    # 얼굴 위를 지나는 가는 머리카락 가닥은 모델이 뭉개므로 고른 사진 원본을 그대로 둔다
+    strands = realistic_client.hair_strands(np.asarray(ref), face, seg["hair"])
+    strands[masker.eye_zone(ref) > 0] = 0  # 속눈썹·아이라인은 가닥으로 치지 않는다(내 눈 위에 고른 사진 눈매가 겹치지 않게)
+    px = max(4, int(min(ref.width, ref.height) * 0.015))
+    soft = realistic_client.feather(face, px) * (1 - realistic_client.feather(strands, 1))
+    mixed = realistic_client.blend(ref, out, soft)
+    mask = (face > 0).astype(np.uint8) * 255
+    ms = int((time.time() - t0) * 1000)
+    log(f"  얼굴 바꾸기 완료 {ms}ms (얼굴 자리 {int(face.sum())}px, 머리카락 가닥 {int(strands.sum())}px)")
+    return {"image": encode(mixed), "mask": encode(Image.fromarray(mask), "PNG"), "elapsed_ms": ms, "model": "inswapper", "box": box}
 
 
 def generate_realistic(body: GenerateBody, img: Image.Image, ref: Image.Image | None, t0: float) -> dict:
