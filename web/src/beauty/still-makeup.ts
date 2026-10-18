@@ -196,16 +196,18 @@ export function transferMakeup(
   });
   // 입술 밝기 차이는 입술 가운데 값 ±8 안으로: 립스틱은 입술을 고르게 바꾼다. 고른 사진이 입을 살짝 벌려
   // 입꼬리·입술 사이가 그늘로 새까마면 그 그늘(화장 아님)이 다문 내 입꼬리에 검은 점·줄로 옮겨졌다
-  {
+  // 색(a·b)도 가운데 값 ±3 안으로: 립스틱 색은 윗입술·아랫입술이 같다. 고른 사진의 아랫입술만 빛을 받아 더 붉으면(01: a 43 vs 34)
+  // 내 윗입술은 분홍(a +14)·아랫입술은 진한 빨강(a +23)이 되어 아랫입술에만 립을 바른 듯 보였다
+  for (const [c, lim] of [[0, 8], [1, 3], [2, 3]] as const) {
     const v: number[] = [];
-    for (let i = 0; i < n; i += 2) if (lipM[i] > 0.5 && V[i] > 0.5) v.push(D[0][i]);
+    for (let i = 0; i < n; i += 2) if (lipM[i] > 0.5 && V[i] > 0.5) v.push(D[c][i]);
     if (v.length > 20) {
       v.sort((p, q) => p - q);
       const med = v[v.length >> 1];
       for (let i = 0; i < n; i++) {
         if (lipM[i] <= 0) continue;
-        const c = Math.max(med - 8, Math.min(med + 8, D[0][i]));
-        D[0][i] += (c - D[0][i]) * lipM[i];
+        const k = Math.max(med - lim, Math.min(med + lim, D[c][i]));
+        D[c][i] += (k - D[c][i]) * lipM[i];
       }
     }
   }
