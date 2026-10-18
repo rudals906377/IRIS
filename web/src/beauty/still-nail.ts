@@ -93,6 +93,18 @@ function cuticleSide(mask: Uint8Array, w: number, h: number, rgba: Uint8ClampedA
   const d = (c: [number, number, number] | null): number => (c ? Math.hypot(c[0] - sk[0], c[1] - sk[1], c[2] - sk[2]) : 999);
   const e1 = sample(cx + ax * (t1 + L * 0.2), cy + ay * (t1 + L * 0.2), r);
   const e0 = sample(cx + ax * (t0 - L * 0.2), cy + ay * (t0 - L * 0.2), r);
+  // 손톱이 빽빽한 사진(네일 09번)은 '옆'이 피부가 아니라 옆 손톱이라 피부색 기준이 틀어져 방향이 거꾸로 됐다(파란 끝 옴브레가
+  // 내 손톱 뿌리에). 끝 너머 표본 중 한쪽만 피부색(YCbCr 살색 범위)이면 그쪽이 뿌리(손가락), 둘 다거나 둘 다 아니면 아래 색 거리로
+  // 피부색: 어둡지 않고(y>40) 무채색이 아니며 R ≥ G ≥ B−20, R−B ≤ 90(창백한 분홍빛 손가락(187,180,193)도 포함. 교과서 YCbCr 살색 범위는
+  // 이 손가락을 놓쳐 어두운 배경 쪽이 뿌리로 남았다). 분홍 손톱도 피부로 보이지만 그러면 양쪽이 같아 아래 색 거리로 넘어간다
+  const skinLike = (c: [number, number, number] | null): boolean => {
+    if (!c) return false;
+    const [R, G, B] = c;
+    const y = 0.299 * R + 0.587 * G + 0.114 * B;
+    return y > 40 && Math.max(R, G, B) - Math.min(R, G, B) > 6 && R >= G && G >= B - 20 && R - B <= 90;
+  };
+  const k1 = skinLike(e1), k0 = skinLike(e0);
+  if (k1 !== k0) return k1 ? 1 : -1;
   const d1 = d(e1), d0 = d(e0);
   if (Math.abs(d1 - d0) < 12) return 0;
   return d1 < d0 ? 1 : -1;
