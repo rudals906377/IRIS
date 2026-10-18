@@ -353,6 +353,37 @@ export function swapFace(
       out[i * 4 + c] = d0 + (o3[c] - d0) * m;
     }
   }
+  // 피부 잔결 맞추기: 내 피부의 잔결(2% 흐림보다 밝고 어두운 정도: 모공·수염 자국·잔주름)이 고른 사진 피부보다 뚜렷이 세면
+  // (표준편차 비 1.3 넘게: 어둡게 찍힌 수염 난 얼굴 → 매끈한 뷰티 사진) 조명을 맞춰 밝힌 뒤 그 잔결이 더 거칠어 보인다
+  // → 이목구비 밖 피부에서 잔결을 그 비로 줄여 고른 사진 수준으로(아래 '결 얹기'의 반대. 비는 0.35 아래로는 안 줄임)
+  {
+    const rm = Math.max(2, Math.round(fw * 0.02));
+    const Lo = new Float32Array(W * H), Ld = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) {
+      Lo[i] = 0.299 * out[i * 4] + 0.587 * out[i * 4 + 1] + 0.114 * out[i * 4 + 2];
+      Ld[i] = 0.299 * dst[i * 4] + 0.587 * dst[i * 4 + 1] + 0.114 * dst[i * 4 + 2];
+    }
+    const Lob = boxBlur(Lo, W, H, rm), Ldb = boxBlur(Ld, W, H, rm);
+    let n = 0, s1 = 0, s2 = 0;
+    for (let i = 0; i < W * H; i++) {
+      if (sw2[i] < 0.5) continue;
+      if (mask[i] > 0.5) { const a = Lo[i] - Lob[i]; s1 += a * a; n++; }
+      const b = Ld[i] - Ldb[i]; s2 += b * b;
+    }
+    let nd = 0;
+    for (let i = 0; i < W * H; i++) if (sw2[i] >= 0.5) nd++;
+    const sMy = Math.sqrt(s1 / Math.max(1, n)), sRef = Math.sqrt(s2 / Math.max(1, nd));
+    if (n > 50 && nd > 50 && sMy > sRef * 1.3) {
+      const k = Math.max(0.35, sRef / sMy);
+      for (let i = 0; i < W * H; i++) {
+        const wgt = mask[i] * Math.min(1, sw2[i] / 0.5);
+        if (wgt <= 0.002) continue;
+        const dev = Lo[i] - Lob[i];
+        const f = Math.max(0.2, 1 - (dev * (1 - k) * wgt) / Math.max(1, Lo[i]));
+        for (let c = 0; c < 3; c++) out[i * 4 + c] = Math.max(0, Math.min(255, out[i * 4 + c] * f));
+      }
+    }
+  }
   // 크게 늘린 얼굴(내 사진 얼굴이 작음)은 피부결이 없어 매끈한 인형처럼 보인다 → 고른 사진 피부의 아주 작은 결(밝기 잔무늬)만 얹는다.
   // 결은 작은 값(±5)만: 눈·입술·눈썹 가장자리처럼 큰 차이는 빼서 고른 사진 이목구비가 비치지 않게
   if (up > 1.4) {
