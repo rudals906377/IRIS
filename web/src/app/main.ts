@@ -531,9 +531,11 @@ function applyHints(r: StyleResult, h: StyleHints): void {
   }
   // 스타일 AI가 네일 사진이라고 봤는데 색 측정이 손톱을 못 찾았으면(피부색에 가까운 연핑크·누드·시럽 네일) AI가 읽은 색 이름으로.
   // 그때 측정이 잡은 '타투'(손가락 주름·그늘)는 AI가 타투라고 하지 않았으면 버린다
+  // AI 가 읽은 네일 색 이름은 측정이 손톱을 찾았어도 기억한다: 고른 사진에서 오린 '손톱'의 색이 이와 크게 다르면(ΔE 35 넘게)
+  // 손톱이 아니라 배경을 오린 것(13번: 흰 털옷 + 팔찌 조각(회색)이 손톱으로 잡혀 내 손톱이 회색 털로 칠해졌음)
+  if (h.category === 'nail') nailLabelColor = nailColorFromLabel(h.nail?.colorLabel);
   if (h.category === 'nail' && !r.nail) {
-    const col = nailColorFromLabel(h.nail?.colorLabel);
-    nailLabelColor = col;
+    const col = nailLabelColor;
     if (col) {
       // 앱의 색(RGB)은 선형값(hex() 가 감마로 바꿈): 표의 sRGB 를 선형으로
       r.nail = { color: lin(col), style: h.nail?.style ?? 'solid' };
@@ -1843,7 +1845,7 @@ async function findRefNails(): Promise<void> {
   }
   // ② 손 점이 없으면(손톱만 가까이 찍힌 사진 등) 색 덩어리로
   const best = await nailsByColor(rgba, w, h, () => samImage(cv), '고른 사진에서 손톱을 찾는 중…');
-  // 스타일 AI가 읽은 네일 색(연핑크 등)과 크게 다르면(ΔE 35 넘게) 손가락 사이 그늘·배경을 잡은 것: 버리고 그 색의 가상 손톱으로
+  // 스타일 AI가 읽은 네일 색(연핑크 등)과 색도가 크게 다르면 손가락 사이 그늘·배경(흰 털옷 조각)을 잡은 것: 버리고 그 색의 가상 손톱으로
   if (best.length && nailLabelColor) {
     const lab = new Float32Array(3), lab2 = new Float32Array(3);
     const rs: number[] = [], gs: number[] = [], bs: number[] = [];
@@ -1851,7 +1853,10 @@ async function findRefNails(): Promise<void> {
     const med = (a: number[]): number => a.sort((x, y) => x - y)[a.length >> 1];
     rgb2lab(med(rs), med(gs), med(bs), lab);
     rgb2lab(nailLabelColor[0] * 255, nailLabelColor[1] * 255, nailLabelColor[2] * 255, lab2);
-    if (Math.hypot(lab[0] - lab2[0], lab[1] - lab2[1], lab[2] - lab2[2]) > 35) {
+    // 색도(a·b) 거리 13 넘거나 밝기 60 넘게 다르면: 밝기만 보면 어두운 배경의 크롬 실버(가운데 색 L 30, 이름 색 L 81, Δab 11)까지 버려졌다.
+    // 흰 털옷 조각(회색, Δab 14.9) 은 버리고 누드 핑크 진짜 손톱(Δab 12.0) 은 남는 경계
+    console.log('[nail] 고른 손톱 색 vs AI 이름 색', JSON.stringify({ nails: best.length, lab: Array.from(lab).map((v) => +v.toFixed(1)), label: Array.from(lab2).map((v) => +v.toFixed(1)) }));
+    if (Math.hypot(lab[1] - lab2[1], lab[2] - lab2[2]) > 13 || Math.abs(lab[0] - lab2[0]) > 60) {
       refNails = { src, rgba, w, h, nails: [] };
       return;
     }

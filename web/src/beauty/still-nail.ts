@@ -68,6 +68,15 @@ export function nailFrame(mask: Uint8Array, w: number, h: number, hint?: { x: nu
   return { cx, cy, ax, ay, t0, t1, prof, area: n };
 }
 
+/** 피부색인가: 어둡지 않고(y>40) 무채색이 아니며 R ≥ G ≥ B−20, R−B ≤ 90(창백한 분홍빛 손가락 (187,180,193) 도 포함).
+ * 분홍 손톱도 피부로 보이므로 '손톱인가'가 아니라 '손가락 곁인가'를 볼 때만 쓴다 */
+export function skinLike(c: [number, number, number] | null): boolean {
+  if (!c) return false;
+  const [R, G, B] = c;
+  const y = 0.299 * R + 0.587 * G + 0.114 * B;
+  return y > 40 && Math.max(R, G, B) - Math.min(R, G, B) > 6 && R >= G && G >= B - 20 && R - B <= 90;
+}
+
 /** 끝 너머의 색이 손가락 피부(마스크 둘레)에 가까운 쪽: +1 이면 t1 쪽이 뿌리, −1 이면 t0 쪽, 0 애매 */
 function cuticleSide(mask: Uint8Array, w: number, h: number, rgba: Uint8ClampedArray, cx: number, cy: number, ax: number, ay: number, t0: number, t1: number): number {
   const L = t1 - t0;
@@ -97,12 +106,6 @@ function cuticleSide(mask: Uint8Array, w: number, h: number, rgba: Uint8ClampedA
   // 내 손톱 뿌리에). 끝 너머 표본 중 한쪽만 피부색(YCbCr 살색 범위)이면 그쪽이 뿌리(손가락), 둘 다거나 둘 다 아니면 아래 색 거리로
   // 피부색: 어둡지 않고(y>40) 무채색이 아니며 R ≥ G ≥ B−20, R−B ≤ 90(창백한 분홍빛 손가락(187,180,193)도 포함. 교과서 YCbCr 살색 범위는
   // 이 손가락을 놓쳐 어두운 배경 쪽이 뿌리로 남았다). 분홍 손톱도 피부로 보이지만 그러면 양쪽이 같아 아래 색 거리로 넘어간다
-  const skinLike = (c: [number, number, number] | null): boolean => {
-    if (!c) return false;
-    const [R, G, B] = c;
-    const y = 0.299 * R + 0.587 * G + 0.114 * B;
-    return y > 40 && Math.max(R, G, B) - Math.min(R, G, B) > 6 && R >= G && G >= B - 20 && R - B <= 90;
-  };
   const k1 = skinLike(e1), k0 = skinLike(e0);
   if (k1 !== k0) return k1 ? 1 : -1;
   const d1 = d(e1), d0 = d(e0);
