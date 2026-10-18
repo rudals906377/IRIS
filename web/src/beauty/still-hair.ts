@@ -269,6 +269,25 @@ export function recolorHair(
       U[i] += wr * sm * tex * (1 - U[i]);
     }
   }
+  // 순위를 머리 속(알파 0.9 넘는 곳) 기준으로 고르게 편다: 내 분포는 알파 0.6 넘는 가장자리·그늘까지 넣어 재므로 머리 속만 보면
+  // 순위가 위로 쏠려(17번: 속 픽셀 q10 0.17·중앙 0.57) 고른 사진의 가장 어두운 10% 가 쓰이지 않아 하이라이트 사이 어두운 바탕이
+  // 사라졌다(결과 q10 20 vs 고른 사진 11). 리본이 민 순위도 같이 고르게 된다. 속 픽셀 순위로 만든 단조 대응을 모든 픽셀에
+  // 같이 적용해(이진 탐색) 속·가장자리 사이에 이음새가 안 생긴다
+  {
+    const core: number[] = [];
+    for (let i = 0; i < w * h; i++) if (U[i] >= 0 && alpha[i] > 0.9) core.push(U[i]);
+    if (core.length > 200) {
+      core.sort((p, q) => p - q);
+      const n = core.length;
+      for (let i = 0; i < w * h; i++) {
+        if (U[i] < 0) continue;
+        let lo = 0, hi = n;
+        const v = U[i];
+        while (lo < hi) { const m = (lo + hi) >> 1; if (core[m] < v) lo = m + 1; else hi = m; }
+        U[i] = Math.min(1, lo / (n - 1));
+      }
+    }
+  }
   // 배경에 닿은 가장자리(알파 0.3 아래가 2px 안)는 배경이 섞여 제 밝기 순위가 부풀어 있다(알파는 높아도):
   // 둘레 머리 속 순위 +0.1 까지만(검은 짧은 머리를 밝게 염색하면 머리 둘레가 가장 밝은 머리색 = 하얀 점선이 됐다).
   // 아래 새까만 픽셀 메우기보다 먼저: 메우기가 부푼 가장자리 순위를 빌려 가면 테두리 안쪽 검정까지 하얘진다
@@ -324,9 +343,13 @@ export function recolorHair(
       // 넓게 다 어두운 곳은 4배 넓은 둘레에서, 그래도 없으면 가운데 순위
       const num2 = boxBlur(uv, w, h, r * 4), den2 = boxBlur(ok, w, h, r * 4);
       const th = 24 - 12 * mostlyDark;
+      // 이 메우기는 밝게 바꿀 때(고른 사진의 어두운 쪽도 밝음) 검은 점을 막는 것: 고른 사진 아래 10% 가 어두우면(하이라이트 머리 17번,
+      // L 11) 그대로 어두워야 할 바탕까지 밝혀 하이라이트 사이 어두운 바탕이 사라졌다(결과 q10 20, 폭 46 → 38) → 고른 사진 아래
+      // 10% 밝기에 비례(L 12 아래 0 ~ 32 넘으면 1)
+      const kRef = Math.max(0, Math.min(1, (ref.L[Math.round(Q * 0.1)] - 12) / 20));
       for (let i = 0; i < w * h; i++) {
         if (U[i] < 0 || luma[i] >= th) continue;
-        const k = Math.max(0, Math.min(1, (th - luma[i]) / (th * 2 / 3)));
+        const k = Math.max(0, Math.min(1, (th - luma[i]) / (th * 2 / 3))) * kRef;
         const near = den[i] >= 0.02 ? num[i] / den[i] : den2[i] >= 0.005 ? num2[i] / den2[i] : 0.5;
         const fill = Math.max(U[i], near * 0.85);
         U[i] += (fill - U[i]) * k;
