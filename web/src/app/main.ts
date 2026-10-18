@@ -1624,8 +1624,8 @@ async function nailsByColor(
           if (!seen[j] && bin[j] >= 0 && near(bin[j], k)) { seen[j] = 1; st.push(j); }
         }
       }
-      // 흰 반사 조각은 작다(누드·젤리 손톱의 반사 한 줄이 4~7칸): 흰 색 상자는 4칸부터
-      if (n >= (kWhite0 ? 4 : 8)) blobs.push({ n, x: (sx / n) * G + 2, y: (sy / n) * G + 2 });
+      // 흰 반사 조각은 작다(누드·젤리 손톱의 반사 한 줄이 4~7칸): 흰 색 상자는 2칸부터(둥근 점 반사는 2~3칸)
+      if (n >= (kWhite0 ? 2 : 8)) blobs.push({ n, x: (sx / n) * G + 2, y: (sy / n) * G + 2 });
     }
     blobs.sort((a, b) => b.n - a.n);
     if (!blobs.length) continue;
