@@ -124,9 +124,10 @@ function prepInk(ink: InkMap, refPx: number): InkMap {
   return inkMip(ink, mipFactor(ink, refPx));
 }
 
-/** 사진 1px 이 잉크 맵 몇 칸에 걸치는지 → 미리 줄일 배수(2×2 나눠 뽑기에 맞춰 사진 1px 당 2칸 남김) */
+/** 사진 1px 이 잉크 맵 몇 칸에 걸치는지 → 미리 줄일 배수(2×2 나눠 뽑기에 맞춰 사진 1px 당 2칸 남김).
+ * 반올림: 내림이면 사진 1px 당 3.3칸(표본 하나에 1.65칸)도 안 줄여 가는 글씨 획(2~3칸)이 표본 사이로 빠져 조각났다 */
 function mipFactor(ink: InkMap, refPx: number): number {
-  return Math.floor((refPx * ink.w) / ink.rect.w / 2);
+  return Math.max(1, Math.round((refPx * ink.w) / ink.rect.w / 2));
 }
 
 /** 팔 마디 안(옆 반폭의 1.15배, 축 앞뒤 조금 여유)에 든 잉크 진하기 합 */
