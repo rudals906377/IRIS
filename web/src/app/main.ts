@@ -353,8 +353,10 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
       console.warn('스타일 AI를 쓰지 못했습니다(색만 적용)', err);
     }
   }
-  // 사람이 없는 도안 그림(흰 바탕·투명 PNG)은 그대로 타투 도안으로
-  if (!r.makeup && !r.hair && !r.nail && !r.tattoo && file && looksLikeDesign(r.thumb)) {
+  // 사람이 없는 도안 그림(흰 바탕·투명 PNG)은 그대로 타투 도안으로. 다만 스타일 AI 가 다른 분야(헤어·네일·메이크업)라고 본 사진
+  // (흰 바탕에 펼친 티셔츠 사진이 '도안'으로 읽혀 타투 도안이 됐음)은 도안이 아니다 → 찾지 못했다고 알린다
+  const aiOther = ['hair', 'nail', 'makeup'].includes(String(r.ai?.raw?.category ?? ''));
+  if (!r.makeup && !r.hair && !r.nail && !r.tattoo && file && !aiOther && looksLikeDesign(r.thumb)) {
     try {
       r.tattoo = await designFromFile(file);
       r.summary = '그림을 타투 도안으로 가져왔어요';
@@ -364,7 +366,7 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   }
   // 도안 시트(종이에 그린 도안 여러 개, 사람 없음): 종이를 바탕으로 잉크를 뽑는다. 하나만 쓰려면 ✂️ 도안 고르기
   const aiTattoo = r.ai?.raw?.category === 'tattoo' || r.ai?.raw?.secondary?.category === 'tattoo';
-  if (!r.makeup && !r.hair && !r.nail && !r.tattoo && !r.faces && (aiTattoo || mode === 'tattoo') && photoAnalyzer.lastInk) {
+  if (!r.makeup && !r.hair && !r.nail && !r.tattoo && !r.faces && (aiTattoo || mode === 'tattoo') && !aiOther && photoAnalyzer.lastInk) {
     const ps = paperInk(photoAnalyzer.lastInk);
     // 도안 수십 개가 빽빽한 시트는 자동으로 하나를 고르지 않는다(시트 전체는 바코드처럼, 한 덩어리는 조각난 도안이 됐음)
     const sheet = isDesignSheet(ps);
@@ -456,7 +458,9 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   const got: Record<string, unknown> = { 메이크업: r.makeup, 헤어: r.hair, 네일: r.nail, 타투: r.tattoo };
   const missed = (r.missed ?? []).filter((k) => !got[k]);
   const missedNote = missed.length && !r.summary.includes('못했어요') ? ` · ${missed.join('·')}${josa(missed[missed.length - 1], '은', '는')} 이 사진에서 찾지 못했어요` : '';
-  refTextEl.textContent = (r.ai?.headline ? `${r.summary} · ${r.ai.headline}` : r.summary) + (r.faces && r.faces > 1 ? ` · 얼굴 ${r.faces}명 중 큰 얼굴(다른 사람은 ✂️ 영역)` : '') + missedNote;
+  // AI 가 읽은 스타일 설명은 네 분야 중 하나라도 찾았을 때만 붙인다(티셔츠 사진에 '긴머리 슬릭백' 같은 엉뚱한 설명이 붙었음)
+  const anyFound = !!(r.makeup || r.hair || r.nail || r.tattoo);
+  refTextEl.textContent = (r.ai?.headline && anyFound ? `${r.summary} · ${r.ai.headline}` : r.summary) + (r.faces && r.faces > 1 ? ` · 얼굴 ${r.faces}명 중 큰 얼굴(다른 사람은 ✂️ 영역)` : '') + missedNote;
   refEl.hidden = false;
   setStatus(running ? '' : PHOTO_MODE ? '내 사진을 올리면 바로 합쳐져요' : '카메라를 시작하면 바로 입혀져요');
   if (r.makeup && r.measure && !off.has('lip')) {

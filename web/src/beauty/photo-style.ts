@@ -716,13 +716,16 @@ function measureNail(
   } else if (forced || (hands.length === 0 && noHandsOk)) {
     // 손 점이 없으면: 피부·흰 배경을 뺀 주요 색(가까이 찍은 손톱 사진). 다만 머리카락을 찾은 사진(미용실 뒷모습 염색 사진)에서는
     // 머리색이 '네일 색'으로 잡혀 손도 없는 사진에 네일이 있다고 했으므로 자동 모드에서는 쓰지 않는다(네일 사진으로 다시 볼 때는 씀)
+    // 또 피부가 거의 없는 사진(바닥에 펼친 티셔츠 사진: 피부 0%)은 손톱 사진이 아니다 → 자동 모드에서는 피부 픽셀이 3% 는 있어야
     const all: RGB[] = [];
+    let skinN = 0, allN = 0;
     const step = Math.max(1, Math.floor(px.w / 120));
     for (let y = 0; y < px.h; y += step)
       for (let x = 0; x < px.w; x += step) {
         const k = (y * px.w + x) * 4;
         const c: RGB = [lin1(px.d[k]), lin1(px.d[k + 1]), lin1(px.d[k + 2])];
-        if (isSkin(c)) continue;
+        allN++;
+        if (isSkin(c)) { skinN++; continue; }
         const g = gam(c);
         const mx = Math.max(...g);
         const mn = Math.min(...g);
@@ -734,6 +737,7 @@ function measureNail(
         all.push(c);
       }
     if (all.length < 50) return null;
+    if (!forced && skinN < allN * 0.03) return null;
     const dom = dominantColors(all, 4);
     // 너무 어두운(그늘·검은 배경) 무리는 뒤로
     const pick = dom.find((d) => luma(d.color) > 0.03) ?? dom[0];
