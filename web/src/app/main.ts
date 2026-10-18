@@ -1350,7 +1350,11 @@ async function updateStillHair(): Promise<void> {
   const key = `${mkp ? `${mk.lip}:${mk.eye}:${mk.skin}` : 0}|${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen : 0}|${plan ? strength.toFixed(2) : 0}|${placed ? pk : ''}`;
   // 네일을 골랐는데 내 손톱을 하나도 못 찾았으면(손이 작게 나온 전신 사진 등) 굽기 끝에 안내가 지워져 아무 일도 없는 듯 보였다
   // → 못 찾았다고 남긴다(손톱을 눌러 더하는 길도 함께). 같은 결과라 다시 굽지 않을 때도 다시 띄운다
-  const nailNote = chosen.nail.color && !off.has('nail') && nailsAuto === photoOriginal && !myNails.length ? '내 사진에서 손톱을 찾지 못했어요. 손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)' : '';
+  // 몇 개만 찾았을 때(전신 사진의 작은 손: 손끝을 눌러도 손가락 전체가 잡혀 열 손톱 중 하나만 칠해졌다)도 "다 찾았다"는 듯 보이지 않게 몇 개 놓쳤는지 남긴다
+  const nailNote = chosen.nail.color && !off.has('nail') && nailsAuto === photoOriginal
+    ? !myNails.length ? '내 사진에서 손톱을 찾지 못했어요. 손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)'
+      : myNails.length < nailExpect ? `내 사진에서 손톱을 ${myNails.length}개만 찾았어요(손이 작게 나오면 나머지는 못 찾아요). 빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요` : ''
+    : '';
   // 굽기 끝에 남길 안내: 손톱 못 찾음 > 머리카락 못 찾음(염색을 골랐을 때)
   const bakeNote = (): string => nailNote || (amount > 0 ? mineHairNote || hairSkipNote : '') || (mkOn && !mkp ? mkPlanNote : '');
   if (key === stillHairKey && refHair?.src === lastSource) {
@@ -1473,6 +1477,8 @@ type NailArt = { src: ImageBitmap; rgba: Uint8ClampedArray; w: number; h: number
 let refNails: NailArt | null = null as NailArt | null;
 let refNailsBusy: Promise<void> | null = null;
 let nailsAuto: ImageBitmap | null = null;
+/** 손 점으로 보이는 손톱 자리 수(자동 찾기가 몇 개를 놓쳤는지 안내용) */
+let nailExpect = 0;
 /** 고른 사진 손톱들을 좋은 순으로: 또렷한(라플라시안 분산) 것 먼저, 초점이 안 맞아 흐리거나(가장 또렷한 것의 30% 아래)
  * 마스크 안에 어두운 배경이 많이 섞인(아주 어두운 픽셀 8% 넘게) 손톱은 다른 손톱이 둘 이상 있으면 뺀다.
  * (파란 옴브레 09번: 맨 왼쪽의 초점 나간 손톱이 첫 손톱으로 쓰여 내 엄지에 흐릿한 파란 덩어리 + 검은 조각이 찍혔다) */
@@ -1940,6 +1946,7 @@ async function ensureNailsOnce(): Promise<void> {
   }
   // 사진은 거울상이 아니라 왼손·오른손 판단이 뒤바뀌기도 한다: 손등 방향 두 가지 중 손톱이 더 잘 보이는 쪽
   const quads = handsMine.flatMap(bestQuads).filter((q) => q.vis > 0.3);
+  nailExpect = quads.length;
   if (quads.length) {
     setStatus('손톱을 찾는 중…');
     const sam = await mySamImage();
@@ -2016,7 +2023,7 @@ async function ensureNailsOnce(): Promise<void> {
   await glintsToNails();
   dropSkinNails();
   dropOversizeNails();
-  setStatus(myNails.length ? '빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요' : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');
+  setStatus(myNails.length ? `${myNails.length < nailExpect ? `손톱을 ${myNails.length}개만 찾았어요. ` : ''}빠진 손톱은 눌러서 더하고, 잘못 잡힌 곳은 다시 누르면 빠져요` : '손톱을 하나씩 눌러 주세요(누른 손톱에 고른 사진의 네일이 입혀져요)');
   nailGen++;
   applyAll();
 }
