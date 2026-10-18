@@ -1606,6 +1606,7 @@ async function nailsByColor(
   for (const k of top) {
     // 그 색(이웃 색 상자 포함) 덩어리
     const seen = new Uint8Array(gw * gh);
+    const kWhite0 = (k >> 6) >= 6 && ((k >> 3) & 7) >= 6 && (k & 7) >= 6;
     const blobs: { n: number; x: number; y: number }[] = [];
     for (let i = 0; i < bin.length; i++) {
       if (seen[i] || bin[i] < 0 || !near(bin[i], k)) continue;
@@ -1623,7 +1624,8 @@ async function nailsByColor(
           if (!seen[j] && bin[j] >= 0 && near(bin[j], k)) { seen[j] = 1; st.push(j); }
         }
       }
-      if (n >= 8) blobs.push({ n, x: (sx / n) * G + 2, y: (sy / n) * G + 2 });
+      // 흰 반사 조각은 작다(누드·젤리 손톱의 반사 한 줄이 4~7칸): 흰 색 상자는 4칸부터
+      if (n >= (kWhite0 ? 4 : 8)) blobs.push({ n, x: (sx / n) * G + 2, y: (sy / n) * G + 2 });
     }
     blobs.sort((a, b) => b.n - a.n);
     if (!blobs.length) continue;
@@ -1638,6 +1640,7 @@ async function nailsByColor(
       const r = await sam.segment(b.x, b.y);
       let area = 0;
       for (let i = 0; i < r.mask.length; i++) area += r.mask[i];
+      let glintGrown = false;
       // 윤기 나는 손톱의 하얀 반사 조각(작고 거의 흰색)을 잡았으면, 그 조각을 품은 더 큰 후보(손톱 전체)로 바꾼다:
       // 피부색에 가까운 누드·젤리 손톱은 색 찾기에서 피부로 빠지고 반사만 남아, 손톱마다 반사 조각만 칠해졌다
       if (area > 0 && area < w * h * 0.003 && nearWhite(rgba, r.mask)) {
@@ -1646,6 +1649,7 @@ async function nailsByColor(
           r.mask = big.mask;
           r.score = Math.max(r.score, big.score);
           area = big.area;
+          glintGrown = true;
         }
       }
       // 손톱 안 무늬 한 칸(크롬 테두리 안 색 칸·프렌치 바탕)만 잡았으면 그 칸을 품은 손톱 전체로: 5배 안으로 크고,
@@ -1690,8 +1694,9 @@ async function nailsByColor(
       const solid = area / Math.max(1, len * wid);
       if (elong < 1.15 || elong > 5 || solid < 0.55) continue;
       // 둘레(손가락 피부)와 색이 뚜렷이 달라야 손톱(손가락 사이 피부·그늘이 잡히는 것 막기)
+      // 반사 조각에서 넓힌 손톱(누드·젤리)은 둘레 피부와 색 차가 4~7 뿐이지만 반사를 품은 손톱 모양이라는 근거가 있다: 4 부터
       const ctr = maskContrast(rgba, w, h, r.mask);
-      if (ctr < 8) continue;
+      if (ctr < (glintGrown ? 4 : 8)) continue;
       // 바탕이 흰 사진에서 오린 것의 색이 흰·밝은 회색이면 바탕 조각이다(검은 바지 사이로 보인 흰 배경 틈이 손톱 모양이라
       // 바탕색으로 칠해졌다: 색 찾기는 흰색을 빼지만 틈 가장자리 회색 칸이 씨앗이 되어 SAM 이 틈 전체를 오렸다),
       // 사진 가장자리에 닿은 것(짧은 변 1% 넘게)도 손톱이 아니다
