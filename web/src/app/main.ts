@@ -39,7 +39,7 @@ import { samImage, type SamImage } from '../beauty/sam.ts';
 import { fillPoly, swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
 import { extractDesign, findInk, type InkSource } from '../beauty/tattoo-extract.ts';
-import { affine3, armStrip, inkOnArm, limbRegion, maskOutLimbs, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
+import { affine3, armStrip, chestInkScale, inkOnArm, limbRegion, maskOutLimbs, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
 
@@ -435,6 +435,13 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
     refTat = PHOTO_MODE && r.tattooSrc && !r.tattooSrc.paper && tattoo.design.canvas
       ? { img: source, w: r.tattooSrc.src.w, h: r.tattooSrc.src.h, design: tattoo.design, rect: r.tattooSrc.rect, src: r.tattooSrc.src }
       : null;
+    // 가슴 도안은 고른 사진에서 잰 크기(도안 세로 / 가슴 피부 폭)로: 가슴 평면 굽기(chestPlacePlan)의 세로 기준이 어깨 폭 45% 이므로
+    // 가슴 폭 ≈ 어깨 폭 0.9 로 보고 size = (ratio·0.9/0.45 − 0.25)/0.6. AI 크기 말('스몰' 0.3)은 실제의 절반도 안 됐다
+    if (refTat && tattoo.place === 'chest') {
+      const cs = chestInkScale(refTat.src.skin, refTat.w, refTat.h, refTat.rect);
+      dbgTat({ chestScale: cs });
+      if (cs) tattoo.size = Math.min(1, Math.max(0.15, (cs.ratio * 2 - 0.25) / 0.6));
+    }
     setOff(['tattoo'], !on('tattoo'));
     applyTattooToEngine();
   }
@@ -793,9 +800,10 @@ function myBodyOf(): Promise<{ pose: { p: { x: number; y: number }[]; vis: numbe
   }
   return myBody.p;
 }
-/** 도안을 내 팔·다리의 고른 자리(📍·크기)에 놓는 대응. 팔다리가 아닌 자리(목·가슴)나 팔이 안 보이면 null */
+/** 도안을 내 팔·다리·가슴의 고른 자리(📍·크기)에 놓는 대응. 목이나 팔이 안 보이면 null */
 async function placeTattooPlan(): Promise<TatPlan | null> {
   const d = tattoo.design;
+  if (d?.canvas && tattoo.place === 'chest') return chestPlacePlan(d.canvas, d.aspect);
   const m = /^(forearm|upperArm|thigh|calf)(L|R)$/.exec(tattoo.place);
   if (!d?.canvas || !m) return null;
   const body = await myBodyOf();
@@ -833,6 +841,52 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
     return { x: X * c.width, y: Y * c.height };
   };
   return { dst: arm, skin: legs ? legSkin(body.pose, body.skin, engine.source.width, engine.source.height) : body.skin, ink, src };
+}
+
+/** 가슴 자리: 어깨선 아래 평면에 도안을 놓아 정밀 몸 피부로 굽는다(실시간 가슴 타투는 어깨 폭의 14% 크기 격자라 아주 작고 가늘게만 보였다:
+ * 고른 사진에서 관절점을 못 찾는 가슴 클로즈업 도안은 이 길밖에 없다). 실시간과 같은 자리·방향, 세로 기준 길이만 어깨 폭 45% */
+async function chestPlacePlan(c: HTMLCanvasElement, aspect0: number): Promise<TatPlan | null> {
+  const body = await myBodyOf();
+  if (!body) return null;
+  const P = body.pose.p, V = body.pose.vis;
+  if (Math.min(V[11], V[12]) < 0.5) return null;
+  const l = P[11], r = P[12];
+  const sw = Math.hypot(l.x - r.x, l.y - r.y);
+  if (sw < 8) return null;
+  const W = engine.source.width, H = engine.source.height;
+  // 어깨선에 수직인 아래 방향, 어깨선 방향(왼→오른)
+  let down = { x: -(l.y - r.y) / sw, y: (l.x - r.x) / sw };
+  if (down.y < 0) down = { x: -down.x, y: -down.y };
+  const right = { x: -down.y, y: down.x };
+  const mid = { x: (l.x + r.x) / 2, y: (l.y + r.y) / 2 };
+  const segStart = sw * 0.05, segLen = sw * 0.45, limbW = sw * 0.72;
+  let h = segLen * (0.25 + 0.6 * tattoo.size), w = h * aspect0;
+  if (w > limbW) { h *= limbW / w; w = limbW; }
+  const lc = segStart + segLen * Math.min(0.92, Math.max(0.08, tattoo.along ?? 0.5));
+  const oc = Math.min(0.95, Math.max(-0.95, tattoo.across ?? 0)) * (limbW / 2);
+  const center = { x: mid.x + down.x * lc + right.x * oc, y: mid.y + down.y * lc + right.y * oc };
+  // 내 사진 px → 도안 px: u = 0.5 + ((p − 가운데)·right)/w, v = 0.5 + ((p − 가운데)·down)/h
+  const sx = c.width / w, sy = c.height / h;
+  const toRef = [right.x * sx, right.y * sx, c.width * 0.5 - (center.x * right.x + center.y * right.y) * sx, down.x * sy, down.y * sy, c.height * 0.5 - (center.x * down.x + center.y * down.y) * sy];
+  const det = toRef[0] * toRef[4] - toRef[1] * toRef[3];
+  if (Math.abs(det) < 1e-9) return null;
+  const fromRef = [toRef[4] / det, -toRef[1] / det, (toRef[1] * toRef[5] - toRef[2] * toRef[4]) / det, -toRef[3] / det, toRef[0] / det, (toRef[2] * toRef[3] - toRef[0] * toRef[5]) / det];
+  // 도안 자리에 내 피부가 거의 없으면(옷) 굽어도 안 보인다: 안내만
+  let on = 0, all = 0;
+  for (let v = 0.05; v < 1; v += 0.1) for (let u = 0.05; u < 1; u += 0.1) {
+    const X = Math.round(fromRef[0] * u * c.width + fromRef[1] * v * c.height + fromRef[2]), Y = Math.round(fromRef[3] * u * c.width + fromRef[4] * v * c.height + fromRef[5]);
+    all++;
+    if (X >= 0 && Y >= 0 && X < W && Y < H && body.skin[Y * W + X] > 0.5) on++;
+  }
+  dbgTat({ chestPlace: { sw, w, h, center, skinFrac: on / all } });
+  if (on < all * 0.15) {
+    tatNote = '고른 타투 자리(가슴)가 내 사진에선 옷에 가려 보이지 않아요. 📍 자리 고르기로 보이는 피부에 놓아 보세요';
+    return null;
+  }
+  const rgba = c.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, c.width, c.height).data;
+  const ink: InkMap = { rgba, w: c.width, h: c.height, rect: { x: 0, y: 0, w: c.width, h: c.height } };
+  // 몸통 도안은 손에는 굽지 않는다(허리에 얹은 손등)
+  return { torso: { toRef, fromRef }, skin: legSkin(body.pose, body.skin, W, H, true), ink };
 }
 
 /** 내 사진에서 가슴(어깨 사이 아래)이 옷에 가려 있으면 미리 보기할 팔 자리, 보이면 null */
@@ -977,7 +1031,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
           if (a < 32) continue;
           if (inside(ref.rect.x + ((x + 0.5) / ink.w) * ref.rect.w, ref.rect.y + ((y + 0.5) / ink.h) * ref.rect.h)) inT += a / 255;
         }
-        dbgTat({ torsoFrac: inT / Math.max(1, total), refNose: rp.vis[0] });
+        dbgTat({ torsoFrac: inT / Math.max(1, total), refNose: rp.vis[0], refSh: [rp.p[11], rp.p[12], rp.vis[11], rp.vis[12], tp.hipsOk], inkRect: ref.rect, P4 });
         // 팔꿈치를 둘 다 못 잡았으면(팔을 얼굴까지 든 셀카 등) 관절점이 팔을 놓쳐 어깨 사다리꼴이 팔을 덮는다:
         // 잉크가 있는 피부 덩어리가 팔처럼 길쭉하면(길이 ≥ 굵기 3배) 몸통이 아니라 팔로 본다(배·손등에 소매 조각이 찍혔다)
         let armLike = false;
@@ -2019,6 +2073,7 @@ viewEl.addEventListener('pointerdown', (ev) => {
 
 // 자동 시험용: 사진 모드 손톱 상태
 (window as unknown as { irisHair: unknown }).irisHair = () => ({ mine: mineHair, ref: refHair });
+(window as unknown as { irisTattoo: unknown }).irisTattoo = tattoo;
 (window as unknown as { irisTatState: unknown }).irisTatState = () => ({ planOk: tatPlanOk, sameRef: tatPlan?.ref === refTat, baked: tatBaked(), refTat: !!refTat, user: refTat?.user, designSame: refTat?.design === tattoo.design, stillKey: stillHairKey, busy: !!stillHairBusy });
 (window as unknown as { irisNail: unknown }).irisNail = { get ref() { return refNails; }, get mine() { return myNails; }, ctr: () => { const b = stillRGBA(); return myNails.map((n) => +maskContrast(b.rgba, b.w, b.h, n.mask).toFixed(1)); } };
 

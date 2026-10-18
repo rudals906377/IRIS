@@ -126,3 +126,19 @@ test('다리 피부에서 손·팔 빼기: 캡슐 안은 0, 바깥은 그대로,
   assert.ok(edge > 0 && edge < 1, `가장자리 ${edge}`);
   assert.equal(skin[25 * W + 30], 1, '원본은 그대로');
 });
+
+test('chestInkScale: 가슴 피부 띠 폭 대비 도안 세로 비율, 양옆 잘림 표시', async () => {
+  const { chestInkScale } = await import('../src/beauty/still-tattoo.ts');
+  const W = 100, H = 120;
+  const skin = new Float32Array(W * H);
+  // 가슴: 가로 20~79(폭 60), 세로 30~119
+  for (let y = 30; y < H; y++) for (let x = 20; x < 80; x++) skin[y * W + x] = 1;
+  const r = chestInkScale(skin, W, H, { x: 45, y: 40, w: 10, h: 30 });
+  assert.ok(r && Math.abs(r.ratio - 0.5) < 0.02 && !r.clipped, JSON.stringify(r));
+  // 사진 양옆까지 피부(가슴이 잘린 클로즈업)면 clipped
+  for (let y = 30; y < H; y++) for (let x = 0; x < W; x++) skin[y * W + x] = 1;
+  const c = chestInkScale(skin, W, H, { x: 45, y: 40, w: 10, h: 30 });
+  assert.ok(c && Math.abs(c.ratio - 0.3) < 0.02 && c.clipped, JSON.stringify(c));
+  // 도안 줄에 피부가 없으면(옷 위) null
+  assert.equal(chestInkScale(new Float32Array(W * H), W, H, { x: 45, y: 40, w: 10, h: 30 }), null);
+});

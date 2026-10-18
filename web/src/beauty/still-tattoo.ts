@@ -483,3 +483,31 @@ export function transferTorsoInk(
   }
   return out;
 }
+
+/**
+ * 가슴 클로즈업 도안의 실제 크기: 도안 세로 길이 / 도안 줄에서 도안 가운데를 지나는 피부 띠(가슴) 폭.
+ * 가슴만 찍은 사진은 관절점이 엉뚱하게 잡혀(어깨가 가슴 안쪽에) 어깨 폭으로 잴 수 없고,
+ * AI 크기 말('스몰')만으로는 어깨 폭 14% 크기로 구워져 실제(가슴 폭의 40~50%)보다 훨씬 작았다.
+ * 피부 띠가 사진 양옆에 잘리면 폭이 실제보다 작아 비율이 커질 수 있어 `clipped` 로 알린다. 띠가 도안 폭의 1.2배 미만이면 null
+ */
+export function chestInkScale(skin: Float32Array, W: number, H: number, rect: { x: number; y: number; w: number; h: number }): { ratio: number; clipped: boolean } | null {
+  const cx = Math.round(rect.x + rect.w / 2);
+  if (cx < 0 || cx >= W || rect.h < 4) return null;
+  const widths: number[] = [];
+  let clippedRows = 0, rows = 0;
+  for (let y = Math.max(0, Math.round(rect.y)); y < Math.min(H, Math.round(rect.y + rect.h)); y++) {
+    rows++;
+    const row = y * W;
+    if (skin[row + cx] <= 0.5) continue;
+    let l = cx, r = cx;
+    while (l > 0 && skin[row + l - 1] > 0.5) l--;
+    while (r < W - 1 && skin[row + r + 1] > 0.5) r++;
+    widths.push(r - l + 1);
+    if (l === 0 || r === W - 1) clippedRows++;
+  }
+  if (!rows || widths.length < rows * 0.5) return null;
+  widths.sort((a, b) => a - b);
+  const cw = widths[Math.floor((widths.length - 1) * 0.9)];
+  if (cw < rect.w * 1.2) return null;
+  return { ratio: rect.h / cw, clipped: clippedRows >= rows * 0.5 };
+}
