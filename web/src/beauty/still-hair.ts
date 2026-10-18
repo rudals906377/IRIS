@@ -218,7 +218,12 @@ export function recolorHair(
     darkFrac = nc ? nd / nc : 0;
   }
   const mostlyDark = Math.max(0, Math.min(1, (darkFrac - 0.4) / 0.2)) * (lift > 0 ? 1 : 0);
-  const mid2 = mostlyDark > 0 ? boxBlur(luma, w, h, 2) : null, mid8 = mostlyDark > 0 ? boxBlur(luma, w, h, Math.max(6, Math.round(Math.min(w, h) / 100))) : null;
+  // 밝기 폭이 가운데 밝기에 비해 고른 사진보다 훨씬 넓은 머리(흰머리 섞인 검은 머리: 상대 폭 1.6, 잿빛 베이지 사진 0.6)를
+  // 분위로 옮기면 올 묶음의 명암이 1/3 로 눌려 평평한 가발처럼 된다 → 눌린 만큼(0~1) 중간 크기(2px/8px) 결을 비로 되살린다
+  const relMine = mineRange / Math.max(1, mine.L[Q / 2]), relRef = refRange / Math.max(1, ref.L[Q / 2]);
+  const comp = Math.max(0, Math.min(1, 1 - relRef / Math.max(1e-3, relMine)));
+  const midGain = Math.max(lift * mostlyDark, Math.min(1, 1.4 * comp));
+  const mid2 = midGain > 0 ? boxBlur(luma, w, h, 2) : null, mid8 = midGain > 0 ? boxBlur(luma, w, h, Math.max(6, Math.round(Math.min(w, h) / 100))) : null;
   const local = lift > 0.05 ? boxBlur(luma.map((v, i) => (v - box[i]) ** 2), w, h, 3) : null;
   const refSpread = ref.L[Math.round(Q * 0.9)] - ref.L[Math.round(Q * 0.1)];
   // 하이라이트·발레아쥬(어두운 바탕에 밝은 가닥): 고른 사진 밝기 폭이 넓고 내 머리는 고르면, 분위만 옮기면 한 색으로 평평해진다
@@ -378,9 +383,10 @@ export function recolorHair(
       L *= Math.exp((rr < 0 ? rr * 0.6 : rr) * 0.6 * lift * info);
     }
     if (mid2 && mid8) {
-      const r2 = Math.max(-0.25, Math.min(0.2, Math.log((mid2[i] + 6) / (mid8[i] + 6))));
+      // 눌린 결을 되살릴 때는 어두운 쪽 폭을 더 둔다(흰머리 사이 검은 올의 비는 −0.6 까지: 그게 결이다)
+      const r2 = Math.max(-0.25 - 0.35 * comp, Math.min(0.2 + 0.1 * comp, Math.log((mid2[i] + 6) / (mid8[i] + 6))));
       const info2 = Math.max(0, Math.min(1, (luma[i] - 6) / 12));
-      L *= Math.exp(r2 * 0.45 * lift * info2 * mostlyDark);
+      L *= Math.exp(r2 * 0.45 * info2 * midGain);
     }
     // 흑발 사진(가운데 밝기 L 25 아래)으로 바꿀 때는 원래보다 밝게 하지 않는다(검은 염색은 머리를 밝히지 못한다):
     // 검은 배경에 번진 알파까지 내 머리 분포에 섞이면 내 검은 머리가 분포 위쪽 = 고른 사진 윤기 밝기로 대응돼 회색 덩어리가 됐다
