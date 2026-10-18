@@ -2175,10 +2175,9 @@ async function skinOf(c: HTMLCanvasElement, pts: { x: number; y: number }[], hai
     // 안경 테·코받침 자리는 피부가 아니다: 얇은 테는 분할이 피부로 보기도 해 콧등 위에 늘어난 네모 조각으로 남았다
     // → 안경 확률만큼 빼고(2px 넓혀) 얼굴 바꾸기에서 가는 틈 메우기가 둘레 피부로 채우게 한다
     // (안경 확률은 알까지 덮는다: 눈 둘레(눈 폭 1.5배로 넓힘)는 알 너머로 보이는 내 눈·피부라 남기고 테·코받침·다리만 뺀다)
+    // 눈 둘레(눈 폭 1.5배·높이 1.8배): 안경알 너머로 보이는 내 눈·피부라 안경 확률과 무관하게 남긴다
+    let kb: Float32Array | null = null;
     if (p.glasses) {
-      const g = new Float32Array(p.size * p.size);
-      for (let i = 0; i < g.length; i++) g[i] = p.glasses[i] / 255;
-      const gb = boxBlur(g, p.size, p.size, 2);
       const keep = new Float32Array(p.size * p.size);
       const k = p.size / rect.size;
       for (const ids of [[...EYE_R_UPPER, ...EYE_R_LOWER.slice(1, -1)], [...EYE_L_UPPER, ...EYE_L_LOWER.slice(1, -1)]]) {
@@ -2187,8 +2186,51 @@ async function skinOf(c: HTMLCanvasElement, pts: { x: number; y: number }[], hai
         const m = fillPoly(q.map((v) => ({ x: (ex + (v.x - ex) * 1.5 - rect.x) * k, y: (ey + (v.y - ey) * 1.8 - rect.y) * k })), p.size, p.size);
         for (let i = 0; i < keep.length; i++) if (m[i]) keep[i] = 1;
       }
-      const kb = boxBlur(keep, p.size, p.size, Math.max(1, Math.round(p.size * 0.01)));
-      for (let i = 0; i < face.length; i++) face[i] *= 1 - Math.min(1, gb[i] * 3) * (1 - Math.min(1, kb[i]));
+      kb = boxBlur(keep, p.size, p.size, Math.max(1, Math.round(p.size * 0.01)));
+      const g = new Float32Array(p.size * p.size);
+      for (let i = 0; i < g.length; i++) g[i] = p.glasses[i] / 255;
+      const gb = boxBlur(g, p.size, p.size, 2);
+      // 안경 확률은 알 전체를 덮는다(분할의 '안경' 클래스). 테·코받침은 알 영역의 가장자리이므로 가장자리에서 2% 넘게 안쪽은
+      // 투명 안경이면 알 너머 내 피부·눈이다 → 피부로 되살린다. 선글라스(알 속 밝기가 둘레 피부의 60% 아래)는 그대로 뺀다
+      // (가는 테 안경 얼굴을 바꾸면 알 영역 전체가 빠져 눈이 고른 사진 눈으로 남고, 콧대 둘레는 메울 피부가 없어 밝은 네모 조각이 줄지어 남았다)
+      const g1 = new Float32Array(p.size * p.size);
+      for (let i = 0; i < g.length; i++) g1[i] = g[i] > 0.5 ? 1 : 0;
+      const gin = boxBlur(g1, p.size, p.size, Math.max(2, Math.round(p.size * 0.02)));
+      const oc = document.createElement('canvas');
+      oc.width = p.size; oc.height = p.size;
+      oc.getContext('2d')!.drawImage(c, rect.x, rect.y, rect.size, rect.size, 0, 0, p.size, p.size);
+      const px = oc.getContext('2d')!.getImageData(0, 0, p.size, p.size).data;
+      let li = 0, ni = 0, ls = 0, ns = 0;
+      for (let i = 0; i < g.length; i++) {
+        const l = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+        if (gin[i] >= 0.97) { li += l; ni++; } else if (face[i] > 0.8 && g[i] < 0.2) { ls += l; ns++; }
+      }
+      const clear = ni > 20 && ns > 20 && li / ni > 0.6 * (ls / ns) ? 1 : 0;
+      for (let i = 0; i < face.length; i++) {
+        const inner = clear * Math.max(0, Math.min(1, (gin[i] - 0.9) / 0.07));
+        face[i] *= 1 - Math.min(1, gb[i] * 3) * (1 - Math.min(1, kb[i])) * (1 - inner);
+        if (inner > face[i]) face[i] = inner;
+      }
+      // 분할이 못 잡는 가는 금속 브리지·코받침(밝은 반짝임이나 어두운 선, 1~2px): 안경 둘레(알 영역에서 3% 안)의
+      // 가는 능선(헤시안 한 방향만 큼, 밝은 선·어두운 선 모두)을 피부에서 빼 얼굴 바꾸기의 틈 메우기가 둘레 피부로 채우게 한다
+      // 눈 둘레(속눈썹·쌍꺼풀 선)는 뺀다. (콧대 위에 밝은 네모 조각이 줄지어 남았음)
+      const near = boxBlur(g1, p.size, p.size, Math.max(2, Math.round(p.size * 0.03)));
+      const lum = new Float32Array(p.size * p.size);
+      for (let i = 0; i < lum.length; i++) lum[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+      const S = boxBlur(lum, p.size, p.size, 1);
+      const ridge = new Float32Array(p.size * p.size);
+      const n = p.size;
+      for (let y = 2; y < n - 2; y++) for (let x = 2; x < n - 2; x++) {
+        const i = y * n + x;
+        if (near[i] < 0.02 || kb[i] > 0.5) continue;
+        const hxx = S[i + 2] - 2 * S[i] + S[i - 2], hyy = S[i + 2 * n] - 2 * S[i] + S[i - 2 * n];
+        const hxy = (S[i + 2 + 2 * n] - S[i + 2 - 2 * n] - S[i - 2 + 2 * n] + S[i - 2 - 2 * n]) / 4;
+        const tr = hxx + hyy, dd = Math.sqrt((hxx - hyy) ** 2 + 4 * hxy * hxy);
+        const l1 = (tr + dd) / 2, l2 = (tr - dd) / 2;
+        if ((l1 > 10 && Math.abs(l2) < l1 * 0.35) || (l2 < -10 && Math.abs(l1) < -l2 * 0.35)) ridge[i] = 1;
+      }
+      const rb2 = boxBlur(ridge, p.size, p.size, 1);
+      for (let i = 0; i < face.length; i++) if (rb2[i] > 0.1) face[i] *= 1 - Math.min(1, rb2[i] * 3);
     }
     if (hairPad > 0) {
       const hair = new Float32Array(p.size * p.size);
@@ -2204,7 +2246,10 @@ async function skinOf(c: HTMLCanvasElement, pts: { x: number; y: number }[], hai
         for (let i = 0; i < fm.length; i++) if (fm[i]) feat[i] = 1;
       }
       const fb = boxBlur(feat, p.size, p.size, Math.max(2, Math.round((w / size) * p.size * 0.04)));
-      for (let i = 0; i < face.length; i++) if (fb[i] > 0.3 && (!p.glasses || p.glasses[i] < 77)) face[i] = 1;
+      // 안경 확률이 높은 곳(테·코받침)은 빼되, 눈 둘레는 안경알 너머 내 눈이라 그대로 인정한다
+      // (안경 쓴 얼굴은 알 전체가 안경 확률 ≥ 77 이라 눈·눈꺼풀이 내 피부에서 빠져, 바뀐 얼굴에 고른 사진 눈이 그대로 남고
+      //  콧대 둘레는 메울 내 피부가 없어 고른 사진 피부가 비친 밝은 네모 조각이 줄지어 남았다)
+      for (let i = 0; i < face.length; i++) if (fb[i] > 0.3 && (!p.glasses || p.glasses[i] < 77 || (kb && kb[i] > 0.5))) face[i] = 1;
     }
     const m = new Float32Array(c.width * c.height);
     for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
