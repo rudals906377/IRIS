@@ -90,6 +90,19 @@ export const SHADOW_KEFF = 0.35;
 type Pixels = { w: number; h: number; d: Uint8ClampedArray; img: ImageData };
 type SegMasks = { hair: Float32Array; body: Float32Array; face: Float32Array; bg: Float32Array; clothes?: Float32Array; w: number; h: number };
 
+/** 결과에서 '사진에서 가져왔어요: …' 문장을 다시 만든다(스타일 AI 힌트가 네일을 더하거나 타투를 뺀 뒤 문장이 옛것으로 남지 않게) */
+export function summaryOf(r: StyleResult): string {
+  const parts: string[] = [];
+  if (r.makeup) {
+    const got = ['lip', 'blush', 'shadow', 'liner', 'brow'].filter((k) => (r.makeup as unknown as Record<string, unknown>)[k]);
+    if (got.length) parts.push(`메이크업(${got.map((k) => ({ lip: '립', blush: '블러셔', shadow: '아이섀도', liner: '아이라인', brow: '눈썹' })[k]).join('·')})`);
+  }
+  if (r.hair) parts.push(r.hair.tip ? '헤어(옴브레)' : '헤어');
+  if (r.nail) parts.push('네일');
+  if (r.tattoo) parts.push('타투 도안');
+  return parts.length ? `사진에서 가져왔어요: ${parts.join(' · ')}` : r.summary;
+}
+
 /** 받침 유무로 조사 고르기('타투는'·'네일은') */
 export function josa(word: string, withBatchim: string, without: string): string {
   const c = word.charCodeAt(word.length - 1);
