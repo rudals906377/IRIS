@@ -82,6 +82,28 @@ export function warpTriangles(
   const span = (q: P[]) => Math.hypot(q[454].x - q[234].x, q[454].y - q[234].y);
   const scale2 = dp.length > 454 && sp.length > 454 ? (span(dp) / Math.max(1, span(sp))) ** 2 : 1;
   const extra = extraIn.map(() => new Float32Array(W * H));
+  // 크게 줄여 옮길 때(src 얼굴이 dst 얼굴의 1.5배 넘게 큼) 점 표본(겹선형)은 계단 현상: 고른 사진 속눈썹·아이라인 한 올 한 올이
+  // 전신 사진의 작은 눈에 검은 점선으로 찍혔다 → src 얼굴 둘레를 줄이는 배율의 절반 반지름으로 미리 흐린다(올바른 축소 표본)
+  const down = dp.length > 454 && sp.length > 454 ? span(sp) / Math.max(1, span(dp)) : 1;
+  let srcS: Uint8ClampedArray | Float32Array = src;
+  if (down > 1.5) {
+    const r = Math.max(1, Math.round(down / 2));
+    let bx0 = sw, by0 = sh, bx1 = 0, by1 = 0;
+    for (const q of sp) { bx0 = Math.min(bx0, q.x); bx1 = Math.max(bx1, q.x); by0 = Math.min(by0, q.y); by1 = Math.max(by1, q.y); }
+    const cx0 = Math.max(0, Math.floor(bx0 - 3 * r)), cy0 = Math.max(0, Math.floor(by0 - 3 * r));
+    const cx1 = Math.min(sw - 1, Math.ceil(bx1 + 3 * r)), cy1 = Math.min(sh - 1, Math.ceil(by1 + 3 * r));
+    const cw = cx1 - cx0 + 1, chh = cy1 - cy0 + 1;
+    if (cw > 2 && chh > 2) {
+      const out = new Float32Array(src);
+      for (let c = 0; c < 3; c++) {
+        const ch = new Float32Array(cw * chh);
+        for (let y = 0; y < chh; y++) for (let x = 0; x < cw; x++) ch[y * cw + x] = src[((cy0 + y) * sw + cx0 + x) * 4 + c];
+        const bl = boxBlur(ch, cw, chh, r);
+        for (let y = 0; y < chh; y++) for (let x = 0; x < cw; x++) out[((cy0 + y) * sw + cx0 + x) * 4 + c] = bl[y * cw + x];
+      }
+      srcS = out;
+    }
+  }
   for (let t = 0; t < tris.length; t += 3) {
     const [i, j, k] = [tris[t], tris[t + 1], tris[t + 2]];
     const A = dp[i], B = dp[j], C = dp[k];
@@ -104,8 +126,8 @@ export function warpTriangles(
         const xi = Math.floor(xx), yi = Math.floor(yy), fx = xx - xi, fy = yy - yi;
         const o = (y * W + x) * 3;
         for (let c = 0; c < 3; c++) {
-          const a = src[(yi * sw + xi) * 4 + c], b = src[(yi * sw + xi + 1) * 4 + c];
-          const d = src[((yi + 1) * sw + xi) * 4 + c], e = src[((yi + 1) * sw + xi + 1) * 4 + c];
+          const a = srcS[(yi * sw + xi) * 4 + c], b = srcS[(yi * sw + xi + 1) * 4 + c];
+          const d = srcS[((yi + 1) * sw + xi) * 4 + c], e = srcS[((yi + 1) * sw + xi + 1) * 4 + c];
           warped[o + c] = (a * (1 - fx) + b * fx) * (1 - fy) + (d * (1 - fx) + e * fx) * fy;
         }
         cover[y * W + x] = 1;
