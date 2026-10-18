@@ -944,6 +944,11 @@ function armsOf(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Fl
     };
   });
 }
+/** 타투 옮기기 단계 표시(큰 사진에서 어디서 오래 걸리는지 콘솔로 보려고) */
+function tatStep(name: string): void {
+  dbgTat({ step: name });
+  console.debug('[tat]', name, Math.round(performance.now()));
+}
 function dbgTat(o: object): void {
   const w = window as unknown as { irisTat?: object };
   w.irisTat = { ...w.irisTat, ...o };
@@ -957,18 +962,22 @@ async function armTattooPlan(): Promise<TatPlan | null> {
     const p = (async (): Promise<TatPlan | null> => {
       photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
       setStatus(TAT_LOOKING);
+      tatStep('refPose');
       // 고른 사진: 도안 뽑기와 같은 크기로
       const rc = document.createElement('canvas');
       rc.width = ref.w;
       rc.height = ref.h;
       rc.getContext('2d')!.drawImage(ref.img, 0, 0, ref.w, ref.h);
       const rp = await photoAnalyzer.pose(rc);
+      tatStep('refSkin');
       const rs = await photoAnalyzer.bodySkin(rc);
       dbgTat({ refPose: !!rp, refSkin: !!rs });
+      tatStep('refFace');
       if (!rs) return null;
       // 고른 사진 얼굴(윤곽 15% 넓힘)은 도안이 아니다: 팔을 얼굴까지 든 셀카에서 눈·눈썹·콧구멍·입술이 잉크로 뽑혀
       // 내 아래팔에 검은 조각으로 찍혔다 → 잉크에서만 뺀다(팔 영역(limbRegion)에서도 빼면 얼굴에 붙은 팔 띠가 끊겨 팔로 못 읽었다)
       const refFacePts = await photoAnalyzer.faceLandmarks(rc).catch(() => null);
+      tatStep('ink');
       let faceM: Float32Array | null = null;
       if (refFacePts) {
         const ov = FACE_OVAL.map((i) => refFacePts[i]);
@@ -1047,8 +1056,11 @@ async function armTattooPlan(): Promise<TatPlan | null> {
         }
         if (inT > total * 0.5 && !armLike) {
           const mc = stillCanvas();
+          tatStep('myPose');
           const mp = await photoAnalyzer.pose(mc);
+          tatStep('mySkin');
           const ms = await photoAnalyzer.bodySkin(mc);
+          tatStep('torso');
           if (!mp || !ms || Math.min(mp.vis[11], mp.vis[12]) < 0.5) return null;
           // 뒷모습(얼굴이 안 보임)은 관절점이 왼쪽·오른쪽·크기를 자주 틀려 옮기지 않는다: 앞모습끼리(가슴·쇄골)만
           const refFace = refFacePts;
@@ -1125,8 +1137,11 @@ async function armTattooPlan(): Promise<TatPlan | null> {
         if (!strip || strip.len / (2 * strip.mean) < 2.5) return null;
       }
       const mc = stillCanvas();
+      tatStep('myPose2');
       const mp = await photoAnalyzer.pose(mc);
+      tatStep('mySkin2');
       const ms = await photoAnalyzer.bodySkin(mc);
+      tatStep('arm');
       if (!mp || !ms) return null;
       const mArms = armsOf(mp, ms, mc.width, mc.height, legs);
       const ok = (a: (typeof mArms)[number]) => a.seen && a.vis > 0.4;

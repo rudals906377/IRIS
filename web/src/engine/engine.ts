@@ -15,7 +15,7 @@ import { FaceTracker, type FaceFrame } from './face.ts';
 import { LoopbackTest } from './loopback.ts';
 import { Metrics } from './metrics.ts';
 import { Renderer, type FrameTextures } from './renderer.ts';
-import { VideoSource, type FrameInfo } from './source.ts';
+import { VideoSource, type FrameInfo, frameSize, type FrameSource } from './source.ts';
 import { Tracker, type TrackResult } from './tracker.ts';
 
 
@@ -128,13 +128,14 @@ export class BeautyEngine {
 
   /** 시험용: 멈춘 영상의 현재 프레임을 설정만 바꿔 다시 처리·합성한다. */
   redraw(): void {
-    this.onFrame({ now: performance.now(), mediaTime: this.source.video.currentTime });
+    this.onFrame({ now: performance.now(), mediaTime: this.source.kind === 'image' ? performance.now() / 1000 : this.source.video.currentTime });
   }
 
   private onFrame(info: FrameInfo): void {
-    const video = this.source.video;
-    const w = video.videoWidth;
-    const h = video.videoHeight;
+    // 사진은 캔버스 그대로(스트림이 멈춰도 계속 처리되게)
+    const video = this.source.frame;
+    const w = this.source.width;
+    const h = this.source.height;
     if (!w || !h) return;
 
     if (this.loopback?.running) {
@@ -376,9 +377,8 @@ export class BeautyEngine {
   }
 
   /** 손마다 손톱들을 감싸는 정사각형(학습 때와 같은 비율: 손톱 상자의 2.6배)을 잘라 모델에 넣고, 최근 결과를 셰이더에 준다 */
-  private runNailNets(video: HTMLVideoElement, quads: NailQuad[]): void {
-    const W = video.videoWidth;
-    const H = video.videoHeight;
+  private runNailNets(video: FrameSource, quads: NailQuad[]): void {
+    const { w: W, h: H } = frameSize(video);
     const out: { data: Uint8ClampedArray; size: number; rect: { x: number; y: number; size: number } }[] = [];
     for (let hi = 0; hi < 2; hi++) {
       const net = this.nailNets[hi];
@@ -486,7 +486,7 @@ export class BeautyEngine {
     this.loopback = null;
   }
 
-  private sampleLuma(video: HTMLVideoElement): number {
+  private sampleLuma(video: FrameSource): number {
     const ctx = this.lumaCtx;
     const { width: w, height: h } = ctx.canvas;
     ctx.drawImage(video, 0, 0, w, h);

@@ -13,6 +13,14 @@ export interface FrameInfo {
 
 export type SourceKind = 'camera' | 'file' | 'image';
 
+/** 처리에 넣는 그림: 영상(<video>) 또는 사진 캔버스 */
+export type FrameSource = HTMLVideoElement | HTMLCanvasElement;
+/** 그림의 픽셀 크기(영상은 videoWidth, 캔버스는 width) */
+export function frameSize(v: FrameSource): { w: number; h: number } {
+  return v instanceof HTMLVideoElement ? { w: v.videoWidth, h: v.videoHeight } : { w: v.width, h: v.height };
+}
+
+
 export interface CameraRequest {
   width: number;
   height: number;
@@ -29,6 +37,8 @@ export class VideoSource {
   private objectUrl: string | null = null;
   private stillTimer = 0;
   private stillDraw: ((img: ImageBitmap) => void) | null = null;
+  /** 사진을 열었을 때 그 그림이 그려진 캔버스(처리 입력으로 바로 쓴다) */
+  private stillCanvas: HTMLCanvasElement | null = null;
   /** 사진(정지 영상)을 열었을 때 그 원본(최대 변 제한 전) */
   still: ImageBitmap | null = null;
 
@@ -40,11 +50,20 @@ export class VideoSource {
   }
 
   get width(): number {
-    return this.video.videoWidth;
+    return this.stillCanvas?.width ?? this.video.videoWidth;
   }
 
   get height(): number {
-    return this.video.videoHeight;
+    return this.stillCanvas?.height ?? this.video.videoHeight;
+  }
+
+  /**
+   * 처리·합성에 넣을 현재 그림. 사진은 캔버스 그대로(스트림을 거친 <video> 가 아니라):
+   * 큰 사진(1500×2000)에서 브라우저 자원이 모자라면 캔버스 스트림이 조용히 멈춰(currentTime 고정) 새 프레임 콜백이 안 와
+   * 엔진이 통째로 멈췄고, 구운 결과도 <video> 에 안 비쳤다
+   */
+  get frame(): FrameSource {
+    return this.stillCanvas ?? this.video;
   }
 
   get settings(): MediaTrackSettings | null {
@@ -109,6 +128,7 @@ export class VideoSource {
       ctx.drawImage(cur, 0, 0, w, h);
     };
     this.still = img;
+    this.stillCanvas = canvas;
     this.video.srcObject = this.stream;
     this.kind = 'image';
     await this.video.play();
@@ -136,6 +156,22 @@ export class VideoSource {
     this.stopLoop?.();
     const video = this.video;
     let stopped = false;
+    if (this.stillCanvas) {
+      // 사진: 스트림 프레임을 기다리지 않고 직접 돈다(스트림이 멈춰도 엔진은 계속).
+      // 한 프레임 처리가 끝난 뒤 66ms 쉬고 다음(고정 간격이면 처리가 긴 큰 사진에서 메인 스레드를 다 먹어 사진 분석이 굶었다)
+      let timer = 0;
+      const tick = (): void => {
+        if (stopped) return;
+        cb({ now: performance.now(), mediaTime: performance.now() / 1000 });
+        timer = window.setTimeout(tick, 66);
+      };
+      timer = window.setTimeout(tick, 0);
+      this.stopLoop = () => {
+        stopped = true;
+        clearTimeout(timer);
+      };
+      return;
+    }
     if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
       let handle = 0;
       const step = (now: number, md: VideoFrameCallbackMetadata): void => {
@@ -175,6 +211,7 @@ export class VideoSource {
     this.stillTimer = 0;
     this.still = null;
     this.stillDraw = null;
+    this.stillCanvas = null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.video.pause();

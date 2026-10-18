@@ -2,6 +2,7 @@
 // GPU(WebGL) 위임을 먼저 시도하고 실패하면 CPU로 전환한다.
 
 import { HairNet } from './hairnet.ts';
+import { frameSize, type FrameSource } from './source.ts';
 import {
   FaceLandmarker,
   FilesetResolver,
@@ -257,7 +258,8 @@ export class Tracker {
   }
 
   /** 한 프레임을 처리한다. ts는 단조 증가하는 밀리초 시각이어야 한다. */
-  track(video: HTMLVideoElement, ts: number): TrackResult {
+  track(video: FrameSource, ts: number): TrackResult {
+    const { w: vw, h: vh } = frameSize(video);
     const timings: TrackTimings = { pose: 0, seg: 0, hands: 0, face: 0 };
     // MediaPipe VIDEO 모드는 시각이 엄격히 증가해야 하고, 내부적으로 ms 단위로 잘린다.
     // 같은 1ms 안에 두 프레임이 오면 그래프가 오류로 멈추므로 최소 1ms씩 증가시킨다.
@@ -276,14 +278,14 @@ export class Tracker {
     let seg: SegOutput | null = this.lastSeg;
     if (this.seg) {
       const t0 = performance.now();
-      const head = this.still ? this.still.rect : this.config.headSeg ? this.headRect(video.videoWidth, video.videoHeight) : null;
+      const head = this.still ? this.still.rect : this.config.headSeg ? this.headRect(vw, vh) : null;
       // 전체 분할은 segEvery 프레임마다(머리 분할을 할 때는 3배로 띄엄띄엄: 손·몸 피부는 천천히 변한다),
       // 머리 주변 분할은 얼굴이 보이면 매 프레임
       const every = Math.max(1, this.config.segEvery) * (head ? 3 : 1);
       if (!this.lastGlobal || this.frameNo % every === 0) this.runSeg(video, t);
       if (this.lastGlobal) {
         const hair = this.still ? { data: this.still.hair, size: this.still.size } : head ? (this.hairNet ? this.runHairNet(video, head) : this.runHeadSeg(video, head)) : null;
-        seg = this.merge(this.lastGlobal, hair, head, video.videoWidth, video.videoHeight);
+        seg = this.merge(this.lastGlobal, hair, head, vw, vh);
         this.lastSeg = seg;
       }
       timings.seg = performance.now() - t0;
@@ -363,7 +365,7 @@ export class Tracker {
   }
 
   /** 자체 머리카락 모델: 머리 주변을 모델 입력 크기로 잘라 추론을 걸고, 가장 최근 결과를 돌려준다(한 프레임 늦음) */
-  private runHairNet(video: HTMLVideoElement, head: { x: number; y: number; size: number }): { data: Uint8ClampedArray; size: number } | null {
+  private runHairNet(video: FrameSource, head: { x: number; y: number; size: number }): { data: Uint8ClampedArray; size: number } | null {
     const hn = this.hairNet!;
     const N = hn.size;
     if (!this.hairCanvas || this.hairCanvas.width !== N) {
@@ -378,7 +380,7 @@ export class Tracker {
   }
 
   /** 머리 주변을 잘라 분할하고 머리카락 확률(0~255, HEAD_W²)을 돌려준다 */
-  private runHeadSeg(video: HTMLVideoElement, head: { x: number; y: number; size: number }): { data: Uint8ClampedArray; size: number } | null {
+  private runHeadSeg(video: FrameSource, head: { x: number; y: number; size: number }): { data: Uint8ClampedArray; size: number } | null {
     if (!this.segHead) return null;
     if (!this.headCanvas) {
       this.headCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(HEAD_W, HEAD_W) : document.createElement('canvas');
@@ -536,7 +538,7 @@ export class Tracker {
     return { flags: out, width: W, height: H, headRect: { x: head.x / frameW, y: head.y / frameH, w: head.size / frameW, h: head.size / frameH } };
   }
 
-  private runSeg(video: HTMLVideoElement, t: number): void {
+  private runSeg(video: FrameSource, t: number): void {
     if (!this.segCanvas) {
       this.segCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(SEG_W, SEG_H) : document.createElement('canvas');
       this.segCanvas.width = SEG_W;
