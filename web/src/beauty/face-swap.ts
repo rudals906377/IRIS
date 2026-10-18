@@ -348,5 +348,46 @@ export function swapFace(
       for (let c = 0; c < 3; c++) out[i * 4 + c] = Math.max(0, Math.min(255, out[i * 4 + c] + add));
     }
   }
+  // 입술 둘레 반짝임: 플래시를 받은 내 입술 테두리(립글로스 가장자리·윗입술 위 광)는 둘레 피부보다 L 10 가까이 밝은 2~4px 띠라
+  // 고른 사진 입술 자리(내 입술보다 크면 늘어나 더 굵어짐) 둘레에 하얀 테가 된다. 둘레 피부 전체 통계는 두 사진이 같아
+  // 전체 반짝임 제한으로는 안 잡힌다 → 입술 둘레 띠(얼굴 폭 3%)에서만 '둘레(2%)보다 밝은 정도'의 90% 자리를 고른 사진과 비교해
+  // 1.3배 넘게 밝으면 그 비로 눌러 고른 사진 수준으로(고른 사진도 글로스 테가 있으면 그대로)
+  if (LIPS_OUTER.every((i) => i < N)) {
+    const lipM = fillPoly(LIPS_OUTER.map((i) => dp[i]), W, H);
+    const rBand = Math.max(2, Math.round(fw * 0.03)), rDev = Math.max(1, Math.round(fw * 0.04));
+    const lipB = boxBlur(lipM, W, H, rBand);
+    const Lo = new Float32Array(W * H), Lr = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) {
+      Lo[i] = 0.299 * out[i * 4] + 0.587 * out[i * 4 + 1] + 0.114 * out[i * 4 + 2];
+      Lr[i] = 0.299 * dst[i * 4] + 0.587 * dst[i * 4 + 1] + 0.114 * dst[i * 4 + 2];
+    }
+    const Lob = boxBlur(Lo, W, H, rDev), Lrb = boxBlur(Lr, W, H, rDev);
+    const bandW = new Float32Array(W * H);
+    const dO: number[] = [], dR: number[] = [];
+    for (let i = 0; i < W * H; i++) {
+      if (lipM[i] || lipB[i] <= 0 || mask[i] < 0.5) continue;
+      // 띠 바깥쪽으로 갈수록 약하게(딱 자르면 띠 가장자리가 선으로 보인다)
+      bandW[i] = mask[i] * Math.min(1, lipB[i] / 0.25);
+      const a = Lo[i] - Lob[i], b = Lr[i] - Lrb[i];
+      if (a > 0) dO.push(a);
+      if (b > 0) dR.push(b);
+    }
+    if (dO.length > 20 && dR.length > 20) {
+      dO.sort((a, b) => a - b);
+      dR.sort((a, b) => a - b);
+      const pO = dO[Math.floor(dO.length * 0.9)], pR = dR[Math.floor(dR.length * 0.9)];
+      if (pO > pR * 1.3 && pO > 2) {
+        const k = Math.max(0.3, pR / pO);
+        for (let i = 0; i < W * H; i++) {
+          if (!bandW[i]) continue;
+          const dev = Lo[i] - Lob[i];
+          // 비로 줄인다(같은 값을 빼면 채도가 떨어져 잿빛 조각이 된다)
+          if (dev <= 0) continue;
+          const f = Math.max(0, 1 - (dev * (1 - k) * bandW[i]) / Math.max(1, Lo[i]));
+          for (let c = 0; c < 3; c++) out[i * 4 + c] = Math.max(0, Math.min(255, out[i * 4 + c] * f));
+        }
+      }
+    }
+  }
   return out;
 }

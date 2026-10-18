@@ -2134,6 +2134,7 @@ viewEl.addEventListener('pointerdown', (ev) => {
 // 자동 시험용: 사진 모드 손톱 상태
 (window as unknown as { irisHair: unknown }).irisHair = () => ({ mine: mineHair, ref: refHair });
 (window as unknown as { irisTattoo: unknown }).irisTattoo = tattoo;
+(window as unknown as { irisAnalyzer: unknown }).irisAnalyzer = () => (photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE));
 (window as unknown as { irisTatState: unknown }).irisTatState = () => ({ planOk: tatPlanOk, sameRef: tatPlan?.ref === refTat, baked: tatBaked(), refTat: !!refTat, user: refTat?.user, designSame: refTat?.design === tattoo.design, stillKey: stillHairKey, busy: !!stillHairBusy });
 (window as unknown as { irisNail: unknown }).irisNail = { get ref() { return refNails; }, get mine() { return myNails; }, ctr: () => { const b = stillRGBA(); return myNails.map((n) => +maskContrast(b.rgba, b.w, b.h, n.mask).toFixed(1)); } };
 
