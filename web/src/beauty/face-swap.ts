@@ -71,9 +71,51 @@ export function fillPoly(poly: P[], w: number, h: number): Float32Array {
  * rgb: 0~255 실수 3채널, cover: 삼각형이 덮은 곳 1, extra: 함께 휠 src 크기 확률 맵들(가장 가까운 칸).
  * fold: src 쪽 삼각형이 뒤집힌 곳 1(옆얼굴 사진에서 코 뒤로 가려진 뺨처럼, 내 사진엔 보이지만 dst 에선 가려진 자리).
  */
+/**
+ * 점 대응을 매끈하게: 고른 사진 점(dp) → 내 점(sp)의 닮음 변환(최소제곱)을 빼고 남는 잔차를 둘레 점들과 평균(가우시안, σ = 얼굴 폭 비)한다.
+ * 468점을 하나하나 그대로 쓰면 점마다의 떨림(작은 얼굴을 크게 늘릴 때 1~2px)이 삼각형마다 다른 아핀으로 번져 코·입이 구겨진다.
+ * 전체 모양 차이(코 폭·입 크기)는 잔차가 넓게 비슷하므로 남는다.
+ */
+export function smoothCorrespondence(dp: P[], sp: P[], sigmaFrac = 0.03): P[] {
+  const n = Math.min(dp.length, sp.length);
+  if (n < 10) return sp;
+  // 닮음 변환 dp → sp: [a −b tx; b a ty]
+  let sx = 0, sy = 0, tx = 0, ty = 0;
+  for (let i = 0; i < n; i++) { sx += dp[i].x; sy += dp[i].y; tx += sp[i].x; ty += sp[i].y; }
+  sx /= n; sy /= n; tx /= n; ty /= n;
+  let a = 0, b = 0, d = 0;
+  for (let i = 0; i < n; i++) {
+    const x = dp[i].x - sx, y = dp[i].y - sy, u = sp[i].x - tx, v = sp[i].y - ty;
+    a += x * u + y * v; b += x * v - y * u; d += x * x + y * y;
+  }
+  if (d < 1e-6) return sp;
+  a /= d; b /= d;
+  const res: P[] = [];
+  for (let i = 0; i < n; i++) {
+    const x = dp[i].x - sx, y = dp[i].y - sy;
+    res.push({ x: sp[i].x - (tx + a * x - b * y), y: sp[i].y - (ty + b * x + a * y) });
+  }
+  const fw = dp.length > 454 ? Math.hypot(dp[454].x - dp[234].x, dp[454].y - dp[234].y) : Math.sqrt(d / n) * 2;
+  const sig = Math.max(1, fw * sigmaFrac), s2 = 2 * sig * sig, cut = (3 * sig) ** 2;
+  const out: P[] = sp.slice();
+  for (let i = 0; i < n; i++) {
+    let wx = 0, wy = 0, ws = 0;
+    for (let j = 0; j < n; j++) {
+      const dx = dp[j].x - dp[i].x, dy = dp[j].y - dp[i].y, d2 = dx * dx + dy * dy;
+      if (d2 > cut) continue;
+      const w = Math.exp(-d2 / s2);
+      wx += res[j].x * w; wy += res[j].y * w; ws += w;
+    }
+    const x = dp[i].x - sx, y = dp[i].y - sy;
+    out[i] = { x: tx + a * x - b * y + wx / ws, y: ty + b * x + a * y + wy / ws };
+  }
+  return out;
+}
+
 export function warpTriangles(
-  dp: P[], W: number, H: number, src: Uint8ClampedArray, sw: number, sh: number, sp: P[], extraIn: Float32Array[] = [],
+  dp: P[], W: number, H: number, src: Uint8ClampedArray, sw: number, sh: number, sp0: P[], extraIn: Float32Array[] = [],
 ): { rgb: Float32Array; cover: Float32Array; extra: Float32Array[]; fold: Float32Array } {
+  const sp = smoothCorrespondence(dp, sp0);
   const tris = delaunay(dp);
   const warped = new Float32Array(W * H * 3);
   const cover = new Float32Array(W * H);
@@ -111,7 +153,18 @@ export function warpTriangles(
     if (Math.abs(den) < 1e-6) continue;
     const sden = (sp[j].y - sp[k].y) * (sp[i].x - sp[k].x) + (sp[k].x - sp[j].x) * (sp[i].y - sp[k].y);
     // 뒤집혔거나 크게 눌린(고개 돌린 쪽 코 옆: 내 사진 넓은 자리가 가는 띠로) 삼각형
-    const flip = sden * den < 0 || Math.abs(den) < Math.abs(sden) * scale2 * 0.3 ? 1 : 0;
+    // 한 방향으로만 3배 넘게 늘어나거나 눌린 삼각형(아핀의 특이값 비)도 접힘으로: 내 점이 어긋난 자리(어두운 사진의 코 점)에서
+    // 내 결이 가늘게 찢어져 코·입이 무너졌다 → 그 자리는 고른 사진 픽셀을 쓴다
+    let aniso = 1;
+    {
+      const ax = B.x - A.x, ay = B.y - A.y, bx = C.x - A.x, by = C.y - A.y;
+      const ux = sp[j].x - sp[i].x, uy = sp[j].y - sp[i].y, vx = sp[k].x - sp[i].x, vy = sp[k].y - sp[i].y;
+      const m00 = (ux * by - vx * ay) / den, m01 = (vx * ax - ux * bx) / den, m10 = (uy * by - vy * ay) / den, m11 = (vy * ax - uy * bx) / den;
+      const E = m00 * m00 + m01 * m01 + m10 * m10 + m11 * m11, D = Math.abs(m00 * m11 - m01 * m10);
+      const s1 = Math.sqrt(Math.max(0, (E + Math.sqrt(Math.max(0, E * E - 4 * D * D))) / 2));
+      aniso = D > 1e-9 ? s1 / (D / s1) : 99;
+    }
+    const flip = sden * den < 0 || Math.abs(den) < Math.abs(sden) * scale2 * 0.3 || aniso > 3 ? 1 : 0;
     const x0 = Math.max(0, Math.floor(Math.min(A.x, B.x, C.x))), x1 = Math.min(W - 1, Math.ceil(Math.max(A.x, B.x, C.x)));
     const y0 = Math.max(0, Math.floor(Math.min(A.y, B.y, C.y))), y1 = Math.min(H - 1, Math.ceil(Math.max(A.y, B.y, C.y)));
     for (let y = y0; y <= y1; y++) {
