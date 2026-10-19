@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { bandMesh, faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 import { LOOKS, PALETTES } from '../src/beauty/palettes.ts';
 import { measureLimbWidth, placeFromPoint, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
-import { dropEdgeBits, extractDesign, proposeRect } from '../src/beauty/tattoo-extract.ts';
+import { dropEdgeBits, extractDesign, proposeRect, sheetRect } from '../src/beauty/tattoo-extract.ts';
 
 type P = { x: number; y: number };
 const area = (pts: P[], tris: number[]): number => {
@@ -390,4 +390,19 @@ test('두 색 아이섀도: 바깥 가중치 망은 눈꼬리 1 → 앞머리 0,
   assert.ok(r.shadowOuter.some((q) => q.v === 1) && r.shadowOuter.some((q) => q.v === 0));
   // 같은 자리의 정점: 섀도 망과 좌표가 같다
   for (let i = 0; i < r.shadow.length; i += 97) assert.deepEqual([r.shadow[i].x, r.shadow[i].y], [r.shadowOuter[i].x, r.shadowOuter[i].y]);
+});
+
+test('도안 시트 전체 영역: 위 띠의 가게 이름 글씨(가로로 긴 납작한 줄)와 그 위 장식은 빼고 아래 도안들만 감싼다', () => {
+  const w = 300, h = 400;
+  const d = new Uint8ClampedArray(w * h * 4);
+  const skin = new Float32Array(w * h).fill(1);
+  for (let i = 0; i < w * h; i++) d.set([225, 205, 175, 255], i * 4);
+  const box = (x0: number, y0: number, x1: number, y1: number) => { for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if ((x + y) % 3 === 0 || x === x0 || y === y0) d.set([40, 35, 35, 255], (y * w + x) * 4); };
+  box(140, 8, 160, 30); // 맨 위 장식(로고)
+  for (let y = 45; y < 55; y++) for (let x = 20; x < 280; x += 2) d.set([40, 35, 35, 255], (y * w + x) * 4); // 가게 이름 글씨 줄
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) box(25 + c * 68, 90 + r * 75, 70 + c * 68, 140 + r * 75); // 도안 16개
+  const r = sheetRect({ w, h, d, skin })!;
+  assert.ok(r, '영역 없음');
+  assert.ok(r.y > 55 && r.y < 90, `위 끝 ${r.y}(글씨 줄 55 아래, 첫 도안 90 위)`);
+  assert.ok(r.x < 25 && r.x + r.w > 274 && r.y + r.h > 362, `영역 ${JSON.stringify(r)}`);
 });

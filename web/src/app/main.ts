@@ -38,7 +38,7 @@ import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPoli
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { fillPoly, swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
-import { extractDesign, findInk, isDesignSheet, type InkSource } from '../beauty/tattoo-extract.ts';
+import { extractDesign, findInk, isDesignSheet, sheetRect, type InkSource } from '../beauty/tattoo-extract.ts';
 import { affine3, armStrip, chestInkScale, inkOnArm, limbRegion, maskOutLimbs, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
@@ -161,6 +161,8 @@ const tattoo = {
   place: 'forearmL' as TattooPlace,
   size: 0.5,
   amount: 0.85,
+  /** 도안 시트 전체를 한 작품으로: 팔·다리를 감아(둘레 전체까지) 부위 길이를 꽉 채운다(긴팔·반팔 소매처럼) */
+  wrap: false,
   /** 화면을 눌러 고른 부위 안 위치(없으면 가운데) */
   along: undefined as number | undefined,
   across: undefined as number | undefined,
@@ -326,6 +328,8 @@ const isGroup = (x: unknown): x is Group => (GROUPS as readonly string[]).includ
 
 async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMode, file?: File, original?: ImageBitmap): Promise<StyleResult> {
   nailLabelColor = null;
+  /** 도안 시트 전체를 한 작품으로 입힐 때: 부위를 꽉 채우게 크게 */
+  let sheetWhole = false;
   photoAnalyzer ??= new PhotoAnalyzer(WASM_BASE);
   if (source instanceof ImageBitmap) lastSource = original ?? source;
   setStatus('사진 보는 중…');
@@ -368,14 +372,19 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   const aiTattoo = r.ai?.raw?.category === 'tattoo' || r.ai?.raw?.secondary?.category === 'tattoo';
   if (!r.makeup && !r.hair && !r.nail && !r.tattoo && !r.faces && (aiTattoo || mode === 'tattoo') && !aiOther && photoAnalyzer.lastInk) {
     const ps = paperInk(photoAnalyzer.lastInk);
-    // 도안 수십 개가 빽빽한 시트는 자동으로 하나를 고르지 않는다(시트 전체는 바코드처럼, 한 덩어리는 조각난 도안이 됐음)
+    // 도안 수십 개가 빽빽한 시트(올드스쿨 플래시 등)는 여러 도안을 모아 한 작품(긴팔·등판)으로 입고 싶은 사람도 있다:
+    // 시트 전체를 한 도안으로 크게 입히고, 하나만 쓰려면 ✂️ 도안 고르기로 고르게 한다
+    // (전에는 작게(크기 0.5) 찍혀 바코드처럼 보여 아예 그리지 않았음)
     const sheet = isDesignSheet(ps);
-    const t = sheet ? null : tattooFromSource(ps, null, PHOTO_MODE ? 1600 : 512);
-    if (sheet) r.summary = '도안이 여러 개인 시트라 하나를 고르지 못했어요 · ✂️ 도안 고르기로 원하는 도안 하나를 감싸 주세요';
+    // 시트 전체: 위·아래 띠의 가게 이름 글씨·제목 장식은 빼고(그대로 새기면 가게 이름이 팔에 남는다)
+    const t = tattooFromSource(ps, sheet ? sheetRect(ps) : null, PHOTO_MODE ? 1600 : 512);
     if (t) {
       r.tattoo = t.design;
       r.tattooSrc = { src: ps, rect: t.rect, inkMask: t.inkMask, paper: true };
-      r.summary = '도안 그림에서 가져왔어요 · 여러 개면 ✂️ 도안 고르기로 하나를 골라요';
+      r.summary = sheet
+        ? '도안 여러 개를 모아 한 작품으로 입혔어요 · 하나만 쓰려면 ✂️ 도안 고르기로 원하는 도안을 감싸 주세요'
+        : '도안 그림에서 가져왔어요 · 여러 개면 ✂️ 도안 고르기로 하나를 골라요';
+      if (sheet) sheetWhole = true;
     }
   }
   // 사진의 주제(AI 분야)가 아닌 것은 찾았어도 꺼 둔다: 립 사진의 머리색까지 바꾸지 않게. 칩을 누르면 켜진다
@@ -422,6 +431,8 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   applyLookToEngine();
   if (r.tattoo) {
     tattoo.design = r.tattoo;
+    tattoo.wrap = sheetWhole;
+    if (sheetWhole) tattoo.size = 1;
     // 사진 모드: 원본 해상도로 도안을 다시 뽑아 가는 선까지 살린다
     // (분석한 그림 기준 좌표이므로 ✂️ 영역으로 자른 경우에도 그 그림에서 다시 뽑는다)
     if (PHOTO_MODE && r.tattooSrc) {
@@ -869,8 +880,9 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   // 실시간 타투(tattooMesh)와 같은 크기 규칙: 세로 = 부위 길이의 25~85%, 가로는 둘레 절반을 넘지 않게
   const rotate = d.aspect > 1.3;
   const aspect = rotate ? 1 / d.aspect : d.aspect;
-  let h = segLen * (0.25 + 0.6 * tattoo.size), w = h * aspect;
-  const maxW = Math.PI * r * 0.9;
+  // 시트 전체(wrap)는 소매처럼 부위 길이의 95% 를 채우고 둘레 전체까지 감는다(앞에서는 가운데 절반이 보임)
+  let h = segLen * (tattoo.wrap ? 0.95 : 0.25 + 0.6 * tattoo.size), w = h * aspect;
+  const maxW = Math.PI * r * (tattoo.wrap ? 2 : 0.9);
   if (w > maxW) { h *= maxW / w; w = maxW; }
   const lc = segStart + segLen * Math.min(0.92, Math.max(0.08, tattoo.along ?? 0.5));
   const th0 = Math.asin(Math.min(0.95, Math.max(-0.95, tattoo.across ?? 0)));
@@ -879,7 +891,11 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   const ink: InkMap = { rgba, w: c.width, h: c.height, rect: { x: 0, y: 0, w: c.width, h: c.height } };
   const src = (l: number, sg: number) => {
     // 원기둥 둘레 길이(앞에서 본 옆 거리 s → 각도), 도안 오른쪽은 화면 -n 쪽(실시간 타투와 같은 방향)
-    const arc = r * (Math.asin(Math.max(-1, Math.min(1, sg))) - th0);
+    // 원기둥 반지름은 관절점으로 잰 팔 반폭의 1.25배(굽기가 보는 옆 범위와 같게)로 본다: 반폭 밖(|s|>1)에서 각도를 끝에 묶으면
+    // 한 줄의 도안 픽셀이 옆으로 늘어나 가로 줄무늬가 됐고(소매처럼 감은 시트), 반폭 밖을 비우면 실제 팔 가장자리 앞에서 잉크가 딱 끊겼다
+    const R = 1.25;
+    if (Math.abs(sg) > R) return null;
+    const arc = r * R * (Math.asin(sg / R) - th0);
     const u = 0.5 - arc / w, v = (l - lc) / h + 0.5;
     const X = rotate ? v : u, Y = rotate ? 1 - u : v;
     if (u < 0 || u > 1 || v < 0 || v > 1) return null;
@@ -3201,6 +3217,7 @@ tattooCropEl.addEventListener('click', () => {
     }
     if (!t || inkN < 30) return '이 영역에서 타투 선을 찾지 못했어요. 피부 위 타투를 감싸 주세요';
     tattoo.design = t.design;
+    tattoo.wrap = false; // ✂️ 로 하나를 고르면 보통 크기로
     if (lastStyle) {
       lastStyle.tattoo = t.design;
       lastStyle.tattooSrc = { src, rect: t.rect, inkMask: t.inkMask, paper: ts.paper };
