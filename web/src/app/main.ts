@@ -778,7 +778,7 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   // 밖으로 날린 가는 잔머리도 같이 물들인다(안 하면 밝은 염색에서 머리 둘레가 검은 테두리처럼 남는다)
   flyaways(rgba, W, H, alpha, rect.size / 20, faceP);
   // 가르마 두피·시스루 앞머리 사이 이마처럼 피부색인 곳은 덜 물들인다(밝게 염색하면 거친 밝은 얼룩이 됐다)
-  skinGate(rgba, alpha, faceP);
+  skinGate(rgba, alpha, faceP, W);
   // 머리 가장자리 알파를 색으로 다시 잰다(덜 물든 원래 검정이 이마 선을 따라 검은 줄로 남지 않게).
   // 귀 거르기보다 먼저: 뒤에 하면 깎아 낸 귀 테두리를 다시 머리 몫으로 올려 귀 테가 초록으로 물들었다
   console.debug('[hair] 가장자리 알파', edgeAlpha(rgba, alpha, W, H, faceP));

@@ -241,6 +241,27 @@ test('피부 거르기: 검은 머리 알파 안의 피부색 픽셀(앞머리 �
   assert.equal(a2[450], 1);
 });
 
+test('피부 거르기: 흰 배경 바로 곁 머리 가장자리의 밝은 금빛 가닥은 피부로 보고 깎지 않는다(그림 폭을 줄 때), 머리 속 두피색은 깎는다', () => {
+  const w = 30, h = 30, n = w * h;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n), face = new Float32Array(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    // 왼쪽 0~7 흰 배경, 8~9 밝은 금빛 가장자리, 10~21 갈색 머리(가운데 15~16 두피색), 22~ 얼굴 피부
+    const col = x < 8 ? [230, 230, 228] : x < 10 ? [215, 180, 150] : x < 22 ? (x === 15 || x === 16 ? [215, 180, 160] : [110, 70, 40]) : [225, 180, 160];
+    rgba.set([...col, 255], i * 4);
+    alpha[i] = x >= 8 && x < 22 ? (x < 10 ? 0.84 : 1) : 0;
+    face[i] = x >= 22 ? 1 : 0;
+  }
+  const a1 = new Float32Array(alpha);
+  skinGate(rgba, a1, face, w);
+  assert.ok(a1[15 * w + 9] > 0.8, `가장자리 ${a1[15 * w + 9]}`);
+  assert.ok(a1[15 * w + 15] < 0.3, `두피 ${a1[15 * w + 15]}`);
+  // 폭을 안 주면 예전처럼 가장자리도 깎는다
+  const a2 = new Float32Array(alpha);
+  skinGate(rgba, a2, face);
+  assert.ok(a2[15 * w + 9] < 0.75, `폭 없음 가장자리 ${a2[15 * w + 9]}`);
+});
+
 test('머리 색 거르기: 가닥 사이 어두운 그늘(색이 옅음)은 남기고, 초록·푸른 배경은 뺀다', () => {
   const w = 40, h = 40, n = w * h;
   const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n).fill(1), coarse = new Float32Array(n).fill(1);

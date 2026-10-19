@@ -909,9 +909,9 @@ export function earGate(rgba: Uint8ClampedArray, alpha: Float32Array, w: number,
 /**
  * 내 머리 알파에서 색이 얼굴 피부 쪽인 픽셀(가르마 두피, 시스루 앞머리 사이 이마)을 덜 물들인다(제자리 수정).
  * 머리 가운데 색 → 피부 가운데 색 선 위에서 피부 쪽(55%~85%)일수록 알파를 줄인다. 머리와 피부색이 비슷하면(금발, ΔE 25 미만) 안 함.
- * faceP: 얼굴·목 확률(0~1). 피부 기준색은 그 확률 0.8 넘는 곳의 가운데 값.
+ * faceP: 얼굴·목 확률(0~1). 피부 기준색은 그 확률 0.8 넘는 곳의 가운데 값. bgW: 그림 폭(주면 배경 곁 가장자리는 덜 깎음).
  */
-export function skinGate(rgba: Uint8ClampedArray, alpha: Float32Array, faceP: Float32Array): void {
+export function skinGate(rgba: Uint8ClampedArray, alpha: Float32Array, faceP: Float32Array, bgW = 0): void {
   const lab = new Float32Array(3);
   const med = (sel: (i: number) => boolean): [number, number, number] | null => {
     const L: number[] = [], A: number[] = [], B: number[] = [];
@@ -931,6 +931,11 @@ export function skinGate(rgba: Uint8ClampedArray, alpha: Float32Array, faceP: Fl
   const dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
   if (dd < 25 * 25) return;
   const chromaSep = d[1] * d[1] + d[2] * d[2] > 12 * 12 && Math.hypot(hc[1], hc[2]) < 6;
+  // 배경(얼굴·목 아닌 알파 0 곳) 바로 곁(3px)의 머리 가장자리는 밝은 게 배경이 섞인 몫이지 피부가 아니다: 갈색 머리 둘레의 밝은
+  // 금빛 가닥(흰 배경)이 피부 쪽 색이라 0.84 → 0.5 로 깎여 애쉬 염색 뒤 금빛 테가 남았다(00055 × 29). 두피·이마는 배경과 안 닿는다
+  const bgm = new Float32Array(alpha.length);
+  for (let i = 0; i < alpha.length; i++) if (alpha[i] < 0.05 && faceP[i] < 0.2) bgm[i] = 1;
+  const nearBg = bgW > 0 ? boxBlur(bgm, bgW, alpha.length / bgW, 3) : null;
   for (let i = 0; i < alpha.length; i++) {
     if (alpha[i] <= 0) continue;
     rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
@@ -942,6 +947,7 @@ export function skinGate(rgba: Uint8ClampedArray, alpha: Float32Array, faceP: Fl
     // (전체로 25~40% 넘게 피부 쪽) 픽셀은 그늘진 피부다: 밝기만 어두워 위 기준(둘 다 55%)에 안 걸려, 흑발로 염색할 때 그늘진
     // 이마·관자놀이가 색이 빠진 잿빛 보라 얼룩이 됐다(갈색 머리는 피부와 색도가 비슷해 여기 안 걸린다)
     if (chromaSep) s = Math.max(s, Math.max(0, Math.min(1, (tc - 0.75) / 0.25)) * Math.max(0, Math.min(1, (t - 0.25) / 0.15)));
+    if (nearBg) s *= 1 - Math.max(0, Math.min(1, (nearBg[i] - 0.1) / 0.2));
     if (s > 0) alpha[i] *= 1 - s;
   }
 }
