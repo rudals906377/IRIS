@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { bandMesh, faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 import { LOOKS, PALETTES } from '../src/beauty/palettes.ts';
 import { measureLimbWidth, placeFromPoint, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
-import { dropEdgeBits, extractDesign, proposeRect, sheetRect } from '../src/beauty/tattoo-extract.ts';
+import { denseSleeve, dropEdgeBits, extractDesign, proposeRect, sheetRect, sleeveInk } from '../src/beauty/tattoo-extract.ts';
 
 type P = { x: number; y: number };
 const area = (pts: P[], tris: number[]): number => {
@@ -405,4 +405,29 @@ test('도안 시트 전체 영역: 위 띠의 가게 이름 글씨(가로로 긴
   assert.ok(r, '영역 없음');
   assert.ok(r.y > 55 && r.y < 90, `위 끝 ${r.y}(글씨 줄 55 아래, 첫 도안 90 위)`);
   assert.ok(r.x < 25 && r.x + r.w > 274 && r.y + r.h > 362, `영역 ${JSON.stringify(r)}`);
+});
+
+test('빽빽한 소매 잉크 맵: 피부 분할이 거부한 노란 채움도 맨살 대비 투과율(파랑만 낮음)로 옮기고, 맨살은 그대로', () => {
+  const w = 200, h = 200;
+  const d = new Uint8ClampedArray(w * h * 4);
+  const skin = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    const fill = x >= 110 && x < 170 && y >= 60 && y < 140;
+    const line = (x === 110 || x === 169 || y === 60 || y === 139) && fill;
+    d.set(line ? [40, 35, 35, 255] : fill ? [220, 196, 60, 255] : [220, 170, 150, 255], i * 4);
+    skin[i] = fill ? 0.2 : 1; // 채움은 피부로 안 잡힘(옷도 아님)
+  }
+  const src = { w, h, d, skin, avoid: new Float32Array(w * h) };
+  const r = sleeveInk(src, { x: 0, y: 0, w, h })!;
+  assert.ok(r, '맵');
+  const at = (x: number, y: number) => { const o = (y * r.w + x) * 4; return [r.rgba[o], r.rgba[o + 1], r.rgba[o + 2], r.rgba[o + 3]]; };
+  const yel = at(140, 100), bare = at(40, 100);
+  assert.ok(yel[3] > 200 && yel[2] < 120 && yel[0] > 230, `노란 채움 ${yel}`);
+  assert.ok(bare[0] > 245 && bare[1] > 245 && bare[2] > 245, `맨살 ${bare}`);
+  // 팔 영역(오른쪽 절반): 채움이 20%
+  const region = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 80; x < w; x++) region[y * w + x] = 1;
+  assert.equal(denseSleeve(src, region), true);
+  assert.equal(denseSleeve({ ...src, skin: new Float32Array(w * h).fill(1) }, region), false);
 });

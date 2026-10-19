@@ -255,6 +255,83 @@ export function isDesignSheet(src: InkSource, found = findInk(src)): boolean {
 }
 
 /**
+ * 빽빽한 컬러 소매(팔 전체가 타투)용 잉크 맵: 선만 뽑는 `extractDesign` 은 피부 분할이 거부한 채움(노랑·빨강·크림색 바탕)을
+ * 놓쳐 소매가 선 조각만 남았다(02번: 팔 픽셀의 9% 만 잉크). 팔의 모든 픽셀을 둘레 맨살 색(잉크 곁이 아닌 확실한 피부를
+ * 얼굴 폭만큼 넓게 평균, 없으면 더 넓게)으로 나눈 투과율(곱하기 색)로 옮긴다: 맨살은 1(그대로), 노란 채움은 파랑만 낮아 노랗게.
+ * 영역: 몸(피부이거나 옷·머리가 아님) 중 잉크 기미(둘레보다 어둡거나 채도 높음) 4% 안 또는 확실한 피부.
+ * 피부 결·잡티는 투과율 0.92 위를 1 로 올려 옮기지 않는다.
+ */
+export function sleeveInk(src: InkSource, rect: Rect, maxSide = 1600): ExtractedDesign | null {
+  const { w, h, d } = src;
+  const n = w * h, short = Math.min(w, h);
+  const rx = Math.max(0, Math.round(rect.x)), ry = Math.max(0, Math.round(rect.y));
+  const R = { x: rx, y: ry, w: Math.min(w - rx, Math.round(rect.x + rect.w) - rx), h: Math.min(h - ry, Math.round(rect.y + rect.h) - ry) };
+  if (R.w < 8 || R.h < 8) return null;
+  const found = findInk(src);
+  const inkD = boxBlur(Float32Array.from(found.ink), w, h, Math.max(2, Math.round(short * 0.006)));
+  const wS = new Float32Array(n);
+  for (let i = 0; i < n; i++) wS[i] = found.skin[i] && inkD[i] === 0 ? 1 : 0;
+  const R1 = Math.max(4, Math.round(short * 0.05)), R2 = Math.max(8, Math.round(short * 0.15));
+  const b1 = blur2(wS, w, h, R1 * 2), b2 = blur2(wS, w, h, R2 * 2);
+  let gs = [0, 0, 0], gn = 0;
+  for (let i = 0; i < n; i += 3) if (wS[i]) { gs = [gs[0] + d[i * 4], gs[1] + d[i * 4 + 1], gs[2] + d[i * 4 + 2]]; gn++; }
+  if (gn < 50) return null;
+  const ref: Float32Array[] = [];
+  for (let c = 0; c < 3; c++) {
+    const v = new Float32Array(n);
+    for (let i = 0; i < n; i++) v[i] = d[i * 4 + c] * wS[i];
+    const a1 = blur2(v, w, h, R1 * 2), a2 = blur2(v, w, h, R2 * 2);
+    const o = new Float32Array(n);
+    for (let i = 0; i < n; i++) o[i] = b1[i] > 0.05 ? a1[i] / b1[i] : b2[i] > 0.002 ? a2[i] / b2[i] : gs[c] / gn;
+    ref.push(o);
+  }
+  const L = found.L;
+  const rl = Math.max(2, Math.round(short * 0.03));
+  const loc = blur2(L, w, h, rl * 2);
+  const anyInk = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2];
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    anyInk[i] = loc[i] - L[i] > 0.1 || (mx > 0 && (mx - mn) / mx > 0.55) ? 1 : 0;
+  }
+  const near = boxBlur(anyInk, w, h, Math.max(2, Math.round(short * 0.04)));
+  const reg = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const body = Math.max(src.skin[i], src.avoid ? 1 - src.avoid[i] : 0) > 0.5;
+    reg[i] = body && (near[i] > 0.02 || src.skin[i] > 0.6) ? 1 : 0;
+  }
+  const regS = boxBlur(reg, w, h, 2);
+  const s = Math.min(1, maxSide / Math.max(R.w, R.h));
+  const tw = Math.max(1, Math.round(R.w * s)), th = Math.max(1, Math.round(R.h * s));
+  const rgba = new Uint8ClampedArray(tw * th * 4);
+  const inkMask = new Float32Array(n);
+  for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) {
+    const X = Math.min(w - 1, R.x + Math.floor((x + 0.5) / s)), Y = Math.min(h - 1, R.y + Math.floor((y + 0.5) / s));
+    const i = Y * w + X, o = (y * tw + x) * 4;
+    for (let c = 0; c < 3; c++) rgba[o + c] = Math.round(Math.min(1, Math.min(1, d[i * 4 + c] / Math.max(1, ref[c][i])) / 0.92) * 255);
+    rgba[o + 3] = Math.round(regS[i] * 255);
+  }
+  for (let y = R.y; y < R.y + R.h; y++) for (let x = R.x; x < R.x + R.w; x++) {
+    const i = y * w + x;
+    let tmin = 1;
+    for (let c = 0; c < 3; c++) tmin = Math.min(tmin, Math.min(1, d[i * 4 + c] / Math.max(1, ref[c][i]) / 0.92));
+    inkMask[i] = regS[i] * (1 - tmin);
+  }
+  return { rgba, w: tw, h: th, rect: R, inkMask };
+}
+
+/** 팔이 빽빽한 타투인가: 팔 영역 중 피부 분할이 피부로 못 본(옷·머리도 아닌) 몸 부분이 15% 넘음(맨살 팔의 작은 타투는 거의 0) */
+export function denseSleeve(src: InkSource, region: Float32Array): boolean {
+  let all = 0, notSkin = 0;
+  for (let i = 0; i < region.length; i++) {
+    if (region[i] <= 0.5) continue;
+    all++;
+    if (src.skin[i] < 0.5 && (!src.avoid || src.avoid[i] < 0.5)) notSkin++;
+  }
+  return all > 0 && notSkin > all * 0.15;
+}
+
+/**
  * 도안 시트 전체를 한 작품으로 쓸 때의 영역: 위·아래 띠의 가게 이름 글씨·제목 장식(가로로 길고 납작한 덩어리: 너비 40% 넘고 높이 12% 아래)과
  * 그보다 바깥(위 띠면 위쪽)의 덩어리를 빼고 남은 도안들을 감싼다. 시트가 아니거나 남는 것이 없으면 null
  */

@@ -38,7 +38,7 @@ import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPoli
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { fillPoly, swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
-import { extractDesign, findInk, isDesignSheet, sheetRect, type InkSource } from '../beauty/tattoo-extract.ts';
+import { denseSleeve, extractDesign, findInk, isDesignSheet, sheetRect, sleeveInk, type InkSource } from '../beauty/tattoo-extract.ts';
 import { affine3, armStrip, chestInkScale, inkOnArm, limbRegion, maskOutLimbs, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
@@ -1227,6 +1227,8 @@ async function armTattooPlan(): Promise<TatPlan | null> {
       const inImg = (q: { x: number; y: number }) => q.x >= 0 && q.y >= 0 && q.x < ref.w && q.y < ref.h;
       const ra = rArms?.[side];
       const poseOk = !!ra && ra.seen && ra.vis > 0.6 && inImg(ra.arm.s) && inImg(ra.arm.e) && on[side].up + on[side].lo >= total * 0.5;
+      // 관절점 팔이 뚜렷하고 그 팔이 빽빽한 소매면(가슴 독수리 같은 큰 몸통 도안 때문에 잉크 절반이 팔 밖이어도) 그 팔에서 소매를 통째로 옮긴다:
+      // 전에는 띠 방식으로 떨어져 몸통·팔 덩어리를 띠로 잡아 소매가 어깨 조각 하나만 남았다(12번)
       let strip: Strip | null = null;
       if (!poseOk) {
         // 가까운 팔 사진(몸이 안 나옴): 피부·잉크 영역 모양에서 팔 축·굵기를 읽는다. 팔 타투라고 읽힌 경우만
@@ -1242,7 +1244,10 @@ async function armTattooPlan(): Promise<TatPlan | null> {
         const limb = limbRegion(m, ref.w, ref.h, ref.rect);
         if (!limb) return null;
         if (!ref.user) {
-          const ex = extractDesign(ref.src, limb.box, 1600);
+          // 빽빽한 컬러 소매는 선만 뽑으면 조각만 남는다: 팔 전체를 맨살 대비 투과율로
+          const dense = denseSleeve(ref.src, limb.mask);
+          dbgTat({ denseSleeve: dense });
+          const ex = dense ? sleeveInk(ref.src, limb.box, 1600) : extractDesign(ref.src, limb.box, 1600);
           if (ex) {
             ink = { rgba: ex.rgba, w: ex.w, h: ex.h, rect: ex.rect };
             eraseFace(ink);
