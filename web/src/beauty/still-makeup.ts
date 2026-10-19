@@ -208,7 +208,10 @@ export function transferMakeup(
       // 고른 사진 쪽 그늘도 같다: 입술 밖 입 둘레(얼굴 폭 6% 안)에서 고른 피부 바탕보다 L 4~12 넘게 어두운 곳
       // (아랫입술 밑·입꼬리 그늘)의 붉은 기는 화장이 아니라 그늘색이다(밝은 분홍빛 피부는 그늘이 붉다): 색 차이를 70%까지 덜 옮긴다.
       // (아랫입술 밑 그늘(L −18, a +25)이 내 턱에 그대로 옮겨져 립이 번진 듯한 분홍 얼룩이 됐다. 볼 블러셔는 입 둘레 밖이라 그대로)
-      const rShade = c === 0 ? 0 : 0.7 * ramp(rfBase[0][i] - rfLow[0][i], 4, 12) * mouthNear[i] * (1 - ramp(lipB[i], 0.05, 0.5));
+      // 더 깊은 그늘(L 10~20 넘게 어두움: 입술에 댄 손가락과 아랫입술 사이 주름, 18번)은 밝기·색 모두 화장이 아니다:
+      // 밝기 차이도 80%, 색은 모두 뺀다(L −24·a +5 가 내 턱에 주황 점으로 남았음)
+      const shDark = rfBase[0][i] - rfLow[0][i], shNear = mouthNear[i] * (1 - ramp(lipB[i], 0.05, 0.5));
+      const rShade = (c === 0 ? 0.8 * ramp(shDark, 10, 20) : Math.max(0.7 * ramp(shDark, 4, 12), ramp(shDark, 10, 20))) * shNear;
       let v = (rfLow[c][i] - rfBase[c][i]) * (1 - rShade) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
       // 눈가에서 내 그늘(눈 안쪽 구석·눈 밑, 바탕보다 L 15~25 어두움)을 다 빼면 고른 사진에 그 그늘이 없는 자리가 +10~13 밝아진다:
       // 깊은 눈·어두운 피부(will1, 바탕 L 54)에서는 그늘이 사라진 주황 얼룩이 됐다. 컨실러도 그늘을 다 못 지우므로

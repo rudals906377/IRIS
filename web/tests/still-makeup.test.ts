@@ -199,6 +199,25 @@ test('메이크업: 고른 사진 아랫입술 밑 붉은 그늘은 립이 아�
   assert.ok(a < lab[1] + 6, `아랫입술 밑 a ${a.toFixed(1)}, 원래 ${lab[1].toFixed(1)}`);
 });
 
+test('메이크업: 입술에 댄 손가락과 입술 사이 깊은 주황 그늘(L −22)은 밝기도 색도 화장이 아니다 — 내 턱에 주황 점으로 옮기지 않는다', () => {
+  const W = 200, H = 220;
+  const pts = face(100, 110, 60);
+  const my = new Uint8ClampedArray(W * H * 4), ref = new Uint8ClampedArray(W * H * 4);
+  const inLip = (x: number, y: number) => ((x - 100) / 17) ** 2 + ((y - 146) / 5) ** 2 < 1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4, lip = inLip(x, y);
+    my.set(lip ? [190, 130, 125, 255] : [215, 180, 160, 255], o);
+    const crease = !lip && y >= 153 && y <= 160 && Math.abs(x - 92) <= 6;
+    ref.set(lip ? [215, 125, 140, 255] : crease ? [185, 125, 100, 255] : [242, 224, 220, 255], o);
+  }
+  const out = transferMakeup(my, W, H, pts, ref, W, H, pts, FACE_OVAL, { lip: 1, eye: 1, skin: 1 });
+  const lab = new Float32Array(3), lab0 = new Float32Array(3), o = (156 * W + 92) * 4;
+  rgb2lab(out[o], out[o + 1], out[o + 2], lab);
+  rgb2lab(my[o], my[o + 1], my[o + 2], lab0);
+  const dE = Math.hypot(lab[0] - lab0[0], lab[1] - lab0[1], lab[2] - lab0[2]);
+  assert.ok(dE < 3.5, `주름 자리 변화 ΔE ${dE.toFixed(1)} (L ${(lab[0] - lab0[0]).toFixed(1)}, a ${(lab[1] - lab0[1]).toFixed(1)}, b ${(lab[2] - lab0[2]).toFixed(1)})`);
+});
+
 test('메이크업: 두 사진 눈 모양이 달라도(내 흰자 ↔ 고른 눈동자) 그 차이로 내 눈꺼풀을 짙게 칠하지 않는다', () => {
   const W = 200, H = 220;
   const pts = face(100, 110, 60);
