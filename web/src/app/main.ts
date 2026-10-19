@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { boxBlur, closeHoles, colorGate, earGate, fillInterior, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, earGate, edgeAlpha, fillInterior, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPolished, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { fillPoly, swapFace } from '../beauty/face-swap.ts';
@@ -761,6 +761,9 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   flyaways(rgba, W, H, alpha, rect.size / 20, faceP);
   // 가르마 두피·시스루 앞머리 사이 이마처럼 피부색인 곳은 덜 물들인다(밝게 염색하면 거친 밝은 얼룩이 됐다)
   skinGate(rgba, alpha, faceP);
+  // 머리 가장자리 알파를 색으로 다시 잰다(덜 물든 원래 검정이 이마 선을 따라 검은 줄로 남지 않게).
+  // 귀 거르기보다 먼저: 뒤에 하면 깎아 낸 귀 테두리를 다시 머리 몫으로 올려 귀 테가 초록으로 물들었다
+  console.debug('[hair] 가장자리 알파', edgeAlpha(rgba, alpha, W, H, faceP));
   // 귀는 물들이지 않는다(얼굴 분할이 귀를 머리카락으로 반쯤 읽음)
   {
     const fpts = await photoAnalyzer.faceLandmarks(cv).catch(() => null);

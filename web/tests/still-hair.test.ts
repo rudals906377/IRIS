@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, colorGate, fillInterior, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture, earGate } from '../src/beauty/still-hair.ts';
+import { Q, colorGate, fillInterior, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture, earGate, edgeAlpha } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -452,4 +452,28 @@ test('귀 거르기: 얼굴 옆 귀 자리의 밝고 붉은 픽셀(귀)은 덜 �
   assert.ok(alpha[147 * w + 208] < 0.3, `귀 ${alpha[147 * w + 208]}`);
   assert.ok(alpha[147 * w + 225] > 0.95, `귀 옆 머리카락 ${alpha[147 * w + 225]}`);
   assert.ok(alpha[25 * w + 25] > 0.95, `귀 자리 밖 ${alpha[25 * w + 25]}`);
+});
+
+test('가장자리 알파: 어두운 머리 둘레의 머리색 픽셀(알파 0.7)과 이마 경계 반반 픽셀을 올리고, 금발처럼 피부와 비슷한 머리는 건드리지 않는다', () => {
+  const w = 60, h = 60;
+  const make = (hair: number, skin: number) => {
+    const rgba = new Uint8ClampedArray(w * h * 4), alpha = new Float32Array(w * h), faceP = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      // 위 20줄: 머리 속(알파 1), 20~21줄: 머리색이지만 알파 0.7, 22줄: 머리·피부 반반(알파 0.2), 그 아래 피부(얼굴)
+      const v = y < 22 ? hair : y === 22 ? (hair + skin) / 2 : skin;
+      rgba.set([v, v * 0.8, v * 0.7, 255], i * 4);
+      alpha[i] = y < 20 ? 1 : y < 22 ? 0.7 : y === 22 ? 0.2 : 0;
+      faceP[i] = y > 26 ? 1 : 0;
+    }
+    return { rgba, alpha, faceP };
+  };
+  const dark = make(25, 170);
+  edgeAlpha(dark.rgba, dark.alpha, w, h, dark.faceP);
+  assert.ok(dark.alpha[21 * w + 30] > 0.9, `머리색 띠 ${dark.alpha[21 * w + 30]}`);
+  assert.ok(dark.alpha[22 * w + 30] > 0.35, `경계 반반 ${dark.alpha[22 * w + 30]}`);
+  assert.equal(dark.alpha[30 * w + 30], 0, '피부는 그대로');
+  const blond = make(150, 175);
+  edgeAlpha(blond.rgba, blond.alpha, w, h, blond.faceP);
+  assert.ok(Math.abs(blond.alpha[21 * w + 30] - 0.7) < 1e-6, '금발은 그대로');
 });

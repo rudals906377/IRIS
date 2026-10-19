@@ -777,6 +777,64 @@ export function pureHair(rgba: Uint8ClampedArray, alpha: Float32Array, others: F
 }
 
 /**
+ * 머리 가장자리 알파를 색으로 다시 잰다(올리기만, 제자리 수정). 분할·필터 알파는 짧은 머리 둘레에서 머리카락인데도 0.7~0.9 에 머물고
+ * (머리색과 같은 L 10 픽셀이 알파 0.71), 이마 경계의 머리·피부 반반 픽셀은 0.2 라, 밝게 염색하면 덜 물든 원래 검정이 이마 선을 따라
+ * 검은 줄로, 머리 안쪽에 어두운 띠로 남았다(will1 × 주황). 확실한 머리(알파 0.9 넘음) 3px 안의 픽셀만:
+ * ① 밝기가 머리 속 범위(속 머리 90% 밝기 + 3) 안이면 1 쪽으로, ② 아니면 둘레 바깥(알파 0.05 아래) 평균 밝기와 머리 가운데 밝기 사이 어디인지로
+ * 머리 몫을 잰다. 바깥과 머리 밝기 차가 15 아래면(어두운 배경·옷) 하지 않는다. 반환: 올린 픽셀 수
+ */
+export function edgeAlpha(rgba: Uint8ClampedArray, alpha: Float32Array, w: number, h: number, faceP?: Float32Array): number {
+  const n = w * h;
+  const lab = new Float32Array(3);
+  const L = new Float32Array(n);
+  for (let i = 0; i < n; i++) { rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab); L[i] = lab[0]; }
+  const core = new Float32Array(n), cv: number[] = [];
+  for (let i = 0; i < n; i++) if (alpha[i] > 0.9) { core[i] = 1; if (i % 2 === 0) cv.push(L[i]); }
+  if (cv.length < 100) return 0;
+  cv.sort((p, q) => p - q);
+  const hMed = cv[cv.length >> 1], hHi = cv[Math.floor(cv.length * 0.9)];
+  // 머리가 얼굴 피부보다 뚜렷이(L 20 넘게) 어두울 때만: 금발(00034: 머리 55·피부 65)은 이마 피부가 머리·배경(흰 벽) 사이 밝기라
+  // 머리 몫으로 잘못 재져 이마에 검은 얼룩이 생겼다
+  if (faceP) {
+    const sv: number[] = [];
+    for (let i = 0; i < n; i += 3) if (faceP[i] >= 0.8 && alpha[i] < 0.05) sv.push(L[i]);
+    if (sv.length > 50) {
+      sv.sort((p, q) => p - q);
+      if (sv[sv.length >> 1] - hMed < 20) return 0;
+    }
+  }
+  const nearCore = boxBlur(core, w, h, 3);
+  // 머리 바로 바깥(8px 띠, 알파 0.05 아래: 이마·배경)의 가운데 밝기. ①(머리만큼 어두우면 머리)은 머리가 그보다 15 넘게 어둡고
+  // 픽셀도 그보다 15 넘게 어두울 때만: 금발(L 55)은 이마 피부(L 65)도 '머리 속 밝기 범위'라 이마가 검게 물들었다(00034 × 흑발)
+  const near8 = boxBlur(core, w, h, 8);
+  const ov: number[] = [];
+  for (let i = 0; i < n; i += 2) if (alpha[i] < 0.05 && near8[i] > 0) ov.push(L[i]);
+  ov.sort((p, q) => p - q);
+  const oMed = ov.length ? ov[ov.length >> 1] : 100;
+  const darkHair = oMed - hMed >= 15;
+  const bgm = new Float32Array(n), bgL = new Float32Array(n);
+  for (let i = 0; i < n; i++) if (alpha[i] < 0.05) { bgm[i] = 1; bgL[i] = L[i]; }
+  const r = 5;
+  const bN = boxBlur(bgm, w, h, r), bS = boxBlur(bgL, w, h, r);
+  let changed = 0;
+  for (let i = 0; i < n; i++) {
+    if (alpha[i] > 0.97 || nearCore[i] <= 0 || core[i]) continue;
+    let ac = 0;
+    if (darkHair && L[i] <= Math.min(hHi + 3, oMed - 15)) ac = 1 - Math.max(0, Math.min(1, (L[i] - hHi) / 6));
+    if (bN[i] > 0.02) {
+      const lb = bS[i] / bN[i];
+      if (Math.abs(lb - hMed) < 15) continue;
+      const mix = Math.max(0, Math.min(1, (lb - L[i]) / (lb - hMed)));
+      ac = Math.max(ac * Math.min(1, Math.abs(lb - L[i]) / 15), mix);
+    }
+    // 다 올리지 않는다: 색 추정은 잡음이 있어 분할 알파와 섞는다(최대 85% 까지 색 쪽)
+    const na = alpha[i] + (Math.max(alpha[i], ac) - alpha[i]) * 0.85;
+    if (na > alpha[i] + 0.02) { alpha[i] = na; changed++; }
+  }
+  return changed;
+}
+
+/**
  * 귀는 염색하지 않는다(제자리 수정): 얼굴 분할이 귀를 머리카락으로 반쯤 읽어(00055 오른쪽 귀 0.73) 귀가 머리색(민트 등)으로 물들었다.
  * 피부 쪽 거르기(`skinGate`)는 '얼굴 피부 쪽' 색만 보는데 귀는 얼굴보다 붉어(a 19~25 vs 얼굴 10) 안 걸렸다.
  * 얼굴 점(478점)으로 귀 자리(얼굴 옆 끝 234·454 에서 바깥으로 얼굴 폭 9%, 눈~코 높이, 세로 반지름 얼굴 폭 26%·가로 13% 타원)를 잡고,
