@@ -570,8 +570,8 @@ function applyHints(r: StyleResult, h: StyleHints): void {
   if (h.category === 'nail' && !r.nail) {
     const col = nailLabelColor;
     if (col) {
-      // 앱의 색(RGB)은 선형값(hex() 가 감마로 바꿈): 표의 sRGB 를 선형으로
-      r.nail = { color: lin(col), style: h.nail?.style ?? 'solid' };
+      // 네일 색은 측정값(measureNail)·팔레트와 같이 감마(sRGB 0~1) 그대로
+      r.nail = { color: col, style: h.nail?.style ?? 'solid' };
       if (r.tattoo && !h.tattoo) {
         r.tattoo = undefined;
         r.tattooSrc = undefined;
@@ -1598,7 +1598,9 @@ function refNailArt(): NailArt | null {
   if (!c || !lastSource || (refNailsBusy && !refNails)) return null;
   const key = c.join(',');
   if (synthNail?.key !== key) {
-    const g = (v: number) => Math.round(255 * Math.pow(Math.max(0, Math.min(1, v)), 1 / 2.2));
+    // 네일 색은 감마(sRGB 0~1): 측정 색(measureNail 이 감마로 돌려줌)에 감마를 한 번 더 씌우면 연핑크 시럽(13번)이
+    // 거의 흰색(L 92, 사진 손톱 L 74)으로 떴다
+    const g = (v: number) => Math.round(255 * Math.max(0, Math.min(1, v)));
     const sn = syntheticNail([g(c[0]), g(c[1]), g(c[2])]);
     synthNail = { key, art: { src: lastSource, rgba: sn.rgba, w: sn.w, h: sn.h, nails: [{ mask: sn.mask, frame: sn.frame }] } };
   }
@@ -1996,7 +1998,7 @@ async function findRefNails(): Promise<void> {
     const rs: number[] = [], gs: number[] = [], bs: number[] = [];
     for (const n of best) for (let i = 0; i < n.mask.length; i += 3) if (n.mask[i]) { rs.push(rgba[i * 4]); gs.push(rgba[i * 4 + 1]); bs.push(rgba[i * 4 + 2]); }
     const med = (a: number[]): number => a.sort((x, y) => x - y)[a.length >> 1] / 255;
-    chosen.nail.color = lin([med(rs), med(gs), med(bs)]);
+    chosen.nail.color = [med(rs), med(gs), med(bs)];
   }
 }
 /** 내 손톱: 손 점이 잡히면 손톱 자리를 자동으로, 아니면 눌러 달라고 안내 */
