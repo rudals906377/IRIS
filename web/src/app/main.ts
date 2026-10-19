@@ -174,9 +174,13 @@ const INK: [number, number, number] = [0.16, 0.17, 0.2];
 
 const amt = (a: number): number => Math.min(1, a * strength);
 
+/** 사진 모드: 고른 자리가 내 사진에선 옷에 가려 굽지 못한 자리(placeKey). 그 자리엔 실시간 타투도 그리지 않는다:
+ * 다리 타투(03번)를 청바지 입은 사진에 고르면 '가려 보이지 않아요' 안내는 나오는데, 실시간 타투가 허벅지 높이에 내려 둔 손가락 위에 그려졌다 */
+let tatCoveredKey = '';
 function applyTattooToEngine(): void {
   const d = tattoo.design;
-  engine.tattoo = d && !off.has('tattoo') && !tatBaked() ? { design: d, place: tattoo.place, size: tattoo.size, amount: amt(tattoo.amount), ink: INK, along: tattoo.along, across: tattoo.across } : null;
+  const covered = PHOTO_MODE && !!tatCoveredKey && tatCoveredKey === placeKey();
+  engine.tattoo = d && !off.has('tattoo') && !tatBaked() && !covered ? { design: d, place: tattoo.place, size: tattoo.size, amount: amt(tattoo.amount), ink: INK, along: tattoo.along, across: tattoo.across } : null;
   // 사진 모드: 자리·크기·도안이 바뀌면 다시 굽는다
   if (PHOTO_MODE && engine.source.kind === 'image' && !swapMode && placeBaked !== placeKey()) scheduleStillHair();
   // 타투는 몸 관절점이 필요하다: 처음 켤 때 자세 추적을 켠다(모델을 한 번 내려받음)
@@ -887,7 +891,12 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   const a = armsOf(body.pose, body.skin, engine.source.width, engine.source.height, legs)[m[2] === 'L' ? 0 : 1];
   if (!a.seen || a.vis < 0.4) {
     // 관절점은 있는데 피부가 안 보이면(긴소매·바지) 굽어도 안 보인다: 아무 변화 없이 끝나 무엇이 잘못됐는지 몰랐다
-    if (a.vis >= 0.4 && !a.seen) tatNote = `고른 타투 자리(${legs ? '다리' : '팔'})가 내 사진에선 옷에 가려 보이지 않아요. 📍 자리 고르기로 보이는 피부에 놓아 보세요`;
+    if (a.vis >= 0.4 && !a.seen) {
+      tatNote = `고른 타투 자리(${legs ? '다리' : '팔'})가 내 사진에선 옷에 가려 보이지 않아요. 📍 자리 고르기로 보이는 피부에 놓아 보세요`;
+      tatCoveredKey = placeKey();
+      // 다시 굽기를 부르지 않게 실시간 타투만 끈다(applyTattooToEngine 은 다시 굽기를 예약한다)
+      engine.tattoo = null;
+    }
     return null;
   }
   const arm = a.arm;
