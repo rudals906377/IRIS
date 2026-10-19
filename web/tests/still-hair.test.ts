@@ -477,3 +477,20 @@ test('가장자리 알파: 어두운 머리 둘레의 머리색 픽셀(알파 0.
   edgeAlpha(blond.rgba, blond.alpha, w, h, blond.faceP);
   assert.ok(Math.abs(blond.alpha[21 * w + 30] - 0.7) < 1e-6, '금발은 그대로');
 });
+
+test('가장자리 알파: 머리 옆면의 넓은 머리색 띠(확실한 머리에서 8px, 알파 0.55)도 올리지만, 분할이 머리로 안 본 어두운 곳(알파 0)은 그대로', () => {
+  const w = 60, h = 60;
+  const rgba = new Uint8ClampedArray(w * h * 4), alpha = new Float32Array(w * h), faceP = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    // y 40 위: x 0~29 확실한 머리, 30~39 머리색인데 알파 0.55(옆머리 띠), 그 오른쪽 피부. y 40~51 피부, y 52 아래 어두운 옷(알파 0)
+    const hairPx = y < 40 && x < 40, cloth = y >= 52;
+    const v = hairPx || cloth ? 25 : 170;
+    rgba.set([v, v * 0.8, v * 0.7, 255], i * 4);
+    alpha[i] = !hairPx ? 0 : x < 30 ? 1 : 0.55;
+    faceP[i] = x > 45 ? 1 : 0;
+  }
+  edgeAlpha(rgba, alpha, w, h, faceP);
+  assert.ok(alpha[20 * w + 38] > 0.9, `옆머리 띠 ${alpha[20 * w + 38]}`);
+  assert.equal(alpha[55 * w + 20], 0, '알파 0 인 어두운 곳은 그대로');
+});

@@ -817,10 +817,20 @@ export function edgeAlpha(rgba: Uint8ClampedArray, alpha: Float32Array, w: numbe
   const r = 5;
   const bN = boxBlur(bgm, w, h, r), bS = boxBlur(bgL, w, h, r);
   let changed = 0;
+  // ① 은 더 멀리(12px)까지, 단 분할이 반쯤은 머리로 본 곳(알파 0.3 이상)만: 머리 옆면 12px 띠가 머리색(L 9~13)인데 알파 0.54 에 머물러
+  // 덜 물든 검붉은 띠와 세로 이음새가 생겼다(will1 오른쪽 옆머리). ② 색 섞임 추정은 경계 3px 안에서만
+  const near12 = boxBlur(core, w, h, 12);
   for (let i = 0; i < n; i++) {
-    if (alpha[i] > 0.97 || nearCore[i] <= 0 || core[i]) continue;
+    if (alpha[i] > 0.97 || core[i]) continue;
+    const close = nearCore[i] > 0;
+    if (!close && !(near12[i] > 0 && alpha[i] >= 0.3)) continue;
     let ac = 0;
     if (darkHair && L[i] <= Math.min(hHi + 3, oMed - 15)) ac = 1 - Math.max(0, Math.min(1, (L[i] - hHi) / 6));
+    if (!close) {
+      const na = alpha[i] + (Math.max(alpha[i], ac) - alpha[i]) * 0.85;
+      if (na > alpha[i] + 0.02) { alpha[i] = na; changed++; }
+      continue;
+    }
     if (bN[i] > 0.02) {
       const lb = bS[i] / bN[i];
       if (Math.abs(lb - hMed) < 15) continue;
