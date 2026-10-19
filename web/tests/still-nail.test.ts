@@ -2,7 +2,7 @@
 // 사진 모드 네일(손톱 틀·옮겨 그리기) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { nailFrame, splitPolished, transferNail } from '../src/beauty/still-nail.ts';
+import { nailFrame, splitPolished, transferNail, syntheticNail } from '../src/beauty/still-nail.ts';
 
 /** 중심(cx,cy), 반지름(a: 길이 방향, b: 폭), 각도 th 의 타원 마스크 */
 function ellipse(w: number, h: number, cx: number, cy: number, a: number, b: number, th: number): Uint8Array {
@@ -158,4 +158,14 @@ test('옮겨 그리기 명암: 내 손톱의 원래 무늬(어두운 크롬 드�
   // 전에는 드립 자리가 바탕보다 30% 어두워 원래 무늬가 그대로 비쳤다
   assert.ok(drip > base * 0.93, `드립 ${drip.toFixed(0)} / 바탕 ${base.toFixed(0)}`);
   assert.ok(gloss > base * 1.03, `광택 ${gloss.toFixed(0)} / 바탕 ${base.toFixed(0)}`);
+});
+
+test('가상 손톱: 손톱 밖도 가장자리 색이라 끝 가장자리 표본이 검정과 섞이지 않는다', () => {
+  const n = syntheticNail([242, 190, 204]);
+  let dark = 0;
+  for (let i = 0; i < n.w * n.h; i++) if (n.rgba[i * 4] + n.rgba[i * 4 + 1] + n.rgba[i * 4 + 2] < 150) dark++;
+  assert.equal(dark, 0, `검은 칸 ${dark}`);
+  // 모양은 마스크가 그대로
+  assert.equal(n.mask[0], 0);
+  assert.equal(n.mask[Math.floor(n.h / 2) * n.w + Math.floor(n.w / 2)], 1);
 });

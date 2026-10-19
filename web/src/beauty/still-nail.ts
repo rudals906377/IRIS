@@ -382,6 +382,26 @@ export function syntheticNail(color: [number, number, number], gloss = 0.5): { r
     for (let c = 0; c < 3; c++) rgba[i * 4 + c] = Math.min(255, color[c] * shade + (255 - color[c] * shade) * hl * 0.8);
     rgba[i * 4 + 3] = 255;
   }
+  // 손톱 밖은 가장 가까운 손톱 가장자리 색으로 채운다: 비워 두면(검정) 옮길 때 끝·옆 가장자리 표본이 검정과 섞여
+  // 내 손톱 끝에 검은 점이 찍혔다(연핑크 13번 × 01992). 손톱 모양은 mask 가 그대로 정한다
+  let firstRow = -1, lastRow = -1;
+  for (let y = 0; y < h; y++) {
+    let xl = -1, xr = -1;
+    for (let x = 0; x < w; x++) if (mask[y * w + x]) { if (xl < 0) xl = x; xr = x; }
+    if (xl < 0) continue;
+    if (firstRow < 0) firstRow = y;
+    lastRow = y;
+    for (let x = 0; x < w; x++) {
+      if (mask[y * w + x]) continue;
+      const sx = x < xl ? xl : xr;
+      for (let c = 0; c < 3; c++) rgba[(y * w + x) * 4 + c] = rgba[(y * w + sx) * 4 + c];
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    if (y >= firstRow && y <= lastRow) continue;
+    const sy = y < firstRow ? firstRow : lastRow;
+    for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++) rgba[(y * w + x) * 4 + c] = rgba[(sy * w + x) * 4 + c];
+  }
   const frame = nailFrame(mask, w, h, { x: 0, y: -1 })!;
   return { rgba, w, h, mask, frame };
 }
