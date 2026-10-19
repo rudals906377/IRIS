@@ -1436,8 +1436,16 @@ async function updateStillHair(): Promise<void> {
         // 가운데 L 35 넘음)은 결 없는 하얀 석고 덩어리가 된다(배경과 머리를 가를 근거도 없음) → 하지 않고 이유를 알린다
         const nQ = mine ? mine.dist.L.length - 1 : 0;
         hairSkipNote = '';
-        if (mine && ref && mine.dist.L[Math.round(nQ * 0.9)] < 14 && ref.L[nQ >> 1] > 35) {
-          hairSkipNote = '내 사진의 머리카락이 너무 어둡게 찍혀 결이 보이지 않아, 밝은 색 염색은 자연스럽게 할 수 없어요. 밝은 곳에서 찍은 사진을 써 주세요';
+        if (mine && ref) console.debug('[hair] 밝기 분포', JSON.stringify({ mine50: +mine.dist.L[nQ >> 1].toFixed(1), mine90: +mine.dist.L[Math.round(nQ * 0.9)].toFixed(1), ref50: +ref.L[nQ >> 1].toFixed(1) }));
+        // 사진은 밝은데 머리 자체가 새까만 곱슬(아프로 00035: 가운데 L 6.7)도 같다: 머리 속 결이 L 2~15 안에 눌려 있어 밝은 염색
+        // (애쉬베이지 03 · 금발 22)이 결 대신 덩어리 명암만 부풀린 금박·레이스 같은 결과가 됐다(낮은 주파수 순위 누르기도 시험: 그대로)
+        // → 머리 가운데 L 8 아래 + 고른 사진 가운데 L 35 넘으면 하지 않는다(will1 10.3·01992 19.8 은 그대로 염색)
+        const tooDark = mine && ref && mine.dist.L[Math.round(nQ * 0.9)] < 14;
+        const jetBlack = mine && ref && mine.dist.L[nQ >> 1] < 8;
+        if (mine && ref && (tooDark || jetBlack) && ref.L[nQ >> 1] > 35) {
+          hairSkipNote = tooDark
+            ? '내 사진의 머리카락이 너무 어둡게 찍혀 결이 보이지 않아, 밝은 색 염색은 자연스럽게 할 수 없어요. 밝은 곳에서 찍은 사진을 써 주세요'
+            : '내 머리가 아주 짙은 검정이라 결이 거의 보이지 않아, 밝은 색 염색은 자연스럽게 보여 드릴 수 없어요. 어두운 색 계열 염색은 입혀 볼 수 있어요';
           setStatus(hairSkipNote);
           console.log('[hair] 새까만 머리 + 밝은 염색: 건너뜀', mine.dist.L[Math.round(nQ * 0.9)].toFixed(1), ref.L[nQ >> 1].toFixed(1));
         } else if (!mine && mineHairNote) {
