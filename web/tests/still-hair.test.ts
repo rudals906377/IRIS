@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, colorGate, fillInterior, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture } from '../src/beauty/still-hair.ts';
+import { Q, colorGate, fillInterior, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture, earGate } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -431,4 +431,25 @@ test('피부 거르기: 흑발 사진의 그늘진 이마(어둡지만 피부 �
   for (let i = 400; i < 450; i++) a2[i] = 0.8;
   skinGate(rgba, a2, face);
   assert.ok(a2[420] > 0.75, `갈색 머리 ${a2[420]}`);
+});
+
+test('귀 거르기: 얼굴 옆 귀 자리의 밝고 붉은 픽셀(귀)은 덜 물들이고, 어두운 머리카락·귀 자리 밖은 그대로', () => {
+  const w = 300, h = 300;
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  const alpha = new Float32Array(w * h);
+  // 머리카락(어두운 갈색) 전체, 가운데 얼굴(밝은 피부)은 알파 0
+  for (let i = 0; i < w * h; i++) { rgba.set([70, 45, 30, 255], i * 4); alpha[i] = 1; }
+  for (let y = 80; y < 220; y++) for (let x = 100; x < 200; x++) { const i = y * w + x; rgba.set([230, 190, 170, 255], i * 4); alpha[i] = 0; }
+  // 얼굴 점: 눈(33·263), 코(1), 옆 끝(234 왼쪽·454 오른쪽)
+  const pts = Array.from({ length: 478 }, () => ({ x: 150, y: 150 }));
+  pts[33] = { x: 125, y: 130 }; pts[263] = { x: 175, y: 130 }; pts[1] = { x: 150, y: 165 };
+  pts[234] = { x: 100, y: 140 }; pts[454] = { x: 200, y: 140 };
+  // 귀: 오른쪽 옆 끝 바깥(x 205~212, y 135~160) 밝고 붉은 살색
+  for (let y = 135; y < 160; y++) for (let x = 205; x < 212; x++) rgba.set([215, 140, 120, 255], (y * w + x) * 4);
+  // 귀 자리 밖의 같은 색(머리 위쪽 윤기 아님, 그냥 밝은 조각)
+  for (let y = 20; y < 30; y++) for (let x = 20; x < 30; x++) rgba.set([215, 140, 120, 255], (y * w + x) * 4);
+  earGate(rgba, alpha, w, h, pts);
+  assert.ok(alpha[147 * w + 208] < 0.3, `귀 ${alpha[147 * w + 208]}`);
+  assert.ok(alpha[147 * w + 225] > 0.95, `귀 옆 머리카락 ${alpha[147 * w + 225]}`);
+  assert.ok(alpha[25 * w + 25] > 0.95, `귀 자리 밖 ${alpha[25 * w + 25]}`);
 });

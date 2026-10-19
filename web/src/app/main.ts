@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { boxBlur, closeHoles, colorGate, fillInterior, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, earGate, fillInterior, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPolished, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { fillPoly, swapFace } from '../beauty/face-swap.ts';
@@ -761,6 +761,12 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   flyaways(rgba, W, H, alpha, rect.size / 20, faceP);
   // 가르마 두피·시스루 앞머리 사이 이마처럼 피부색인 곳은 덜 물들인다(밝게 염색하면 거친 밝은 얼룩이 됐다)
   skinGate(rgba, alpha, faceP);
+  // 귀는 물들이지 않는다(얼굴 분할이 귀를 머리카락으로 반쯤 읽음)
+  {
+    const fpts = await photoAnalyzer.faceLandmarks(cv).catch(() => null);
+    if (photoOriginal !== orig) return null;
+    if (fpts) console.debug('[hair] 귀 거르기', earGate(rgba, alpha, W, H, fpts));
+  }
   const dist = hairDist(rgba, alpha);
   if (!dist) {
     // 확실한 머리카락이 300px 도 안 됨(밝게 탈색한 버즈컷 00121): 실시간 염색으로 떨어뜨려도 아무것도 안 바뀌고 안내도 없어

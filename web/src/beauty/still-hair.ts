@@ -777,6 +777,65 @@ export function pureHair(rgba: Uint8ClampedArray, alpha: Float32Array, others: F
 }
 
 /**
+ * 귀는 염색하지 않는다(제자리 수정): 얼굴 분할이 귀를 머리카락으로 반쯤 읽어(00055 오른쪽 귀 0.73) 귀가 머리색(민트 등)으로 물들었다.
+ * 피부 쪽 거르기(`skinGate`)는 '얼굴 피부 쪽' 색만 보는데 귀는 얼굴보다 붉어(a 19~25 vs 얼굴 10) 안 걸렸다.
+ * 얼굴 점(478점)으로 귀 자리(얼굴 옆 끝 234·454 에서 바깥으로 얼굴 폭 9%, 눈~코 높이, 세로 반지름 얼굴 폭 26%·가로 13% 타원)를 잡고,
+ * 그 안에서 머리 가운데 색보다 밝고(L +8~+20) 붉은(a +2~+6) 픽셀만 알파를 줄인다(귀를 덮은 머리카락은 어두워 그대로).
+ */
+export function earGate(rgba: Uint8ClampedArray, alpha: Float32Array, w: number, h: number, pts: { x: number; y: number }[]): number {
+  if (pts.length < 455) return 0;
+  const lab = new Float32Array(3);
+  const L: number[] = [], A: number[] = [];
+  for (let i = 0; i < alpha.length; i += 3) {
+    if (alpha[i] < 0.95) continue;
+    rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+    L.push(lab[0]); A.push(lab[1]);
+  }
+  if (L.length < 50) return 0;
+  const med = (v: number[]) => v.sort((p, q) => p - q)[v.length >> 1];
+  const hL = med(L), hA = med(A);
+  const e0 = pts[33], e1 = pts[263];
+  const el = Math.hypot(e1.x - e0.x, e1.y - e0.y) || 1;
+  const ex = { x: (e1.x - e0.x) / el, y: (e1.y - e0.y) / el };
+  // 그림에서 위쪽(눈선에 수직, 코 반대쪽)
+  let up = { x: ex.y, y: -ex.x };
+  const nose = pts[1], eyeMid = { x: (e0.x + e1.x) / 2, y: (e0.y + e1.y) / 2 };
+  if ((nose.x - eyeMid.x) * up.x + (nose.y - eyeMid.y) * up.y > 0) up = { x: -up.x, y: -up.y };
+  const fw = Math.hypot(pts[454].x - pts[234].x, pts[454].y - pts[234].y);
+  if (fw < 20) return 0;
+  let changed = 0;
+  // 귀다움을 칸마다 따로 깎으면 머리카락 사이로 보이는 귀가 조각조각 얼룩졌다: 귀다움 지도를 만들어 조금 흐린 뒤 깎는다
+  const S = new Float32Array(w * h);
+  for (const [k, sgn] of [[234, -1], [454, 1]] as const) {
+    const p = pts[k];
+    // 귀 가운데: 옆 끝에서 바깥으로 9%, 눈과 코 사이 높이(옆 끝 점은 대개 눈 높이라 조금 아래로)
+    const c = { x: p.x + ex.x * sgn * fw * 0.09 - up.x * fw * 0.06, y: p.y + ex.y * sgn * fw * 0.09 - up.y * fw * 0.06 };
+    const ra = fw * 0.26, rb = fw * 0.13;
+    const R = Math.ceil(ra + 2);
+    for (let y = Math.max(0, Math.floor(c.y - R)); y <= Math.min(h - 1, Math.ceil(c.y + R)); y++) {
+      for (let x = Math.max(0, Math.floor(c.x - R)); x <= Math.min(w - 1, Math.ceil(c.x + R)); x++) {
+        const i = y * w + x;
+        if (alpha[i] <= 0) continue;
+        const dx = x - c.x, dy = y - c.y;
+        const u = (dx * up.x + dy * up.y) / ra, v = (dx * ex.x + dy * ex.y) / rb;
+        const r2 = u * u + v * v;
+        if (r2 >= 1) continue;
+        const inside = Math.min(1, (1 - r2) / 0.3);
+        rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
+        const s = Math.min(1, Math.max(0, (lab[0] - hL - 8) / 12)) * Math.min(1, Math.max(0, (lab[1] - hA - 1) / 4)) * inside;
+        if (s > S[i]) S[i] = s;
+      }
+    }
+  }
+  const sb = boxBlur(S, w, h, Math.max(1, Math.round(fw * 0.008)));
+  for (let i = 0; i < alpha.length; i++) {
+    const s = Math.min(1, Math.max(S[i], sb[i] * 1.5));
+    if (s > 0.02 && alpha[i] > 0) { alpha[i] *= 1 - s; changed++; }
+  }
+  return changed;
+}
+
+/**
  * 내 머리 알파에서 색이 얼굴 피부 쪽인 픽셀(가르마 두피, 시스루 앞머리 사이 이마)을 덜 물들인다(제자리 수정).
  * 머리 가운데 색 → 피부 가운데 색 선 위에서 피부 쪽(55%~85%)일수록 알파를 줄인다. 머리와 피부색이 비슷하면(금발, ΔE 25 미만) 안 함.
  * faceP: 얼굴·목 확률(0~1). 피부 기준색은 그 확률 0.8 넘는 곳의 가운데 값.
