@@ -2,7 +2,7 @@
 // 사진 모드 메이크업 옮기기 단위 테스트(가짜 얼굴 점)
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { transferMakeup } from '../src/beauty/still-makeup.ts';
+import { transferMakeup, borderChroma } from '../src/beauty/still-makeup.ts';
 import { rgb2lab } from '../src/beauty/still-hair.ts';
 import { FACE_OVAL } from '../src/beauty/face-measure.ts';
 import { BROW_L_LOWER, BROW_L_UPPER, BROW_R_LOWER, BROW_R_UPPER, EYE_L_LOWER, EYE_L_UPPER, EYE_R_LOWER, EYE_R_UPPER, LIPS_INNER, LIPS_OUTER } from '../src/beauty/face-regions.ts';
@@ -220,4 +220,14 @@ test('메이크업: 두 사진 눈 모양이 달라도(내 흰자 ↔ 고른 눈
   const L = lab[0];
   rgb2lab(my[o], my[o + 1], my[o + 2], lab);
   assert.ok(L > lab[0] - 6, `윗눈꺼풀 L ${L.toFixed(1)}, 원래 ${lab[0].toFixed(1)}`);
+});
+
+test('사진 가장자리 색도: 빨간 배경 사진은 높고 흰 배경 사진은 0 언저리', () => {
+  const w = 100, h = 100;
+  const red = new Uint8ClampedArray(w * h * 4), white = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) { red.set([180, 20, 30, 255], i * 4); white.set([240, 240, 240, 255], i * 4); }
+  // 가운데(얼굴 자리)는 피부색: 가장자리만 본다
+  for (let y = 30; y < 70; y++) for (let x = 30; x < 70; x++) { red.set([220, 180, 160, 255], (y * w + x) * 4); white.set([220, 180, 160, 255], (y * w + x) * 4); }
+  assert.ok(borderChroma(red, w, h) > 50, `빨강 ${borderChroma(red, w, h)}`);
+  assert.ok(borderChroma(white, w, h) < 3, `흰색 ${borderChroma(white, w, h)}`);
 });

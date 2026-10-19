@@ -28,6 +28,22 @@ const LIP_ABS_L = 0.35;
 
 const ramp = (v: number, a: number, b: number) => Math.max(0, Math.min(1, (v - a) / (b - a)));
 
+/** 사진 가장자리(짧은 변 4% 띠)의 색도(Lab a·b 크기) 가운데 값: 색 배경·색 조명 사진인지 */
+export function borderChroma(rgba: Uint8ClampedArray, w: number, h: number): number {
+  const bw = Math.max(2, Math.round(Math.min(w, h) * 0.04));
+  const lab = new Float32Array(3);
+  const v: number[] = [];
+  for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
+    if (x >= bw && x < w - bw && y >= bw && y < h - bw) continue;
+    const o = (y * w + x) * 4;
+    rgb2lab(rgba[o], rgba[o + 1], rgba[o + 2], lab);
+    v.push(Math.hypot(lab[1], lab[2]));
+  }
+  if (!v.length) return 0;
+  v.sort((p, q) => p - q);
+  return v[v.length >> 1];
+}
+
 /** 가중 흐림: blur(v·w)/blur(w) */
 function wblur(v: Float32Array, w: Float32Array, W: number, H: number, r: number): Float32Array {
   const vw = new Float32Array(v.length);
@@ -132,6 +148,26 @@ export function transferMakeup(
   };
   myBase[1] = pct(myL[1], 0.05); rfBase[1] = pct(rfL[1], 0.05);
   myBase[2] = pct(myL[2], 0.5); rfBase[2] = pct(rfL[2], 0.5);
+  // 색 조명: 고른 사진 바탕(사진 가장자리)이 진한 색이면(빨간 배경 16번: 색도 60) 그 빛이 얼굴 전체에 비쳐 피부가 고르게 붉게 찍힌다.
+  // 덜 붉은 5% 피부를 맨 피부로 삼으면 그 빛까지 화장이 되어 내 얼굴 아래쪽 전체·턱까지 분홍이 됐다(볼~턱 a +7.7).
+  // → 바탕 색도가 진할수록, 블러셔가 잘 가지 않는 이마(눈썹 위)·턱(입술 아래) 피부의 가운데 색을 맨 피부 색으로 쓴다
+  const cast = ramp(borderChroma(ref, rw, rh), 30, 50);
+  if (cast > 0) {
+    const browTop = Math.min(...[...BROW_R_UPPER, ...BROW_L_UPPER].map((k) => dp[k].y));
+    const lipBot = Math.max(...LIPS_OUTER.map((k) => dp[k].y));
+    const va: number[] = [];
+    for (const i of pick) {
+      const y = (i / w) | 0;
+      if (y < browTop - fw * 0.03 || y > lipBot + fw * 0.06) va.push(rfL[1][i]);
+    }
+    if (va.length > 50) {
+      va.sort((p, q) => p - q);
+      const a0 = rfBase[1][0];
+      // 붉은 기(a)만, 그것도 70%: b 까지 옮기면 얼굴이 잿빛으로 떴고, 다 빼면 고른 사진의 진한 과즙 블러셔까지 거의 사라졌다
+      rfBase[1].fill(a0 + Math.max(0, va[va.length >> 1] - a0) * cast * 0.7);
+    }
+  }
+  if (dbg) dbg.cast = +cast.toFixed(2);
   // 고른 사진에서 피부 바탕보다 L 25~40 넘게 어두운 곳(눈가·입술·눈썹 밖)은 화장이 아니다: 볼에 댄 손의 검은 손톱,
   // 이마에 흘러내린 머리카락, 손가락 그늘. 손 지도에서 반쯤만 빠진 검은 손톱이 둘레 메우기에 섞여 볼에 회색 얼룩이 됐다
   // (눈 둘레 전체·입술·눈썹·콧구멍은 원래 어둡다: 속눈썹·아이라인·입 안 선은 그대로 믿는다)
