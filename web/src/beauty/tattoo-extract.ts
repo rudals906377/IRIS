@@ -255,6 +255,17 @@ export function isDesignSheet(src: InkSource, found = findInk(src)): boolean {
 }
 
 /**
+ * 잉크 맵(RGB = 피부에 곱할 투과율)을 무채색으로(제자리 수정): 블랙·블랙앤그레이 타투인데 고른 사진의 색 조명(보라·주황 조명)이
+ * 잉크 투과율에 묻어 내 팔에 보라 얼룩이 생겼다(10번 블랙앤그레이 소매, 자홍 조명). 밝기(루마)는 그대로 둔다
+ */
+export function neutralInk(rgba: Uint8ClampedArray): void {
+  for (let i = 0; i < rgba.length; i += 4) {
+    const g = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+    rgba[i] = rgba[i + 1] = rgba[i + 2] = g;
+  }
+}
+
+/**
  * 빽빽한 컬러 소매(팔 전체가 타투)용 잉크 맵: 선만 뽑는 `extractDesign` 은 피부 분할이 거부한 채움(노랑·빨강·크림색 바탕)을
  * 놓쳐 소매가 선 조각만 남았다(02번: 팔 픽셀의 9% 만 잉크). 팔의 모든 픽셀을 둘레 맨살 색(잉크 곁이 아닌 확실한 피부를
  * 얼굴 폭만큼 넓게 평균, 없으면 더 넓게)으로 나눈 투과율(곱하기 색)로 옮긴다: 맨살은 1(그대로), 노란 채움은 파랑만 낮아 노랗게.

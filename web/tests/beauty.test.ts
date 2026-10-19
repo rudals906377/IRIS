@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { bandMesh, faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 import { LOOKS, PALETTES } from '../src/beauty/palettes.ts';
 import { measureLimbWidth, placeFromPoint, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
-import { denseSleeve, dropEdgeBits, extractDesign, proposeRect, sheetRect, sleeveInk } from '../src/beauty/tattoo-extract.ts';
+import { denseSleeve, dropEdgeBits, extractDesign, neutralInk, proposeRect, sheetRect, sleeveInk } from '../src/beauty/tattoo-extract.ts';
 
 type P = { x: number; y: number };
 const area = (pts: P[], tris: number[]): number => {
@@ -430,4 +430,15 @@ test('빽빽한 소매 잉크 맵: 피부 분할이 거부한 노란 채움도 �
   for (let y = 0; y < h; y++) for (let x = 80; x < w; x++) region[y * w + x] = 1;
   assert.equal(denseSleeve(src, region), true);
   assert.equal(denseSleeve({ ...src, skin: new Float32Array(w * h).fill(1) }, region), false);
+});
+
+test('무채색 잉크: 조명 색이 묻은 투과율(보라)을 밝기 그대로 회색으로', () => {
+  const rgba = new Uint8ClampedArray([200, 120, 210, 255, 255, 255, 255, 0]);
+  const L0 = 0.299 * 200 + 0.587 * 120 + 0.114 * 210;
+  neutralInk(rgba);
+  assert.equal(rgba[0], rgba[1]);
+  assert.equal(rgba[1], rgba[2]);
+  assert.ok(Math.abs(rgba[0] - L0) <= 1, `밝기 ${rgba[0]} vs ${L0}`);
+  assert.equal(rgba[3], 255);
+  assert.equal(rgba[4], 255);
 });

@@ -38,7 +38,7 @@ import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPoli
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { fillPoly, swapFace } from '../beauty/face-swap.ts';
 import { transferMakeup, type MakeupAmounts } from '../beauty/still-makeup.ts';
-import { denseSleeve, extractDesign, findInk, isDesignSheet, sheetRect, sleeveInk, type InkSource } from '../beauty/tattoo-extract.ts';
+import { denseSleeve, extractDesign, findInk, isDesignSheet, sheetRect, sleeveInk, type InkSource, neutralInk } from '../beauty/tattoo-extract.ts';
 import { affine3, armStrip, chestInkScale, inkOnArm, limbRegion, maskOutLimbs, measureHalfWidth, stripPoint, transferArmInk, transferTorsoInk, type Arm, type InkMap, type Strip } from '../beauty/still-tattoo.ts';
 import { nailQuads } from '../beauty/nail-place.ts';
 import { FACE_CUT, applyPose, buildWarpMesh, cutMesh, headProxy, projectMesh, rotationDeg, similarity3, type Pose3, type Vec3, type WarpMesh } from '../beauty/head-warp.ts';
@@ -449,6 +449,14 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
     }
     tattoo.along = tattoo.across = undefined;
     // 사진 모드: 팔 타투면 팔 대 팔로 옮겨 사진에 굽는다(still-tattoo.ts)
+    // 블랙·블랙앤그레이 타투는 잉크를 무채색으로: 자홍 조명 아래 찍은 블랙앤그레이 소매(10번)가 내 팔에 보라 얼룩으로 옮겨졌다
+    tatMono = r.ai?.hints?.tattoo?.color === 'black' || r.ai?.hints?.tattoo?.color === 'grey';
+    if (tatMono && tattoo.design.canvas) {
+      const dc = tattoo.design.canvas, cx = dc.getContext('2d', { willReadFrequently: true })!;
+      const im = cx.getImageData(0, 0, dc.width, dc.height);
+      neutralInk(im.data);
+      cx.putImageData(im, 0, 0);
+    }
     refTat = PHOTO_MODE && r.tattooSrc && !r.tattooSrc.paper && tattoo.design.canvas
       ? { img: source, w: r.tattooSrc.src.w, h: r.tattooSrc.src.h, design: tattoo.design, rect: r.tattooSrc.rect, src: r.tattooSrc.src }
       : null;
@@ -825,6 +833,8 @@ async function refHairDist(): Promise<HairDist | null> {
 /** user: ✂️ 로 직접 고른 영역(그 부분만 옮기고 팔 전체로 넓히지 않는다) */
 type RefTat = { img: ImageBitmap | HTMLImageElement; w: number; h: number; design: TattooDesign; rect: { x: number; y: number; w: number; h: number }; src: InkSource; user?: boolean };
 let refTat: RefTat | null = null as RefTat | null;
+/** 고른 타투가 블랙·블랙앤그레이(스타일 AI): 잉크를 무채색으로(사진 조명 색이 잉크에 묻지 않게) */
+let tatMono = false;
 type TatPlan =
   | { dst: Arm; skin: Float32Array; ink: InkMap; src: Arm | ((lambda: number, s: number) => { x: number; y: number } | null); torso?: undefined }
   | { torso: { toRef: number[]; fromRef: number[] }; skin: Float32Array; ink: InkMap };
@@ -1259,6 +1269,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
           const ex = dense ? sleeveInk(ref.src, limb.box, 1600) : extractDesign(ref.src, limb.box, 1600);
           if (ex) {
             ink = { rgba: ex.rgba, w: ex.w, h: ex.h, rect: ex.rect };
+            if (tatMono) neutralInk(ink.rgba);
             eraseFace(ink);
           }
         }
@@ -3261,6 +3272,12 @@ tattooCropEl.addEventListener('click', () => {
     if (!t || inkN < 30) return '이 영역에서 타투 선을 찾지 못했어요. 피부 위 타투를 감싸 주세요';
     tattoo.design = t.design;
     tattoo.wrap = false; // ✂️ 로 하나를 고르면 보통 크기로
+    if (tatMono && t.design.canvas) {
+      const cx = t.design.canvas.getContext('2d', { willReadFrequently: true })!;
+      const im = cx.getImageData(0, 0, t.design.canvas.width, t.design.canvas.height);
+      neutralInk(im.data);
+      cx.putImageData(im, 0, 0);
+    }
     if (lastStyle) {
       lastStyle.tattoo = t.design;
       lastStyle.tattooSrc = { src, rect: t.rect, inkMask: t.inkMask, paper: ts.paper };
