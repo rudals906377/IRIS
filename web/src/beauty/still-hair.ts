@@ -239,6 +239,9 @@ export function recolorHair(
   const hairSz = Math.min(Math.min(w, h), Math.max(hx1 - hx0, hy1 - hy0, 1));
   const ribbons = hl > 0.05 ? strandTexture(luma, w, h, alpha, seed + 7, { width: Math.max(1, Math.round(hairSz / 150)), length: hairSz / 4 }) : null;
   const wr = 0.85 * hl;
+  // 하이라이트 사진의 밝은 가닥(실버·플래티넘)은 분포 맨 위 2~3%(17번: L 72~88)에만 있다: 양 끝 3% 를 버리는 대응(TRIM, 흰 점 막기)이
+  // 그 가닥을 통째로 잘라 하이라이트가 회색 머리처럼 밋밋했다(가장 밝은 결과 L 66 vs 고른 사진 88) → 하이라이트일수록 위쪽 버리기를 1/3 로
+  const topTrim = TRIM * (1 - 0.67 * hl);
   // 가는 올 무늬는 크게 밝힐 때(올 결 되살리기)뿐 아니라 리본을 쓸 때도 필요: 갈색→잿빛처럼 밝기 변화가 없는 염색(lift 0)에서는
   // 올 무늬가 없어 리본이 통째로 밝아진 평평한 판(폭 7px, 순위 0.45 → 0.9)이 정수리에 물감 자국처럼 남았음
   const strands = lift > 0.05 || (hl > 0.05) ? strandTexture(luma, w, h, alpha, seed) : null;
@@ -375,7 +378,7 @@ export function recolorHair(
     if (al < 0.004 || U[i] < 0) continue;
     const o = i * 4;
     // 양 끝 분위(그림자·배경·반사가 섞인 곳)는 버리고 3%~97% 사이로 대응시킨다(검은 점·흰 점 방지)
-    const t = TRIM + Math.pow(Math.max(0, Math.min(1, U[i])), g) * (Q - 2 * TRIM);
+    const t = TRIM + Math.pow(Math.max(0, Math.min(1, U[i])), g) * (Q - TRIM - topTrim);
     // 투톤·옴브레: 내 머리 세로 위치(뿌리 0 → 끝 1)에 맞는 띠 분포를 섞어 쓴다(띠 가운데 1/6·1/2·5/6)
     let rL: Float32Array = ref.L, ra: Float32Array = ref.a, rb: Float32Array = ref.b, mix: [HairDist, HairDist, number] | null = null;
     if (bands) {
