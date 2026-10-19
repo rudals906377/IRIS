@@ -217,7 +217,7 @@ export function proposeRect(src: InkSource, found = findInk(src)): Rect | null {
 }
 
 /** 도안 시트인가: 한 장에 도안 수십 개가 빽빽한 플래시 시트. 잉크를 2% 넓히면 전부 한 덩어리(그림의 절반 넘게)인데
- * 0.8% 만 넓히면 여섯 덩어리 넘게 갈라진다. 그중 하나를 자동으로 고르면 색 채움이 잉크로 안 잡혀 조각난 도안이 되므로,
+ * 0.8% 만 넓히면 여섯 덩어리 넘게 갈라진다. 또는 도안이 띄엄띄엄 놓여 2% 넓혀도 큰 덩어리 다섯 개 넘게 따로 선다. 그중 하나를 자동으로 고르면 색 채움이 잉크로 안 잡혀 조각난 도안이 되므로,
  * 시트 전체를 한 작품(긴팔·등판처럼)으로 크게 감아 입히고 하나만 쓰려면 사용자가 ✂️ 로 고르게 한다 */
 export function isDesignSheet(src: InkSource, found = findInk(src)): boolean {
   const { w, h } = src;
@@ -225,7 +225,9 @@ export function isDesignSheet(src: InkSource, found = findInk(src)): boolean {
   const { ink } = found;
   const f = new Float32Array(ink.length);
   for (let i = 0; i < ink.length; i++) f[i] = ink[i] || found.rimLine[i];
-  const parts = (growFrac: number): { n: number; bigBox: number } => {
+  let total = 0;
+  for (let i = 0; i < ink.length; i++) if (ink[i]) total++;
+  const parts = (growFrac: number): { n: number; bigBox: number; major: number } => {
     const grown = boxBlur(f, w, h, Math.max(2, short * growFrac));
     const gm = new Uint8Array(ink.length);
     for (let i = 0; i < ink.length; i++) gm[i] = grown[i] > 0 ? 1 : 0;
@@ -241,15 +243,18 @@ export function isDesignSheet(src: InkSource, found = findInk(src)): boolean {
       if (y < y0[c]) y0[c] = y;
       if (y > y1[c]) y1[c] = y;
     }
-    let cnt = 0, bigBox = 0;
+    let cnt = 0, bigBox = 0, major = 0;
     for (let c = 1; c <= n; c++) {
       if (amt[c] < 20) continue;
       cnt++;
+      if (amt[c] > total * 0.02) major++;
       bigBox = Math.max(bigBox, (x1[c] - x0[c] + 1) * (y1[c] - y0[c] + 1));
     }
-    return { n: cnt, bigBox };
+    return { n: cnt, bigBox, major };
   };
   const coarse = parts(0.02);
+  // 흰 바탕에 도안이 띄엄띄엄 놓인 시트(올드스쿨 시트 18번): 2% 넓혀도 한 덩어리가 안 되고 큰 도안 다섯 개 넘게 따로 선다
+  if (coarse.major >= 5 && coarse.n >= 10) return true;
   if (coarse.bigBox <= w * h * 0.5) return false;
   return parts(0.008).n >= 6;
 }

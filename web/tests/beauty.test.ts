@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { bandMesh, faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 import { LOOKS, PALETTES } from '../src/beauty/palettes.ts';
 import { measureLimbWidth, placeFromPoint, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
-import { denseSleeve, dropEdgeBits, extractDesign, neutralInk, proposeRect, sheetRect, sleeveInk } from '../src/beauty/tattoo-extract.ts';
+import { denseSleeve, dropEdgeBits, extractDesign, isDesignSheet, neutralInk, proposeRect, sheetRect, sleeveInk } from '../src/beauty/tattoo-extract.ts';
 
 type P = { x: number; y: number };
 const area = (pts: P[], tris: number[]): number => {
@@ -405,6 +405,22 @@ test('도안 시트 전체 영역: 위 띠의 가게 이름 글씨(가로로 긴
   assert.ok(r, '영역 없음');
   assert.ok(r.y > 55 && r.y < 90, `위 끝 ${r.y}(글씨 줄 55 아래, 첫 도안 90 위)`);
   assert.ok(r.x < 25 && r.x + r.w > 274 && r.y + r.h > 362, `영역 ${JSON.stringify(r)}`);
+});
+
+test('도안 시트: 흰 바탕에 도안이 띄엄띄엄 놓여도 시트로, 도안 하나(+작은 점)는 시트가 아니다', () => {
+  const w = 300, h = 400;
+  const mk = (): Uint8ClampedArray => { const d = new Uint8ClampedArray(w * h * 4); for (let i = 0; i < w * h; i++) d.set([250, 250, 250, 255], i * 4); return d; };
+  const blob = (d: Uint8ClampedArray, cx: number, cy: number, r: number) => { for (let y = cy - r; y <= cy + r; y++) for (let x = cx - r; x <= cx + r; x++) if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r && (x + y) % 3 === 0) d.set([30, 30, 30, 255], (y * w + x) * 4); };
+  const skin = new Float32Array(w * h).fill(1); // 종이 = 바탕
+  // 도안 12개가 서로 멀리(넓힌 2% 보다 큰 틈) 떨어져 있다
+  const sheet = mk();
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 3; c++) blob(sheet, 50 + c * 100, 50 + r * 100, 22);
+  assert.equal(isDesignSheet({ w, h, d: sheet, skin }), true);
+  // 도안 하나와 둘레 작은 점 몇 개
+  const one = mk();
+  blob(one, 150, 200, 80);
+  for (let k = 0; k < 6; k++) blob(one, 30 + k * 45, 360, 3);
+  assert.equal(isDesignSheet({ w, h, d: one, skin }), false);
 });
 
 test('빽빽한 소매 잉크 맵: 피부 분할이 거부한 노란 채움도 맨살 대비 투과율(파랑만 낮음)로 옮기고, 맨살은 그대로', () => {

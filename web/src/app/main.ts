@@ -352,7 +352,10 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
       if (mode === 'auto' && isGroup(want) && !r[want]) {
         setStatus('사진 다시 보는 중…');
         const r2 = await photoAnalyzer.analyze(source, want, setStatus);
-        if (r2[want]) r = r2;
+        // 흰 종이 위 도안 시트(사람 없음)를 AI 가 타투로 읽었으면 손 찾기가 그림 속 짐승 발톱을 손으로 잡아 낸 '네일'은 버린다
+        // (올드스쿨 시트 18번이 네일로 읽혀 타투를 아예 입히지 못했음) → 아래 도안 시트 길로 간다
+        const drawnNail = want === 'tattoo' && !r.faces && !r.makeup && !r.hair && looksLikeDesign(r.thumb);
+        if (r2[want] || drawnNail) r = r2;
       }
       r.ai = { hints: hintsFromStyleAI(ai), headline: ai.headline, description: ai.description_ko, raw: ai };
       applyHints(r, r.ai.hints);
@@ -364,7 +367,11 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   // 사람이 없는 도안 그림(흰 바탕·투명 PNG)은 그대로 타투 도안으로. 다만 스타일 AI 가 다른 분야(헤어·네일·메이크업)라고 본 사진
   // (흰 바탕에 펼친 티셔츠 사진이 '도안'으로 읽혀 타투 도안이 됐음)은 도안이 아니다 → 찾지 못했다고 알린다
   const aiOther = ['hair', 'nail', 'makeup'].includes(String(r.ai?.raw?.category ?? ''));
-  if (!r.makeup && !r.hair && !r.nail && !r.tattoo && file && !aiOther && looksLikeDesign(r.thumb)) {
+  const aiTattoo = r.ai?.raw?.category === 'tattoo' || r.ai?.raw?.secondary?.category === 'tattoo';
+  // 흰 바탕에 도안 여러 개가 모인 시트는 아래 도안 시트 길(한 작품으로 크게)로 보낸다: 그림 통째 도안으로 열면
+  // 시트 전체가 팔에 작은 딱지처럼 찍히고 노랑·하늘색 잉크가 거의 빠졌다(올드스쿨 시트 18번)
+  const whiteSheet = aiTattoo && !!photoAnalyzer.lastInk && isDesignSheet(paperInk(photoAnalyzer.lastInk));
+  if (!r.makeup && !r.hair && !r.nail && !r.tattoo && file && !aiOther && !whiteSheet && looksLikeDesign(r.thumb)) {
     try {
       r.tattoo = await designFromFile(file);
       r.summary = '그림을 타투 도안으로 가져왔어요';
@@ -373,7 +380,6 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
     }
   }
   // 도안 시트(종이에 그린 도안 여러 개, 사람 없음): 종이를 바탕으로 잉크를 뽑는다. 하나만 쓰려면 ✂️ 도안 고르기
-  const aiTattoo = r.ai?.raw?.category === 'tattoo' || r.ai?.raw?.secondary?.category === 'tattoo';
   if (!r.makeup && !r.hair && !r.nail && !r.tattoo && !r.faces && (aiTattoo || mode === 'tattoo') && !aiOther && photoAnalyzer.lastInk) {
     const ps = paperInk(photoAnalyzer.lastInk);
     // 도안 수십 개가 빽빽한 시트(올드스쿨 플래시 등)는 여러 도안을 모아 한 작품(긴팔·등판)으로 입고 싶은 사람도 있다:
