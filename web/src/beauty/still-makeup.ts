@@ -361,9 +361,18 @@ export function transferMakeup(
   if (dbg) dbg.nDots = nDots;
   // ⑤ 옮기기
   const o = new Uint8ClampedArray(4);
+  // 이: 입 둘레의 입술보다 L 12~24 밝고 색기 없는 픽셀. 크게 웃어 입술 안쪽 윤곽 점이 실제 입 벌림보다 작게 잡히면
+  // 이 사이 틈·잇몸 선(어둡고 붉은)이 입술로 읽혀 립 색이 칠해져 이 둘레가 피 묻은 듯 빨간 선이 됐다(00121 × 07)
+  // → 이 둘레(얼굴 폭 1%, 2px 이상)도 같이 지킨다(입술 안쪽 가장자리가 조금 원래 색으로 남는 것은 자연스럽다)
+  const teethM = new Float32Array(n);
+  if (lipMedL > 0) for (let i = 0; i < n; i++) {
+    if (mouthB[i] <= 0) continue;
+    teethM[i] = ramp(mouthB[i], 0.2, 0.5) * ramp(myL[0][i] - lipMedL, 12, 24) * (1 - ramp(Math.hypot(myL[1][i], myL[2][i]), 14, 24));
+  }
+  const teethNear = boxBlur(teethM, w, h, Math.max(2, rf(0.01)));
   for (let i = 0; i < n; i++) {
     // 눈 안(흰자·눈동자)은 어떤 화장도 옮기지 않는다
-    const teeth = mouthB[i] > 0 && lipMedL > 0 ? ramp(mouthB[i], 0.2, 0.5) * ramp(myL[0][i] - lipMedL, 12, 24) * (1 - ramp(Math.hypot(myL[1][i], myL[2][i]), 14, 24)) : 0;
+    const teeth = Math.max(teethM[i], ramp(teethNear[i], 0.04, 0.15) * ramp(mouthB[i], 0.2, 0.5));
     const keep = (1 - browM[i]) * ramp(Cf[i], 0.03, 0.15) * faceM[i] * (1 - ramp(openB[i], 0.5, 0.85)) * (1 - teeth);
     if (keep <= 0.002) continue;
     // 얼굴 위로 내려온 머리카락(피부 바탕보다 훨씬 어두운 픽셀)에는 화장 색을 입히지 않는다: 검은 앞머리가 붉게 물들었다
