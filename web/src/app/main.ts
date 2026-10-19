@@ -874,15 +874,36 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   const arm = a.arm;
   const upLen = Math.hypot(arm.e.x - arm.s.x, arm.e.y - arm.s.y), loLen = Math.hypot(arm.w.x - arm.e.x, arm.w.y - arm.e.y);
   const first = m[1] === 'upperArm' || m[1] === 'thigh';
+  const skinM = legs ? legSkin(body.pose, body.skin, engine.source.width, engine.source.height) : body.skin;
+  // 시트 전체(wrap)이고 위 마디(위팔·허벅지)도 맨살이면 긴팔 소매처럼 두 마디(어깨 조금 아래 → 손목)를 통째로 쓴다
+  let full = false;
+  if (tattoo.wrap) {
+    const W = engine.source.width, H = engine.source.height;
+    let on = 0, all = 0;
+    for (let t = 0.15; t <= 0.9; t += 0.05) {
+      const x = Math.round(arm.s.x + (arm.e.x - arm.s.x) * t), y = Math.round(arm.s.y + (arm.e.y - arm.s.y) * t);
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      all++;
+      if (skinM[y * W + x] > 0.5) on++;
+    }
+    full = all > 0 && on >= all * 0.6;
+  }
   // 위팔·허벅지는 어깨·엉덩이 관절 조금 아래부터(실시간 타투와 같은 자리)
-  const segStart = first ? upLen * 0.12 : upLen, segLen = first ? upLen * 0.88 : loLen;
-  const r = first ? arm.rUp : arm.rLo;
+  const segStart = full || first ? upLen * 0.12 : upLen, segLen = full ? upLen * 0.88 + loLen : first ? upLen * 0.88 : loLen;
+  // 원기둥 반지름: 두 마디를 쓰면 팔꿈치 둘레(아래 마디 길이 ±12%)에서 위·아래 반지름을 부드럽게 잇는다(이음매 없게)
+  const rAt = (l: number): number => {
+    if (!full) return first ? arm.rUp : arm.rLo;
+    const k = Math.max(0, Math.min(1, (l - upLen) / (loLen * 0.24) + 0.5));
+    return arm.rUp + (arm.rLo - arm.rUp) * k;
+  };
+  const r = full ? (arm.rUp + arm.rLo) / 2 : rAt(0);
   // 실시간 타투(tattooMesh)와 같은 크기 규칙: 세로 = 부위 길이의 25~85%, 가로는 둘레 절반을 넘지 않게
   const rotate = d.aspect > 1.3;
   const aspect = rotate ? 1 / d.aspect : d.aspect;
-  // 시트 전체(wrap)는 소매처럼 부위 길이의 95% 를 채우고 둘레 전체까지 감는다(앞에서는 가운데 절반이 보임)
+  // 시트 전체(wrap)는 소매처럼 부위 길이의 95% 를 채우고 둘레를 감는다(앞에서는 가운데가 보임). 긴팔은 둘레 1.25바퀴까지
+  // (팔 길이를 채우려면 시트 가로가 둘레보다 넓어진다: 뒤로 돌아간 부분은 안 보일 뿐 도안은 줄지 않게)
   let h = segLen * (tattoo.wrap ? 0.95 : 0.25 + 0.6 * tattoo.size), w = h * aspect;
-  const maxW = Math.PI * r * (tattoo.wrap ? 2 : 0.9);
+  const maxW = Math.PI * r * (full ? 2.5 : tattoo.wrap ? 2 : 0.9);
   if (w > maxW) { h *= maxW / w; w = maxW; }
   const lc = segStart + segLen * Math.min(0.92, Math.max(0.08, tattoo.along ?? 0.5));
   const th0 = Math.asin(Math.min(0.95, Math.max(-0.95, tattoo.across ?? 0)));
@@ -895,13 +916,13 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
     // 한 줄의 도안 픽셀이 옆으로 늘어나 가로 줄무늬가 됐고(소매처럼 감은 시트), 반폭 밖을 비우면 실제 팔 가장자리 앞에서 잉크가 딱 끊겼다
     const R = 1.25;
     if (Math.abs(sg) > R) return null;
-    const arc = r * R * (Math.asin(sg / R) - th0);
+    const arc = rAt(l) * R * (Math.asin(sg / R) - th0);
     const u = 0.5 - arc / w, v = (l - lc) / h + 0.5;
     const X = rotate ? v : u, Y = rotate ? 1 - u : v;
     if (u < 0 || u > 1 || v < 0 || v > 1) return null;
     return { x: X * c.width, y: Y * c.height };
   };
-  return { dst: arm, skin: legs ? legSkin(body.pose, body.skin, engine.source.width, engine.source.height) : body.skin, ink, src };
+  return { dst: arm, skin: skinM, ink, src };
 }
 
 /** 가슴 자리: 어깨선 아래 평면에 도안을 놓아 정밀 몸 피부로 굽는다(실시간 가슴 타투는 어깨 폭의 14% 크기 격자라 아주 작고 가늘게만 보였다:
