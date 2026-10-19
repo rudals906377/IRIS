@@ -43,6 +43,23 @@ test('띠: ㄱ 자로 굽은 팔도 중심선을 따라간다', () => {
   assert.ok((onLo(p) && onUp(p2)) || (onLo(p2) && onUp(p)), `중심선 ${JSON.stringify([p, p2])}`);
 });
 
+test('띠: 손 쪽이 배경과 붙어 더 굵게 재져도 잉크가 있는 쪽을 어깨로 본다', () => {
+  // 세로 팔: 위 반폭 18, 아래(주먹+배경) 반폭 30. 잉크는 위쪽 절반에만(소매는 어깨부터, 손은 맨살)
+  const W = 200, H = 400, m = new Float32Array(W * H), ink = new Uint8Array(W * H);
+  for (let y = 20; y < 380; y++) {
+    const h = y < 200 ? 18 : 30;
+    for (let x = 100 - h; x < 100 + h; x++) {
+      m[y * W + x] = 1;
+      if (y < 200 && (x + y) % 3 === 0) ink[y * W + x] = 1;
+    }
+  }
+  const st = armStrip(m, W, H, { x: 0, y: 0, w: W, h: H }, ink)!;
+  assert.ok(st.p[0].y < st.p[st.p.length - 1].y, `어깨(잉크 쪽)가 앞: ${st.p[0].y} → ${st.p[st.p.length - 1].y}`);
+  // 잉크를 모르면 굵은 쪽(아래)이 앞
+  const st2 = armStrip(m, W, H, { x: 0, y: 0, w: W, h: H })!;
+  assert.ok(st2.p[0].y > st2.p[st2.p.length - 1].y, '잉크 없이는 굵은 쪽');
+});
+
 test('팔 대 팔: 고른 사진 팔 중간의 잉크 줄이 내 팔(기울어짐) 중간으로 간다', () => {
   // 고른 사진: 세로 팔(어깨 (50,10) → 팔꿈치 (50,60) → 손목 (50,110)), 팔꿈치 높이에 가로 잉크 줄
   const ink: InkMap = { rgba: new Uint8ClampedArray(100 * 120 * 4), w: 100, h: 120, rect: { x: 0, y: 0, w: 100, h: 120 } };

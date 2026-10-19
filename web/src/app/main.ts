@@ -1248,7 +1248,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
             eraseFace(ink);
           }
         }
-        strip = armStrip(limb.mask, ref.w, ref.h, limb.box);
+        strip = armStrip(limb.mask, ref.w, ref.h, limb.box, found.ink);
         dbgTat({ strip: strip && { len: strip.len, mean: strip.mean, ratio: strip.ratio, p: strip.p, h: [...strip.h], refW: ref.w, rect: ink.rect } });
         // 팔 모양(길이가 굵기의 2.5배 넘음)이 아니면 실시간 타투로
         if (!strip || strip.len / (2 * strip.mean) < 2.5) return null;

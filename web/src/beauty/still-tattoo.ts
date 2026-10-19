@@ -239,7 +239,7 @@ export function transferArmInk(
  * 방향은 굵은 쪽(어깨) → 가는 쪽(손목). mask: 0~1(W*H), roi 안만 본다.
  */
 export interface Strip { p: P[]; n: P[]; h: Float32Array; len: number; ratio: number; mean: number }
-export function armStrip(mask: Float32Array, W: number, H: number, roi: { x: number; y: number; w: number; h: number }): Strip | null {
+export function armStrip(mask: Float32Array, W: number, H: number, roi: { x: number; y: number; w: number; h: number }, ink?: ArrayLike<number>): Strip | null {
   const rx = Math.max(0, roi.x), ry = Math.max(0, roi.y);
   const rw = Math.min(W, roi.x + roi.w) - rx, rh = Math.min(H, roi.y + roi.h) - ry;
   if (rw < 10 || rh < 10) return null;
@@ -292,8 +292,74 @@ export function armStrip(mask: Float32Array, W: number, H: number, roi: { x: num
     return far;
   };
   const A = bfs(lab.indexOf(best), null);
+  const B = bfs(A, null);
+  // 두 끝 사이 길은 가장 짧은 길이 아니라 팔 한가운데(가장자리에서 먼 곳)를 따르는 길로: 짧은 길은 굽은 팔꿈치 안쪽 모서리에
+  // 붙어 질러가서(고른 소매 사진 02번) 팔꿈치 둘레가 띠에서 빠지고 반폭이 엉뚱하게 재졌다. 칸마다 가장자리까지 거리(체스판 거리)를 재고
+  // 가장자리에 가까울수록 비싸게 해 가장 싼 길(다익스트라)
+  const dt = new Float32Array(gw * gh);
+  for (let i = 0; i < dt.length; i++) dt[i] = lab[i] === best ? 1e9 : 0;
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    const i = y * gw + x;
+    if (!dt[i]) continue;
+    let v = dt[i];
+    if (x === 0 || y === 0) v = 1;
+    else v = Math.min(v, dt[i - 1] + 1, dt[i - gw] + 1, dt[i - gw - 1] + 1.414, x < gw - 1 ? dt[i - gw + 1] + 1.414 : 1);
+    dt[i] = v;
+  }
+  for (let y = gh - 1; y >= 0; y--) for (let x = gw - 1; x >= 0; x--) {
+    const i = y * gw + x;
+    if (!dt[i]) continue;
+    let v = dt[i];
+    if (x === gw - 1 || y === gh - 1) v = 1;
+    else v = Math.min(v, dt[i + 1] + 1, dt[i + gw] + 1, dt[i + gw + 1] + 1.414, x > 0 ? dt[i + gw - 1] + 1.414 : 1);
+    dt[i] = v;
+  }
+  let dmax = 1;
+  for (let i = 0; i < dt.length; i++) if (dt[i] > dmax) dmax = dt[i];
   const par = new Int32Array(gw * gh).fill(-1);
-  const B = bfs(A, par);
+  {
+    const cost = new Float64Array(gw * gh).fill(Infinity);
+    const heap: number[] = [];
+    const push = (i: number) => {
+      heap.push(i);
+      for (let k = heap.length - 1; k > 0;) { const pk = (k - 1) >> 1; if (cost[heap[pk]] <= cost[heap[k]]) break; [heap[pk], heap[k]] = [heap[k], heap[pk]]; k = pk; }
+    };
+    const pop = (): number => {
+      const top = heap[0], last = heap.pop()!;
+      if (heap.length) {
+        heap[0] = last;
+        for (let k = 0; ;) {
+          const l = 2 * k + 1, r = l + 1;
+          let m = k;
+          if (l < heap.length && cost[heap[l]] < cost[heap[m]]) m = l;
+          if (r < heap.length && cost[heap[r]] < cost[heap[m]]) m = r;
+          if (m === k) break;
+          [heap[m], heap[k]] = [heap[k], heap[m]];
+          k = m;
+        }
+      }
+      return top;
+    };
+    cost[A] = 0;
+    push(A);
+    const done = new Uint8Array(gw * gh);
+    while (heap.length) {
+      const c = pop();
+      if (done[c]) continue;
+      done[c] = 1;
+      if (c === B) break;
+      const cx = c % gw, cy = (c - cx) / gw;
+      for (const [dx, dy] of N4) {
+        const x = cx + dx, y = cy + dy;
+        if (x < 0 || y < 0 || x >= gw || y >= gh) continue;
+        const j = y * gw + x;
+        if (lab[j] !== best || done[j]) continue;
+        const e = 1 - dt[j] / dmax;
+        const nc = cost[c] + 1 + 8 * e * e;
+        if (nc < cost[j]) { cost[j] = nc; par[j] = c; push(j); }
+      }
+    }
+  }
   const raw: P[] = [];
   for (let c = B; c >= 0; c = c === A ? -1 : par[c]) raw.push({ x: rx + ((c % gw) + 0.5) * f, y: ry + (Math.floor(c / gw) + 0.5) * f });
   if (raw.length < 6) return null;
@@ -341,7 +407,25 @@ export function armStrip(mask: Float32Array, W: number, H: number, roi: { x: num
   const qn = Math.floor(K / 4);
   let hA = 0, hB = 0;
   for (let k = 2; k < qn + 2; k++) { hA += h[k]; hB += h[K - 1 - k]; }
-  if (hB > hA) { pts.reverse(); h.reverse(); }
+  // 잉크를 알면 잉크가 있는 쪽을 어깨로: 소매는 어깨 쪽부터 채우고 손·주먹은 맨살이다. 배경(나무 벽)이 피부로 잡혀
+  // 주먹 쪽이 더 굵게 재지면 손을 어깨로 알고 소매를 거꾸로(손목 도안이 내 어깨에) 옮겼다. 한쪽 끝 1/4 의 잉크가 다른 쪽의 절반 아래일 때만
+  let flip = hB > hA;
+  if (ink) {
+    const dens = (k0: number, k1: number): number => {
+      let a = 0, n = 0;
+      const ns = normals(pts);
+      for (let k = k0; k < k1; k++) for (let t = -0.8; t <= 0.8; t += 0.2) {
+        const x = Math.round(pts[k].x + ns[k].x * h[k] * t), y = Math.round(pts[k].y + ns[k].y * h[k] * t);
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        n++;
+        a += ink[y * W + x] > 0 ? 1 : 0;
+      }
+      return n ? a / n : 0;
+    };
+    const iA = dens(1, qn + 1), iB = dens(K - 1 - qn, K - 1);
+    if (Math.max(iA, iB) > 0.05 && Math.min(iA, iB) < Math.max(iA, iB) * 0.5) flip = iB > iA;
+  }
+  if (flip) { pts.reverse(); h.reverse(); }
   let len = 0;
   for (let k = 1; k < K; k++) len += Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y);
   let mean = 0;
