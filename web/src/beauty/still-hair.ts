@@ -1129,7 +1129,9 @@ export function skinGate(rgba: Uint8ClampedArray, alpha: Float32Array, faceP: Fl
   // 금빛 가닥(흰 배경)이 피부 쪽 색이라 0.84 → 0.5 로 깎여 애쉬 염색 뒤 금빛 테가 남았다(00055 × 29). 두피·이마는 배경과 안 닿는다
   const bgm = new Float32Array(alpha.length);
   for (let i = 0; i < alpha.length; i++) if (alpha[i] < 0.05 && faceP[i] < 0.2) bgm[i] = 1;
-  const nearBg = bgW > 0 ? boxBlur(bgm, bgW, alpha.length / bgW, 3) : null;
+  // 역광 사진의 머리 둘레 주황빛 테(빛이 머리카락을 뚫고 나와 밝고 채도 높음, 폭 6~10px)도 피부색으로 깎여 염색 뒤 주황 테가 남았다(kw3)
+  // → 배경 곁 범위를 그림 폭의 1/60(최소 3px)로
+  const nearBg = bgW > 0 ? boxBlur(bgm, bgW, alpha.length / bgW, Math.max(3, Math.round(bgW / 60))) : null;
   for (let i = 0; i < alpha.length; i++) {
     if (alpha[i] <= 0) continue;
     rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
