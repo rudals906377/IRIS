@@ -426,7 +426,8 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
     shadowOut = m.shadow?.colorOut ?? null;
     blushPos = m.blush?.pos ?? 0.5;
     blushSize = m.blush?.size ?? 1;
-    chosen.base.color = c('#d1a38a');
+    // 입술 사진(립 색만)은 피부 보정도 하지 않는다(사진에서 읽은 것이 아니다)
+    chosen.base.color = m.debug.lipOnly ? null : c('#d1a38a');
     chosen.base.amount = 0.35;
     setOff(MAKEUP_PARTS, !on('makeup'));
     if (m.lip) {
@@ -557,23 +558,29 @@ function applyHints(r: StyleResult, h: StyleHints): void {
       if (k.gloss === 'glossy') m.lip.gloss = Math.max(m.lip.gloss, 0.55);
       else if (k.gloss === 'matte') m.lip.gloss = Math.min(m.lip.gloss, 0.12);
     }
-    if (k.shadow) {
-      const defaults: Record<string, RGB> = { shade: c('#8a5a44'), smoky: c('#4a4550'), pearl: c('#c9a27a'), color: c('#7a6ab8'), pink: c('#d98fa0') };
-      if (!m.shadow) m.shadow = { color: defaults[k.shadow], amount: k.shadow === 'smoky' ? 0.8 : 0.5 };
-      else if (k.shadow === 'smoky') m.shadow = { color: gam(lin(m.shadow.color).map((v) => v * 0.6) as RGB), amount: Math.max(m.shadow.amount, 0.75) };
+    // 입술 사진(립 색만)에는 AI 가 짐작한 다른 화장(섀도·블러셔·피부)을 더하지 않는다: '다른 화장은 읽지 못했어요'라 알리면서
+    // 핑크 섀도·피부 보정이 켜져 있었다. 립 광택만
+    if (m.debug.lipOnly) {
+      if (m.lip && (k.gloss === 'glossy' || k.base === 'dewy')) m.lip.gloss = Math.max(m.lip.gloss, 0.45);
+    } else {
+      if (k.shadow) {
+        const defaults: Record<string, RGB> = { shade: c('#8a5a44'), smoky: c('#4a4550'), pearl: c('#c9a27a'), color: c('#7a6ab8'), pink: c('#d98fa0') };
+        if (!m.shadow) m.shadow = { color: defaults[k.shadow], amount: k.shadow === 'smoky' ? 0.8 : 0.5 };
+        else if (k.shadow === 'smoky') m.shadow = { color: gam(lin(m.shadow.color).map((v) => v * 0.6) as RGB), amount: Math.max(m.shadow.amount, 0.75) };
+      }
+      if (k.liner === 'cat') m.liner = { color: [0.1, 0.08, 0.08], amount: 0.9 };
+      else if (k.liner === 'soft' && !m.liner) m.liner = { color: [0.23, 0.16, 0.13], amount: 0.45 };
+      // 스타일 AI의 '블러셔 없음'은 측정이 약할 때만 따른다(사진에 붉은 기가 뚜렷하면 측정을 믿는다)
+      // (0.15 는 옅은 분홍 블러셔(10·20번, 붉은 기 0.10~0.13)까지 지워 버렸다 → 0.09)
+      if (k.blush === 'none' && (m.blush?.redness ?? 0) < 0.09) m.blush = undefined;
+      else if (k.blush && !m.blush) m.blush = { color: k.blush === 'coral' ? c('#cb795e') : c('#cb7979'), amount: 0.9, pos: 0.15, size: 1.25 };
+      if (k.contour === 'shading') m.contour = { color: c('#8c7a70'), amount: Math.max(m.contour?.amount ?? 0, 0.5) };
+      else if (k.contour === 'highlight') m.contour = { color: c('#9a7862'), amount: Math.max(m.contour?.amount ?? 0, 0.35) };
+      if (k.base === 'dewy') {
+        chosen.base.amount = 0.45;
+        if (m.lip) m.lip.gloss = Math.max(m.lip.gloss, 0.45);
+      } else if (k.base === 'matte') chosen.base.amount = 0.5;
     }
-    if (k.liner === 'cat') m.liner = { color: [0.1, 0.08, 0.08], amount: 0.9 };
-    else if (k.liner === 'soft' && !m.liner) m.liner = { color: [0.23, 0.16, 0.13], amount: 0.45 };
-    // 스타일 AI의 '블러셔 없음'은 측정이 약할 때만 따른다(사진에 붉은 기가 뚜렷하면 측정을 믿는다)
-    // (0.15 는 옅은 분홍 블러셔(10·20번, 붉은 기 0.10~0.13)까지 지워 버렸다 → 0.09)
-    if (k.blush === 'none' && (m.blush?.redness ?? 0) < 0.09) m.blush = undefined;
-    else if (k.blush && !m.blush) m.blush = { color: k.blush === 'coral' ? c('#cb795e') : c('#cb7979'), amount: 0.9, pos: 0.15, size: 1.25 };
-    if (k.contour === 'shading') m.contour = { color: c('#8c7a70'), amount: Math.max(m.contour?.amount ?? 0, 0.5) };
-    else if (k.contour === 'highlight') m.contour = { color: c('#9a7862'), amount: Math.max(m.contour?.amount ?? 0, 0.35) };
-    if (k.base === 'dewy') {
-      chosen.base.amount = 0.45;
-      if (m.lip) m.lip.gloss = Math.max(m.lip.gloss, 0.45);
-    } else if (k.base === 'matte') chosen.base.amount = 0.5;
   }
   if (r.hair && h.hair?.tech) {
     if ((h.hair.tech === 'ombre' || h.hair.tech === 'balayage') && !r.hair.tip) {
