@@ -433,6 +433,11 @@ export function recolorHair(
   let gN = 0, gR = 0, gG = 0, gB = 0;
   for (let i = 0; i < w * h; i += 2) if (coreW[i]) { gN++; gR += rgba[i * 4]; gG += rgba[i * 4 + 1]; gB += rgba[i * 4 + 2]; }
   const gC = gN ? [gR / gN, gG / gN, gB / gN] : null;
+  // 둘레 배경(알파 0.05 아래) 평균색: 섞인 픽셀의 결과 상한(아래). 원본·새 색 사이로만 묶으면 밝은 배경에 날린 옅은 잔머리가
+  // 새 색에서 멈춰 회색 줄로 남았다. 배경보다 밝게는 안 한다(알파가 부푼 배경 픽셀의 하얀 테 방지는 그대로)
+  const bW = new Float32Array(w * h), bR = new Float32Array(w * h), bG = new Float32Array(w * h), bBl = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) if (alpha[i] < 0.05) { bW[i] = 1; bR[i] = rgba[i * 4]; bG[i] = rgba[i * 4 + 1]; bBl[i] = rgba[i * 4 + 2]; }
+  const bWb = boxBlur(bW, w, h, er), bRb = boxBlur(bR, w, h, er), bGb = boxBlur(bG, w, h, er), bBb = boxBlur(bBl, w, h, er);
   for (let i = 0; i < w * h; i++) {
     const a0 = luma[i] < 24 && aBlur[i] > 0.85 ? Math.max(alpha[i], aBlur[i]) : alpha[i];
     // 크게 밝힐 때 가르마 두피처럼 내 머리보다 훨씬 밝은 곳은 가장 밝은 머리색으로 바뀌어 하얀 솜털 얼룩이 된다 → 덜 물들인다
@@ -511,7 +516,11 @@ export function recolorHair(
       const cc = gC ? core * lw + gC[c] * (1 - lw) : core;
       const hc = ew > 0 ? rgba[o + c] + (cc - rgba[o + c]) * ew : rgba[o + c];
       const v = rgba[o + c] + (tmp[c] - hc) * al;
-      out[o + c] = Math.max(Math.min(rgba[o + c], tmp[c]), Math.min(Math.max(rgba[o + c], tmp[c]), v));
+      const bgc = ew > 0 && bWb[i] >= 0.05 ? (c === 0 ? bRb[i] : c === 1 ? bGb[i] : bBb[i]) / bWb[i] : -1;
+      // 어둡게 바꿀 때도 같다(어두운 배경에 날린 금발 가닥이 새 색에서 멈춰 밝은 줄로 남음): 아래 한계를 배경까지
+      const lo = Math.min(rgba[o + c], tmp[c], v < tmp[c] && bgc >= 0 ? Math.max(bgc, v) : 999);
+      const hi = Math.max(rgba[o + c], tmp[c], v > tmp[c] ? Math.min(bgc, v) : -1);
+      out[o + c] = Math.max(lo, Math.min(hi, v));
     }
   }
   // 다듬기 세기: 크게 밝히기(lift)뿐 아니라 명암 폭을 크게 늘리는 경우(검은 머리 폭 19 → 밀크브라운 폭 40: 결 줄 대비가 두 배)도
@@ -864,8 +873,8 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
     if (Math.abs(c) < 25) continue;
     const t = Math.max(0, Math.min(1, (bg - luma[i]) / c));
     // 아주 가는 가닥(1px, 배경과 섞여 머리 몫 0.1~0.3)도 그 몫만큼은 알파로: 0.25 아래를 버리면 정수리 위로 날린 잔머리가
-    // 원래 검은색 그대로 남아 염색한 머리를 모자처럼 덮어쓴 듯했다(한국인 남자 km2). 몫 0.1 아래는 배경 잡음이라 뺀다
-    let s = Math.max(Math.max(0, Math.min(1, (t - 0.25) / 0.55)), t * Math.max(0, Math.min(1, (t - 0.1) / 0.1)));
+    // 원래 검은색 그대로 남아 염색한 머리를 모자처럼 덮어쓴 듯했다(한국인 남자 km2: 곱슬 잔머리 몫 0.11~0.2). 몫 0.06 아래는 배경 잡음이라 뺀다
+    let s = Math.max(Math.max(0, Math.min(1, (t - 0.25) / 0.55)), t * Math.max(0, Math.min(1, (t - 0.06) / 0.04)));
     if (s <= 0) continue;
     rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
     const ea = numA[i] / den[i] + t * (hA - numA[i] / den[i]), eb = numB[i] / den[i] + t * (hB - numB[i] / den[i]);

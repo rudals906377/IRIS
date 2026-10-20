@@ -649,6 +649,27 @@ test('잔머리: 속머리에서 멀리 날린 아주 가는 가닥(배경과 �
   const mine = hairDist(rgba, alpha, 0.6, 100)!, rd = hairDist(ref, new Float32Array(n).fill(1), 0.6, 100)!;
   const out = recolorHair(rgba, W, H, alpha, mine, rd, 1);
   const lum = (i: number) => 0.2126 * out[i * 4] + 0.7152 * out[i * 4 + 1] + 0.0722 * out[i * 4 + 2];
-  // 원래 검은 가닥(186)이 새 머리색(≈200) 까지는 밝아진다(결과는 원본·새 색 사이로 묶여 배경과 섞인 220 까지는 안 감)
-  assert.ok(lum(12 * W + 40) >= 195, `염색 뒤 가닥 ${lum(12 * W + 40).toFixed(0)}`);
+  // 이상적인 값: 배경 80% + 새 머리색(≈200) 20% ≈ 220. 원래 검은 가닥(186)이 회색 줄로 남지 않고, 배경(225)보다 밝아지지 않는다
+  assert.ok(lum(12 * W + 40) > 210 && lum(12 * W + 40) <= 226, `염색 뒤 가닥 ${lum(12 * W + 40).toFixed(0)}`);
+});
+
+test('어둡게 염색: 어두운 배경에 날린 옅은 금발 가닥은 밝은 줄로 남지 않고 배경 쪽으로 섞인다(배경보다 어두워지지는 않는다)', () => {
+  const W = 80, H = 60, n = W * H;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    // 아래 30줄 금발(루마 190), 위는 어두운 배경(30), y=12 에 머리 몫 0.2 가닥(30 + 0.2×160 = 62)
+    let v = y >= 30 ? 188 + ((x + y) % 4) : 30;
+    if (y === 12 && x > 20 && x < 60) v = 62;
+    rgba.set([v, v, v, 255], i * 4);
+    alpha[i] = y >= 30 ? 1 : 0;
+  }
+  flyaways(rgba, W, H, alpha, 25);
+  const ref = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) { const v = 35 + (i % 10); ref.set([v, v, v, 255], i * 4); }
+  const mine = hairDist(rgba, alpha, 0.6, 100)!, rd = hairDist(ref, new Float32Array(n).fill(1), 0.6, 100)!;
+  const out = recolorHair(rgba, W, H, alpha, mine, rd, 1);
+  const lum = (i: number) => 0.2126 * out[i * 4] + 0.7152 * out[i * 4 + 1] + 0.0722 * out[i * 4 + 2];
+  const v = lum(12 * W + 40);
+  assert.ok(v < 36 && v >= 29, `염색 뒤 가닥 ${v.toFixed(0)}`);
 });
