@@ -628,3 +628,27 @@ test('검은 머리 밝게 염색: 속머리에서 멀리 떨어진 반쯤 잡�
   for (let y = 10; y < 30; y++) { inner += lum(y * W + 20); far += lum(y * W + 70); }
   assert.ok(far > inner * 0.7, `떨어진 머리 ${(far / 20).toFixed(0)}, 속머리 ${(inner / 20).toFixed(0)}`);
 });
+
+test('잔머리: 속머리에서 멀리 날린 아주 가는 가닥(배경과 섞여 머리 몫 0.2)도 그 몫만큼 알파를 얻고, 밝게 염색하면 어두운 줄로 남지 않는다', () => {
+  const W = 80, H = 60, n = W * H;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    // 아래 30줄 검은 머리(알파 1) | 위는 흰 배경(225), y=12 에 1px 가는 가닥(머리 몫 0.2: 225 − 0.2×(225−30) = 186)
+    let v = y >= 30 ? 30 + ((x + y) % 3) : 225;
+    if (y === 12 && x > 20 && x < 60) v = 186;
+    rgba.set([v, v, v, 255], i * 4);
+    alpha[i] = y >= 30 ? 1 : 0;
+  }
+  flyaways(rgba, W, H, alpha, 25);
+  const a = alpha[12 * W + 40];
+  assert.ok(a > 0.12 && a < 0.35, `가닥 알파 ${a.toFixed(2)}`);
+  assert.ok(alpha[6 * W + 40] < 0.02, `배경 ${alpha[6 * W + 40]}`);
+  const ref = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) { const v = 190 + (i % 20); ref.set([v, v, v - 5, 255], i * 4); }
+  const mine = hairDist(rgba, alpha, 0.6, 100)!, rd = hairDist(ref, new Float32Array(n).fill(1), 0.6, 100)!;
+  const out = recolorHair(rgba, W, H, alpha, mine, rd, 1);
+  const lum = (i: number) => 0.2126 * out[i * 4] + 0.7152 * out[i * 4 + 1] + 0.0722 * out[i * 4 + 2];
+  // 원래 검은 가닥(186)이 새 머리색(≈200) 까지는 밝아진다(결과는 원본·새 색 사이로 묶여 배경과 섞인 220 까지는 안 감)
+  assert.ok(lum(12 * W + 40) >= 195, `염색 뒤 가닥 ${lum(12 * W + 40).toFixed(0)}`);
+});

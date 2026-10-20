@@ -428,11 +428,16 @@ export function recolorHair(
   for (let i = 0; i < w * h; i++) if (alpha[i] >= 0.8) { coreW[i] = 1; cR[i] = rgba[i * 4]; cG[i] = rgba[i * 4 + 1]; cB[i] = rgba[i * 4 + 2]; }
   const er = Math.max(3, Math.round(Math.min(w, h) / 80));
   const cWb = boxBlur(coreW, w, h, er), cRb = boxBlur(cR, w, h, er), cGb = boxBlur(cG, w, h, er), cBb = boxBlur(cB, w, h, er);
+  // 둘레에 속머리가 없는 가닥(속머리에서 멀리 날린 잔머리)은 머리 전체 속머리 평균색을 원래 머리색으로 쓴다:
+  // 없으면 픽셀 전체를 당겨 섞인 배경 몫이 남고 원래 검정이 빠지지 않아 어두운 가닥이 그대로 남았다
+  let gN = 0, gR = 0, gG = 0, gB = 0;
+  for (let i = 0; i < w * h; i += 2) if (coreW[i]) { gN++; gR += rgba[i * 4]; gG += rgba[i * 4 + 1]; gB += rgba[i * 4 + 2]; }
+  const gC = gN ? [gR / gN, gG / gN, gB / gN] : null;
   for (let i = 0; i < w * h; i++) {
     const a0 = luma[i] < 24 && aBlur[i] > 0.85 ? Math.max(alpha[i], aBlur[i]) : alpha[i];
     // 크게 밝힐 때 가르마 두피처럼 내 머리보다 훨씬 밝은 곳은 가장 밝은 머리색으로 바뀌어 하얀 솜털 얼룩이 된다 → 덜 물들인다
     // 배경이 섞인 가장자리(ew)는 밝은 게 배경 몫이라 덜 물들이지 않는다(아래에서 머리 몫만 바꾸고 새 색 안으로 묶는다)
-    const ew = cWb[i] >= 0.02 ? Math.max(0, Math.min(1, (1 - a0) / 0.5)) : 0;
+    const ew = cWb[i] >= 0.02 || gC ? Math.max(0, Math.min(1, (1 - a0) / 0.5)) : 0;
     const al = a0 * amt * (1 - 0.8 * over[i] * (1 - ew));
     if (al < 0.004 || U[i] < 0) continue;
     const o = i * 4;
@@ -501,7 +506,10 @@ export function recolorHair(
     // 알파 0.5 아래는 둘레 속머리 색을 전부, 1 에 가까울수록 제 색을(안쪽은 지금과 같다).
     // 결과는 원본과 새 색 사이로 묶는다(알파가 부푼 배경 픽셀이 새 색보다 밝아져 하얀 테가 되지 않게)
     for (let c = 0; c < 3; c++) {
-      const hc = ew > 0 ? rgba[o + c] + ((c === 0 ? cRb[i] : c === 1 ? cGb[i] : cBb[i]) / cWb[i] - rgba[o + c]) * ew : rgba[o + c];
+      const lw = Math.min(1, cWb[i] / 0.02);
+      const core = lw > 0 ? (c === 0 ? cRb[i] : c === 1 ? cGb[i] : cBb[i]) / cWb[i] : 0;
+      const cc = gC ? core * lw + gC[c] * (1 - lw) : core;
+      const hc = ew > 0 ? rgba[o + c] + (cc - rgba[o + c]) * ew : rgba[o + c];
       const v = rgba[o + c] + (tmp[c] - hc) * al;
       out[o + c] = Math.max(Math.min(rgba[o + c], tmp[c]), Math.min(Math.max(rgba[o + c], tmp[c]), v));
     }
@@ -855,7 +863,9 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
     // 배경과 머리 밝기가 비슷하면 가닥과 배경 무늬를 구별할 수 없다
     if (Math.abs(c) < 25) continue;
     const t = Math.max(0, Math.min(1, (bg - luma[i]) / c));
-    let s = Math.max(0, Math.min(1, (t - 0.25) / 0.55));
+    // 아주 가는 가닥(1px, 배경과 섞여 머리 몫 0.1~0.3)도 그 몫만큼은 알파로: 0.25 아래를 버리면 정수리 위로 날린 잔머리가
+    // 원래 검은색 그대로 남아 염색한 머리를 모자처럼 덮어쓴 듯했다(한국인 남자 km2). 몫 0.1 아래는 배경 잡음이라 뺀다
+    let s = Math.max(Math.max(0, Math.min(1, (t - 0.25) / 0.55)), t * Math.max(0, Math.min(1, (t - 0.1) / 0.1)));
     if (s <= 0) continue;
     rgb2lab(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], lab);
     const ea = numA[i] / den[i] + t * (hA - numA[i] / den[i]), eb = numB[i] / den[i] + t * (hB - numB[i] / den[i]);
