@@ -436,7 +436,59 @@ export function recolorHair(
       out[o + c] = Math.max(Math.min(rgba[o + c], tmp[c]), Math.min(Math.max(rgba[o + c], tmp[c]), v));
     }
   }
+  // 다듬기 세기: 크게 밝히기(lift)뿐 아니라 명암 폭을 크게 늘리는 경우(검은 머리 폭 19 → 밀크브라운 폭 40: 결 줄 대비가 두 배)도
+  const stretch = Math.max(0, Math.min(1, (refRange / mineRange - 1.3) / 1));
+  // 하이라이트·발레아쥬 사진(밝은 가닥을 일부러 넣음)은 가닥 대비가 곧 모양이라 누르지 않는다
+  const soft = Math.max(lift, stretch) * (1 - hl);
+  if (soft > 0.05) softenLiftDetail(out, w, h, alpha, amt, soft);
   return out;
+}
+
+/**
+ * 어두운 머리를 크게 밝힐 때(검은 머리 → 애쉬·핑크·밀크브라운) 마지막 다듬기(제자리 수정): 검은 머리의 가는 윤기 반사·잡음이
+ * 분위 대응으로 가장 밝은 색이 되고 올 결 되살리기가 더해져, 결과가 날카로운 흰 줄무늬 = 은박·플라스틱 가발처럼 보였다
+ * (한국인 검은 머리 시험: 잔결 세기(L − 7px 평균의 표준편차) 원본 3.6 → 결과 6~9). 실제 밝게 염색한 머리의 윤기는 넓고 부드럽다.
+ * 머리 알파로 가중한 평균으로 넓은 명암(머리 크기 1/25)·중간 띠(1/100)·잔결로 나눠, 중간 띠는 절반, 잔결은 부드럽게 누르고(tanh, 폭 3~5),
+ * 색(a·b)의 잔얼룩도 절반 고르게 한다.
+ */
+export function softenLiftDetail(out: Uint8ClampedArray, w: number, h: number, alpha: Float32Array, amt: number, lift: number): void {
+  const n = w * h;
+  const L = new Float32Array(n), A = new Float32Array(n), B = new Float32Array(n), wt = new Float32Array(n);
+  const lab = new Float32Array(3);
+  let x0 = w, x1 = 0, y0 = h, y1 = 0;
+  for (let i = 0; i < n; i++) {
+    const a = alpha[i] * amt;
+    if (a < 0.05) continue;
+    wt[i] = a;
+    rgb2lab(out[i * 4], out[i * 4 + 1], out[i * 4 + 2], lab);
+    L[i] = lab[0] * a; A[i] = lab[1] * a; B[i] = lab[2] * a;
+    const x = i % w, y = (i / w) | 0;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  if (x1 < x0) return;
+  const sz = Math.max(x1 - x0, y1 - y0);
+  const r = Math.max(2, Math.round(sz / 100)), R = Math.max(6, Math.round(sz / 25));
+  const den = boxBlur(wt, w, h, r), bl = boxBlur(L, w, h, r), ba = boxBlur(A, w, h, r), bb = boxBlur(B, w, h, r);
+  // 넓은 명암(머리 모양·조명, 머리 크기의 1/25): 그 사이의 중간 크기 띠(윤기 무늬가 붓질처럼 넓은 줄이 된 것)는 절반으로
+  const denB = boxBlur(wt, w, h, R), blB = boxBlur(L, w, h, R);
+  const s = 3 + 2 * (1 - lift);
+  const tmp = new Uint8ClampedArray(3);
+  for (let i = 0; i < n; i++) {
+    const a = wt[i];
+    if (!a || den[i] < 1e-3) continue;
+    const l0 = L[i] / a, a0 = A[i] / a, b0 = B[i] / a;
+    const baseL = bl[i] / den[i], baseA = ba[i] / den[i], baseB = bb[i] / den[i];
+    const d = l0 - baseL;
+    const k = lift * Math.min(1, a);
+    const bigL = denB[i] > 1e-3 ? blB[i] / denB[i] : baseL;
+    const l1 = l0 + (bigL + (baseL - bigL) * 0.5 + s * Math.tanh(d / s) - l0) * k;
+    const a1 = a0 + (baseA - a0) * 0.5 * k, b1 = b0 + (baseB - b0) * 0.5 * k;
+    lab2rgb(Math.max(0, Math.min(100, l1)), a1, b1, tmp, 0);
+    out[i * 4] = tmp[0]; out[i * 4 + 1] = tmp[1]; out[i * 4 + 2] = tmp[2];
+  }
 }
 
 /** 적분 영상 상자 평균(반지름 r) */

@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, colorGate, fillInterior, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture, earGate, edgeAlpha } from '../src/beauty/still-hair.ts';
+import { Q, colorGate, fillInterior, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture, earGate, edgeAlpha, softenLiftDetail } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -514,4 +514,21 @@ test('가장자리 알파: 머리 옆면의 넓은 머리색 띠(확실한 머�
   edgeAlpha(rgba, alpha, w, h, faceP);
   assert.ok(alpha[20 * w + 38] > 0.9, `옆머리 띠 ${alpha[20 * w + 38]}`);
   assert.equal(alpha[55 * w + 20], 0, '알파 0 인 어두운 곳은 그대로');
+});
+
+test('밝게 염색한 머리 다듬기: 날카로운 흰 줄(은박) 대비는 줄이고 평균 밝기는 그대로, 세기 0 이면 그대로', () => {
+  const w = 60, h = 60, n = w * h;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n).fill(1);
+  // 2px 마다 아주 밝은 줄(윤기 반사가 흰색으로 바뀐 것)
+  for (let i = 0; i < n; i++) { const x = i % w; const v = x % 4 < 1 ? 245 : 150; rgba.set([v, v - 10, v - 15, 255], i * 4); }
+  const sd = (a: Uint8ClampedArray) => { let s = 0, s2 = 0; for (let i = 0; i < n; i++) { s += a[i * 4]; s2 += a[i * 4] ** 2; } const m = s / n; return { m, sd: Math.sqrt(s2 / n - m * m) }; };
+  const before = sd(rgba);
+  const a1 = new Uint8ClampedArray(rgba);
+  softenLiftDetail(a1, w, h, alpha, 1, 1);
+  const after = sd(a1);
+  assert.ok(after.sd < before.sd * 0.7, `대비 ${before.sd.toFixed(1)} → ${after.sd.toFixed(1)}`);
+  assert.ok(Math.abs(after.m - before.m) < 12, `평균 ${before.m.toFixed(1)} → ${after.m.toFixed(1)}`);
+  const a0 = new Uint8ClampedArray(rgba);
+  softenLiftDetail(a0, w, h, alpha, 1, 0);
+  assert.equal(sd(a0).sd.toFixed(3), before.sd.toFixed(3));
 });
