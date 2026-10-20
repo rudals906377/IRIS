@@ -466,7 +466,8 @@ export function recolorHair(
       // 리본 가닥에서만 위쪽 순위로 올린다(가닥 모양은 리본, 명암은 내 머리)
       const Yp = 0.2126 * LIN[rgba[o]] + 0.7152 * LIN[rgba[o + 1]] + 0.0722 * LIN[rgba[o + 2]];
       const Bp = Math.max(1e-4, relB[i]);
-      const spec = alpha[i] < 0.95 ? 0 : Math.max(0, Bp - relBm) + Math.max(0, Yp - Bp);
+      // 가장자리(배경이 섞여 밝음)는 윤기로 치지 않는다. 알파 0.95 에서 딱 끊으면 밝은 정수리에서 그 경계가 윤곽 있는 납작한 얼룩이 됐다(km2) → 0.8~0.95 에서 서서히
+      const spec = (Math.max(0, Bp - relBm) + Math.max(0, Yp - Bp)) * Math.max(0, Math.min(1, (alpha[i] - 0.8) / 0.15));
       const base = 0.5 - 0.1 * hl, lvT = Q * (base + (rib ? rib[i] : 0) * (0.93 - base));
       const Yt = yOfL(bandAt('L', lvT)) * relK * relShape(i, Yp, Bp) + spec * 1.2;
       L = Yt > 0.008856 ? 116 * Math.cbrt(Yt) - 16 : 903.3 * Yt;
