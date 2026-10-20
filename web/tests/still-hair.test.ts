@@ -607,3 +607,24 @@ test('가장자리 알파: 확실한 머리와 얼굴이 만나는 오목한 모
   // 모서리 안쪽(두 띠에서 각각 8~9px)
   assert.ok(alpha[28 * W + 51] > 0.9, `모서리 ${alpha[28 * W + 51].toFixed(2)}`);
 });
+
+test('검은 머리 밝게 염색: 속머리에서 멀리 떨어진 반쯤 잡힌 머리(알파 0.9)도 새까매지지 않는다', () => {
+  const W = 120, H = 40, n = W * H;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    // 왼쪽 40칸 확실한 검은 머리 | 40~59 배경 | 60~79 떨어진 검은 머리(알파 0.9) | 배경
+    const hair = x < 40 || (x >= 60 && x < 80);
+    const v = hair ? 24 + ((x + y) % 4) : 215;
+    rgba.set([v, v, v, 255], i * 4);
+    alpha[i] = x < 40 ? 1 : hair ? 0.9 : 0;
+  }
+  const ref = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) { const v = 160 + (i % 30); ref.set([v - 20, v + 10, v - 10, 255], i * 4); }
+  const mine = hairDist(rgba, alpha, 0.6, 100)!, rd = hairDist(ref, new Float32Array(n).fill(1), 0.6, 100)!;
+  const out = recolorHair(rgba, W, H, alpha, mine, rd, 1);
+  const lum = (i: number) => 0.2126 * out[i * 4] + 0.7152 * out[i * 4 + 1] + 0.0722 * out[i * 4 + 2];
+  let inner = 0, far = 0;
+  for (let y = 10; y < 30; y++) { inner += lum(y * W + 20); far += lum(y * W + 70); }
+  assert.ok(far > inner * 0.7, `떨어진 머리 ${(far / 20).toFixed(0)}, 속머리 ${(inner / 20).toFixed(0)}`);
+});

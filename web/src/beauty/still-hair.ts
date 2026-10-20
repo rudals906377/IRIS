@@ -399,10 +399,16 @@ export function recolorHair(
     const bs: number[] = [];
     for (let i = 0; i < w * h; i++) {
       relB[i] = den[i] > 1e-3 ? num[i] / den[i] : 0;
-      if (alpha[i] > 0.5 && i % 2 === 0) bs.push(relB[i]);
+      if (alpha[i] > 0.5 && den[i] > 0.1 && i % 2 === 0) bs.push(relB[i]);
     }
     bs.sort((p, q) => p - q);
     relBm = Math.max(1e-4, bs[bs.length >> 1] ?? 1e-4);
+    // 둘레에 속머리가 거의 없는 곳(아주 짧은 머리 관자놀이·떨어진 가닥)은 B 가 0 에 가까워 새까맣게 칠해졌다(will1 × 민트)
+    // → 속머리 몫(창 안 비율 0.1 아래)만큼 머리 가운데 명암 쪽으로
+    for (let i = 0; i < w * h; i++) {
+      const k = Math.min(1, den[i] / 0.1);
+      if (k < 1) relB[i] = relB[i] * k + relBm * (1 - k);
+    }
     // 그늘만 남기면 모양의 가운데가 1 아래라 고른 사진보다 어두워진다(가운데 L 58 → 42) → 모양 가운데를 1 로
     const ms: number[] = [];
     for (let i = 0; i < w * h; i += 2) {
@@ -956,13 +962,14 @@ export function edgeAlpha(rgba: Uint8ClampedArray, alpha: Float32Array, w: numbe
   // ① 은 더 멀리(12px)까지, 단 분할이 반쯤은 머리로 본 곳(알파 0.3 이상)만: 머리 옆면 12px 띠가 머리색(L 9~13)인데 알파 0.54 에 머물러
   // 덜 물든 검붉은 띠와 세로 이음새가 생겼다(will1 오른쪽 옆머리). ② 색 섞임 추정은 경계 3px 안에서만
   // 12px 안/밖으로 딱 자르면 정사각형 거리라 넓은 반쯤 머리(뒷머리 그늘, 알파 0.79) 가운데에 덜 물든 네모가 남았다(한국인 단발 턱 옆)
-  // → 확실한 머리까지 둥근 거리(모따기 거리 변환)로 12px 까지 다, 24px 에서 0 으로 부드럽게.
+  // → 확실한 머리까지 둥근 거리(모따기 거리 변환)로 18px 까지 다(예전 정사각형 12px 의 대각 모서리 ≈17px 까지 덮음:
+  // 12px 까지만 하면 아주 짧은 머리 관자놀이(will1)가 덜 물들어 검은 칸이 커졌다), 30px 에서 0 으로 부드럽게.
   // (창 안 머리 비율로 재면 머리·얼굴이 만나는 오목한 모서리에서 비율이 작아 검은 삼각형이 남았다)
   const dc = chamferDist(core, w, h);
   for (let i = 0; i < n; i++) {
     if (alpha[i] > 0.97 || core[i]) continue;
     const close = nearCore[i] > 0;
-    const reach = Math.max(0, Math.min(1, (24 - dc[i]) / 12));
+    const reach = Math.max(0, Math.min(1, (30 - dc[i]) / 12));
     if (!close && !(reach > 0 && alpha[i] >= 0.3)) continue;
     let ac = 0;
     if (darkHair && L[i] <= Math.min(hHi + 3, oMed - 15)) ac = 1 - Math.max(0, Math.min(1, (L[i] - hHi) / 6));
