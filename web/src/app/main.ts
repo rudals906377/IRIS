@@ -380,7 +380,9 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
     }
   }
   // 도안 시트(종이에 그린 도안 여러 개, 사람 없음): 종이를 바탕으로 잉크를 뽑는다. 하나만 쓰려면 ✂️ 도안 고르기
-  if (!r.makeup && !r.hair && !r.nail && !r.tattoo && !r.faces && (aiTattoo || mode === 'tattoo') && !aiOther && photoAnalyzer.lastInk) {
+  // 색으로 잡은 '가까운 피부'가 실은 베이지 종이 위 도안 시트(06번 플래시 시트)면 시트 길로(한 작품으로)
+  const closeSheet = !!r.tattooSrc?.paper && !!photoAnalyzer.lastInk && isDesignSheet(paperInk(photoAnalyzer.lastInk));
+  if (!r.makeup && !r.hair && !r.nail && (!r.tattoo || closeSheet) && !r.faces && (aiTattoo || mode === 'tattoo') && !aiOther && photoAnalyzer.lastInk) {
     const ps = paperInk(photoAnalyzer.lastInk);
     // 도안 수십 개가 빽빽한 시트(올드스쿨 플래시 등)는 여러 도안을 모아 한 작품(긴팔·등판)으로 입고 싶은 사람도 있다:
     // 시트 전체를 한 도안으로 크게 입히고, 하나만 쓰려면 ✂️ 도안 고르기로 고르게 한다
@@ -1424,7 +1426,7 @@ async function updateStillHair(): Promise<void> {
   // 고른 사진에서 화장을 읽었을 때만(얼굴이 보이는 사진)
   const mkOn = !!(lastSource && lastStyle?.makeup && (mk.lip || mk.eye || mk.skin));
   const mkp = mkOn ? await makeupPlan() : null;
-  const key = `${mkp ? `${mk.lip}:${mk.eye}:${mk.skin}` : 0}|${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen : 0}|${plan ? strength.toFixed(2) : 0}|${placed ? pk : ''}`;
+  const key = `${mkp ? `${mk.lip}:${mk.eye}:${mk.skin}` : 0}|${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen + ':' + chosen.nail.color?.join(',') : 0}|${plan ? strength.toFixed(2) : 0}|${placed ? pk : ''}`;
   // 네일을 골랐는데 내 손톱을 하나도 못 찾았으면(손이 작게 나온 전신 사진 등) 굽기 끝에 안내가 지워져 아무 일도 없는 듯 보였다
   // → 못 찾았다고 남긴다(손톱을 눌러 더하는 길도 함께). 같은 결과라 다시 굽지 않을 때도 다시 띄운다
   // 몇 개만 찾았을 때(전신 사진의 작은 손: 손끝을 눌러도 손가락 전체가 잡혀 열 손톱 중 하나만 칠해졌다)도 "다 찾았다"는 듯 보이지 않게 몇 개 놓쳤는지 남긴다
@@ -1594,8 +1596,19 @@ function rankNails(rgba: Uint8ClampedArray, w: number, h: number, nails: { mask:
 function refNailArt(): NailArt | null {
   if (refNails && refNails.src === lastSource && refNails.nails.length) return refNails;
   // 손톱 모양을 못 찾았으면(색만 앎) 그 색의 가상 손톱 그림으로 굽는다: 실시간 네일은 정지 사진에서 어긋나 보인다
-  const c = chosen.nail.color;
+  let c = chosen.nail.color;
   if (!c || !lastSource || (refNailsBusy && !refNails)) return null;
+  // 손톱을 못 찾은 사진의 잰 색은 손 점이 못 잡혀 배경·옷을 잰 경우가 많다(검은 가죽 위 누드 손톱이 회색, 니트 소매 위 베이지
+  // 손톱이 짙은 갈색, 흰 바탕의 분홍 손톱이 회색). AI 가 읽은 색 이름과 색도 12 넘게·밝기 20 넘게 다르면 이름 색으로(고른 색도 바꿈:
+  // 굽기 열쇠에 네일 색이 들어 있어 이름이 늦게 와도 다시 굽는다)
+  if (nailLabelColor && c !== nailLabelColor) {
+    const a = new Float32Array(3), b = new Float32Array(3);
+    // rgb2lab 은 0~255 정수 표를 쓴다(소수면 NaN)
+    const q = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 255);
+    rgb2lab(q(c[0]), q(c[1]), q(c[2]), a);
+    rgb2lab(q(nailLabelColor[0]), q(nailLabelColor[1]), q(nailLabelColor[2]), b);
+    if (Math.hypot(a[1] - b[1], a[2] - b[2]) > 12 || Math.abs(a[0] - b[0]) > 20) c = chosen.nail.color = nailLabelColor;
+  }
   const key = c.join(',');
   if (synthNail?.key !== key) {
     // 네일 색은 감마(sRGB 0~1): 측정 색(measureNail 이 감마로 돌려줌)에 감마를 한 번 더 씌우면 연핑크 시럽(13번)이

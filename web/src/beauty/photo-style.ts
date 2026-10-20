@@ -11,7 +11,7 @@ import { chroma, measureFace, type FaceMeasure } from './face-measure.ts';
 import type { RGB } from './makeup.ts';
 import type { NailStyle } from './nail.ts';
 import type { TattooDesign } from './tattoo-designs.ts';
-import { boxBlur, extractDesign, poseSkin, type InkSource, type Rect } from './tattoo-extract.ts';
+import { boxBlur, colorSkin, extractDesign, poseSkin, type InkSource, type Rect } from './tattoo-extract.ts';
 import type { StyleAIResult, StyleHints } from './style-attributes.ts';
 import { colorDiff, dominantColors, gam, glossFrom, hairTarget, hex, isSkin, lin, lipTarget, luma, tintTarget } from './style-math.ts';
 
@@ -51,7 +51,7 @@ export interface StyleResult {
   nail?: { color: RGB; style: NailStyle };
   tattoo?: TattooDesign;
   /** 타투를 뽑은 원본(분석 해상도)과 고른 영역: 사용자가 영역을 다시 고를 때·생성 서버에 참고 마스크를 보낼 때 쓴다 */
-  /** paper: 도안 시트(사람 없음) — 팔 대 팔로 옮기지 않는다 */
+  /** paper: 도안 시트(사람 없음)·관절점 없는 가까운 피부 사진(색으로 잡은 피부) — 팔 대 팔로 옮기지 않는다 */
   tattooSrc?: { src: InkSource; rect: Rect; inkMask: Float32Array; paper?: boolean };
   /** 사용자에게 보여 줄 한 줄 설명 */
   summary: string;
@@ -451,11 +451,23 @@ export class PhotoAnalyzer {
     }
     // 몸 분할이 사람을 거의 못 찾았으면(복잡한 배경) 몸 관절점 둘레의 피부색으로 피부를 다시 잡는다(타투용)
     let tatSeg: SegMasks | null = segMasks;
+    // 색으로 잡은 가까운 피부: 팔 띠·관절점이 없어 팔 대 팔로 옮기면 도안이 팔 길이로 늘어나 조각났다 → 도안으로 뽑아 자리에 놓는다
+    let closeSkin = false;
     if (wantTattoo && segMasks) {
       const sm = segMasks as SegMasks;
       let person = 0;
       for (let i = 0; i < sm.bg.length; i++) person += sm.body[i] + sm.face[i];
-      if (person / sm.bg.length < 0.02) {
+      // 얼굴 없는 가까운 팔 사진: 몸 분할이 팔을 거의 못 잡으면(15% 아래) 색으로 잡은 피부가 훨씬 넓을 때 그것을 쓴다
+      // (벌새 타투: 팔이 사진 절반 넘는데 몸 4% 라 잉크를 못 뽑아 '타투 없음'). 얼굴이 있으면(전신 사진의 베이지 벽) 안 씀
+      const cs = !facePts && person / sm.bg.length < 0.15 ? colorSkin(px.d, px.w, px.h) : null;
+      let csN = 0;
+      if (cs) for (let i = 0; i < cs.length; i++) csN += cs[i];
+      if (cs && csN / cs.length > Math.max(0.2, (person / sm.bg.length) * 3)) {
+        const bg = new Float32Array(cs.length);
+        for (let i = 0; i < bg.length; i++) bg[i] = 1 - cs[i];
+        tatSeg = { hair: new Float32Array(cs.length), body: cs, face: new Float32Array(cs.length), bg, w: px.w, h: px.h };
+        closeSkin = true;
+      } else if (person / sm.bg.length < 0.02) {
         onStatus?.('몸 찾는 중…');
         const ps = await this.pose(canvas).catch(() => null);
         if (ps) {
@@ -473,7 +485,7 @@ export class PhotoAnalyzer {
       const t = tattooFromSource(src, null);
       if (t) {
         out.tattoo = t.design;
-        out.tattooSrc = { src, rect: t.rect, inkMask: t.inkMask };
+        out.tattooSrc = { src, rect: t.rect, inkMask: t.inkMask, paper: closeSkin || undefined };
         parts.push('타투 도안');
       }
     }

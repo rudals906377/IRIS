@@ -570,6 +570,53 @@ export function dropEdgeBits(full: Float32Array, w: number, h: number, cloth?: F
 }
 
 /**
+ * 색만으로 잡은 피부(0/1). 팔을 가까이 찍은 타투 사진은 몸 분할이 팔을 거의 못 잡는다(벌새 타투: 팔이 사진 절반 넘는데 몸 4%).
+ * 피부색(YCbCr) 픽셀이 사진의 15% 넘을 때만, 그 가운데 색(a·b)에서 9 안인 픽셀을 피부로 보고, 닫기로 잉크 선 구멍을 메운 뒤
+ * 피부에 둘러싸인 구멍(색 타투 덩어리)도 채운다. 피부색이 적으면 null.
+ */
+export function colorSkin(d: Uint8ClampedArray, w: number, h: number): Float32Array | null {
+  const n = w * h;
+  const lab = new Float32Array(3);
+  const av: number[] = [], bv: number[] = [];
+  let cnt = 0;
+  for (let i = 0; i < n; i++) {
+    const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2];
+    const Y = 0.299 * r + 0.587 * g + 0.114 * b, Cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b, Cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b;
+    if (!(Y > 60 && Cr > 135 && Cr < 175 && Cb > 85 && Cb < 128 && r > g)) continue;
+    cnt++;
+    if (i % 3 === 0) { rgb2lab(r, g, b, lab); av.push(lab[1]); bv.push(lab[2]); }
+  }
+  if (cnt < n * 0.15 || av.length < 50) return null;
+  const med = (v: number[]) => v.sort((p, q) => p - q)[v.length >> 1];
+  const a0 = med(av), b0 = med(bv);
+  const raw = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    rgb2lab(d[i * 4], d[i * 4 + 1], d[i * 4 + 2], lab);
+    raw[i] = lab[0] > 15 && Math.hypot(lab[1] - a0, lab[2] - b0) < 9 ? 1 : 0;
+  }
+  const r = Math.max(2, Math.round(Math.min(w, h) * 0.012));
+  const grow = boxBlur(raw, w, h, r);
+  for (let i = 0; i < n; i++) grow[i] = grow[i] > 0.02 ? 1 : 0;
+  const shrink = boxBlur(grow, w, h, r);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = shrink[i] > 0.98 ? 1 : 0;
+  // 사진 가장자리와 이어지지 않은 비피부 구멍은 피부(그 위 타투)
+  const seen = new Uint8Array(n), st: number[] = [];
+  for (let x = 0; x < w; x++) for (const y of [0, h - 1]) { const i = y * w + x; if (!out[i] && !seen[i]) { seen[i] = 1; st.push(i); } }
+  for (let y = 0; y < h; y++) for (const x of [0, w - 1]) { const i = y * w + x; if (!out[i] && !seen[i]) { seen[i] = 1; st.push(i); } }
+  while (st.length) {
+    const i = st.pop()!, x = i % w, y = (i - x) / w;
+    for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) {
+      if (j < 0 || seen[j] || out[j]) continue;
+      seen[j] = 1;
+      st.push(j);
+    }
+  }
+  for (let i = 0; i < n; i++) if (!out[i] && !seen[i]) out[i] = 1;
+  return out;
+}
+
+/**
  * 몸 분할이 사람을 놓친 사진(복잡한 배경 등)용 피부 확률: 몸 관절점 둘레(팔·다리·몸통·목)에서
  * 피부색(얼굴 볼, 없으면 팔다리 가운데의 피부다운 색)과 색감이 가까운 곳. 잉크 선이 구멍이 되지 않게 닫기(넓혔다 줄이기)를 한다.
  * pose: MediaPipe Pose 33점(px), vis: 보임 정도. cheeks: 얼굴 볼 점(px, 없으면 빈 배열)

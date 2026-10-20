@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { bandMesh, faceRegions, strokeStrip, triangulate, LIPS_OUTER } from '../src/beauty/face-regions.ts';
 import { LOOKS, PALETTES } from '../src/beauty/palettes.ts';
 import { measureLimbWidth, placeFromPoint, tattooMesh, type PosePoints } from '../src/beauty/tattoo-place.ts';
-import { denseSleeve, dropEdgeBits, extractDesign, isDesignSheet, neutralInk, proposeRect, sheetRect, sleeveInk } from '../src/beauty/tattoo-extract.ts';
+import { colorSkin, denseSleeve, dropEdgeBits, extractDesign, isDesignSheet, neutralInk, proposeRect, sheetRect, sleeveInk } from '../src/beauty/tattoo-extract.ts';
 
 type P = { x: number; y: number };
 const area = (pts: P[], tris: number[]): number => {
@@ -332,6 +332,24 @@ test('타투 도안 뽑기: 피부 위 선은 잡고, 피부 위 새까만 큰 �
   const i = (81 - r.rect.y) * r.w + (80 - r.rect.x);
   assert.ok(r.rgba[i * 4 + 3] > 200);
   assert.ok(r.rgba[i * 4] < 140);
+});
+
+test('색으로 잡은 피부: 피부색이 넓은 가까운 팔 사진은 팔과 그 위 색 타투(둘러싸인 구멍)까지 피부, 배경은 아님. 피부색이 적으면 null', () => {
+  const w = 120, h = 120;
+  const d = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const arm = x >= 20 && x < 100;
+    const tat = (x - 60) ** 2 + (y - 60) ** 2 < 15 ** 2;
+    d.set(tat ? [40, 140, 70, 255] : arm ? [225, 170, 150, 255] : [60, 90, 70, 255], (y * w + x) * 4);
+  }
+  const s = colorSkin(d, w, h)!;
+  assert.ok(s, '피부 있음');
+  assert.equal(s[60 * w + 30], 1, '팔');
+  assert.equal(s[60 * w + 60], 1, '팔 위 타투(둘러싸인 구멍)');
+  assert.equal(s[60 * w + 5], 0, '배경');
+  const bg = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) bg.set([60, 90, 70, 255], i * 4);
+  assert.equal(colorSkin(bg, w, h), null);
 });
 
 test('타투 도안 뽑기: 배율을 곱해 소수가 된 영역도 잉크를 그대로 뽑는다(빈 도안이 되지 않게)', () => {
