@@ -556,3 +556,54 @@ test('검은 머리 밝게 염색: 내 머리 명암은 그대로 두고 색만 
   assert.ok(glint - plain < 15, `윤기 ${glint.toFixed(0)}, 바탕 ${plain.toFixed(0)}`);
   assert.ok(plain - shade > 5, `바탕 ${plain.toFixed(0)}, 그늘 ${shade.toFixed(0)}`);
 });
+
+test('구멍 메우기: 앞머리 가닥 사이로 보이는 밝은 이마 피부는 메우지 않고, 어두운 머리 구멍만 메운다', async () => {
+  const { closeHoles } = await import('../src/beauty/still-hair.ts');
+  const W = 60, H = 40, n = W * H;
+  const a = new Float32Array(n), rgba = new Uint8ClampedArray(n * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    // 검은 머리(루마 30) 사이 두 틈: x 18~19 는 어두운 덩어리(분할이 놓침), x 40~41 은 이마 피부(루마 200)
+    const skin = x === 40 || x === 41, hole = x === 18 || x === 19;
+    const v = skin ? 200 : 30;
+    rgba.set([v, v, v, 255], i * 4);
+    a[i] = y < 30 && !skin && !hole ? 1 : 0;
+  }
+  const c = closeHoles(a, W, H, 3, rgba);
+  assert.ok(c[15 * W + 18] > 0.9, `어두운 구멍 ${c[15 * W + 18]}`);
+  assert.ok(c[15 * W + 40] < 0.1, `이마 피부 ${c[15 * W + 40]}`);
+});
+
+test('가장자리 알파: 넓게 반쯤 잡힌 검은 머리(알파 0.79)는 확실한 머리에서 멀어질수록 부드럽게 — 네모 경계(한 칸에 0.1 넘는 계단)가 없다', () => {
+  const W = 90, H = 60, n = W * H;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n), faceP = new Float32Array(n);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    // 왼쪽 30칸 확실한 검은 머리 | 30~69 덜 확실한 검은 머리(0.79) | 밝은 배경
+    const v = x < 70 ? 25 + ((x + y) % 3) : 210;
+    rgba.set([v, v, v, 255], i * 4);
+    alpha[i] = x < 30 ? 1 : x < 70 ? 0.79 : 0;
+  }
+  edgeAlpha(rgba, alpha, W, H, faceP);
+  const row = 30 * W;
+  let maxStep = 0;
+  for (let x = 30; x < 69; x++) maxStep = Math.max(maxStep, Math.abs(alpha[row + x + 1] - alpha[row + x]));
+  assert.ok(alpha[row + 36] > 0.95, `가까운 곳 ${alpha[row + 36]}`);
+  assert.ok(maxStep < 0.1, `가장 큰 계단 ${maxStep.toFixed(2)}`);
+});
+
+test('가장자리 알파: 확실한 머리와 얼굴이 만나는 오목한 모서리의 반쯤 잡힌 검은 머리도 물든다(검은 삼각형이 남지 않는다)', () => {
+  const W = 80, H = 80, n = W * H;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n), faceP = new Float32Array(n);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    // 위쪽 띠(y<20)와 오른쪽 띠(x≥60)는 확실한 머리, 그 사이 모서리 안쪽 10px 은 덜 확실한 검은 머리(0.6), 나머지는 밝은 얼굴
+    const sure = y < 20 || x >= 60, half = !sure && y < 30 && x >= 50;
+    const v = sure || half ? 26 : 205;
+    rgba.set([v, v, v, 255], i * 4);
+    alpha[i] = sure ? 1 : half ? 0.6 : 0;
+  }
+  edgeAlpha(rgba, alpha, W, H, faceP);
+  // 모서리 안쪽(두 띠에서 각각 8~9px)
+  assert.ok(alpha[28 * W + 51] > 0.9, `모서리 ${alpha[28 * W + 51].toFixed(2)}`);
+});

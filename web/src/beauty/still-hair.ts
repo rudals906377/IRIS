@@ -600,7 +600,6 @@ export function guidedFilter(guide: Float32Array, p: Float32Array, w: number, h:
   return q;
 }
 
-/** 회색조 닫기(팽창 후 침식, 반지름 r): 알파 안의 작은 구멍(아주 어두운 머리카락 덩어리)을 메운다 */
 /**
  * 머리 속(둘레 반지름 r 안이 거의 다 머리카락: 알파 0.35 이상 92~99.5%)은 알파를 1 쪽으로 채운다(제자리 수정).
  * 머리를 뒤로 넘긴 머리처럼 분할이 덜 확신하면 머리 속 알파가 0.85 에 머물고 정수리 한쪽은 0.5 까지 떨어져,
@@ -616,7 +615,12 @@ export function fillInterior(a: Float32Array, w: number, h: number, r: number): 
   }
 }
 
-export function closeHoles(a: Float32Array, w: number, h: number, r: number): Float32Array {
+/**
+ * 회색조 닫기(팽창 후 침식, 반지름 r): 알파 안의 작은 구멍(아주 어두운 머리카락 덩어리)을 메운다.
+ * rgba 를 주면 머리(알파 0.9 넘음) 90% 밝기보다 뚜렷이 밝은 픽셀은 메우지 않는다: 정사각형 창이라 앞머리 가닥 사이로 보이는
+ * 이마 피부까지 네모나게 머리로 채워, 염색하면 눈썹 위에 회색 네모가 생겼다(한국인 남자 검은 앞머리). 구멍은 어두운 머리 덩어리다
+ */
+export function closeHoles(a: Float32Array, w: number, h: number, r: number, rgba?: Uint8ClampedArray): Float32Array {
   const pass = (src: Float32Array, horiz: boolean, max: boolean): Float32Array => {
     const out = new Float32Array(src.length);
     const n = horiz ? w : h;
@@ -634,7 +638,20 @@ export function closeHoles(a: Float32Array, w: number, h: number, r: number): Fl
     return out;
   };
   const d = pass(pass(a, true, true), false, true);
-  return pass(pass(d, true, false), false, false);
+  const c = pass(pass(d, true, false), false, false);
+  if (!rgba) return c;
+  const lum = (i: number) => 0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2];
+  const hs: number[] = [];
+  for (let i = 0; i < a.length; i += 3) if (a[i] > 0.9) hs.push(lum(i));
+  if (hs.length < 100) return c;
+  hs.sort((p, q) => p - q);
+  const hi = hs[Math.floor(hs.length * 0.9)] + 10;
+  for (let i = 0; i < a.length; i++) {
+    if (c[i] <= a[i]) continue;
+    const k = Math.max(0, Math.min(1, 1 - (lum(i) - hi) / 30));
+    c[i] = a[i] + (c[i] - a[i]) * k;
+  }
+  return c;
 }
 
 
@@ -938,15 +955,19 @@ export function edgeAlpha(rgba: Uint8ClampedArray, alpha: Float32Array, w: numbe
   let changed = 0;
   // ① 은 더 멀리(12px)까지, 단 분할이 반쯤은 머리로 본 곳(알파 0.3 이상)만: 머리 옆면 12px 띠가 머리색(L 9~13)인데 알파 0.54 에 머물러
   // 덜 물든 검붉은 띠와 세로 이음새가 생겼다(will1 오른쪽 옆머리). ② 색 섞임 추정은 경계 3px 안에서만
-  const near12 = boxBlur(core, w, h, 12);
+  // 12px 안/밖으로 딱 자르면 정사각형 거리라 넓은 반쯤 머리(뒷머리 그늘, 알파 0.79) 가운데에 덜 물든 네모가 남았다(한국인 단발 턱 옆)
+  // → 확실한 머리까지 둥근 거리(모따기 거리 변환)로 12px 까지 다, 24px 에서 0 으로 부드럽게.
+  // (창 안 머리 비율로 재면 머리·얼굴이 만나는 오목한 모서리에서 비율이 작아 검은 삼각형이 남았다)
+  const dc = chamferDist(core, w, h);
   for (let i = 0; i < n; i++) {
     if (alpha[i] > 0.97 || core[i]) continue;
     const close = nearCore[i] > 0;
-    if (!close && !(near12[i] > 0 && alpha[i] >= 0.3)) continue;
+    const reach = Math.max(0, Math.min(1, (24 - dc[i]) / 12));
+    if (!close && !(reach > 0 && alpha[i] >= 0.3)) continue;
     let ac = 0;
     if (darkHair && L[i] <= Math.min(hHi + 3, oMed - 15)) ac = 1 - Math.max(0, Math.min(1, (L[i] - hHi) / 6));
     if (!close) {
-      const na = alpha[i] + (Math.max(alpha[i], ac) - alpha[i]) * 0.85;
+      const na = alpha[i] + (Math.max(alpha[i], ac) - alpha[i]) * 0.85 * reach;
       if (na > alpha[i] + 0.02) { alpha[i] = na; changed++; }
       continue;
     }
@@ -961,6 +982,36 @@ export function edgeAlpha(rgba: Uint8ClampedArray, alpha: Float32Array, w: numbe
     if (na > alpha[i] + 0.02) { alpha[i] = na; changed++; }
   }
   return changed;
+}
+
+/** mask(0/1) 의 1 까지 거리(px, 3·4 모따기 근사: 정사각형이 아니라 거의 둥글다) */
+export function chamferDist(mask: Float32Array, w: number, h: number): Float32Array {
+  const d = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) d[i] = mask[i] > 0 ? 0 : 1e9;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    let v = d[i];
+    if (x > 0) v = Math.min(v, d[i - 1] + 3);
+    if (y > 0) {
+      v = Math.min(v, d[i - w] + 3);
+      if (x > 0) v = Math.min(v, d[i - w - 1] + 4);
+      if (x < w - 1) v = Math.min(v, d[i - w + 1] + 4);
+    }
+    d[i] = v;
+  }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+    const i = y * w + x;
+    let v = d[i];
+    if (x < w - 1) v = Math.min(v, d[i + 1] + 3);
+    if (y < h - 1) {
+      v = Math.min(v, d[i + w] + 3);
+      if (x < w - 1) v = Math.min(v, d[i + w + 1] + 4);
+      if (x > 0) v = Math.min(v, d[i + w - 1] + 4);
+    }
+    d[i] = v;
+  }
+  for (let i = 0; i < w * h; i++) d[i] /= 3;
+  return d;
 }
 
 /**
