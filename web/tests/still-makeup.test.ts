@@ -250,3 +250,25 @@ test('사진 가장자리 색도: 빨간 배경 사진은 높고 흰 배경 사�
   assert.ok(borderChroma(red, w, h) > 50, `빨강 ${borderChroma(red, w, h)}`);
   assert.ok(borderChroma(white, w, h) < 3, `흰색 ${borderChroma(white, w, h)}`);
 });
+
+test('메이크업: 고른 사진의 붉어진 이마(왁싱 자극·햇볕)는 화장이 아니다 — 내 이마에 분홍 띠로 옮기지 않고, 볼 블러셔는 옮긴다', () => {
+  const W = 200, H = 220;
+  const pts = face(100, 110, 60);
+  const skin = [200, 170, 150];
+  const my = new Uint8ClampedArray(W * H * 4), ref = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < W * H; i++) {
+    for (let c = 0; c < 3; c++) { my[i * 4 + c] = skin[c]; ref[i * 4 + c] = skin[c]; }
+    my[i * 4 + 3] = ref[i * 4 + 3] = 255;
+  }
+  // 고른 사진: 이마(눈썹 위 y 62~76)가 붉음, 오른볼에 블러셔
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4;
+    if (y >= 62 && y <= 76 && x > 70 && x < 130) { ref[o] = 222; ref[o + 1] = 150; ref[o + 2] = 145; }
+    if ((x - 70) ** 2 + (y - 135) ** 2 < 15 ** 2) { ref[o] = 225; ref[o + 1] = 140; ref[o + 2] = 140; }
+  }
+  const out = transferMakeup(my, W, H, pts, ref, W, H, pts, FACE_OVAL, { lip: 1, eye: 1, skin: 1 });
+  const lab = new Float32Array(3), a = (x: number, y: number, img: Uint8ClampedArray) => { const o = (y * W + x) * 4; rgb2lab(img[o], img[o + 1], img[o + 2], lab); return lab[1]; };
+  const dForehead = a(100, 68, out) - a(100, 68, my), dCheek = a(70, 135, out) - a(70, 135, my);
+  assert.ok(dForehead < 6, `이마 붉은 기 +${dForehead.toFixed(1)}`);
+  assert.ok(dCheek > 8, `볼 블러셔 +${dCheek.toFixed(1)}`);
+});
