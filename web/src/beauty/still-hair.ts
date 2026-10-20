@@ -844,45 +844,6 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
 }
 
 /**
- * 머리 둘레의 가는 올(배경과 섞인 반투명 픽셀)을 인물 매팅(MODNet)으로 찾아 머리 알파에 보탠다(제자리 수정, 바뀐 픽셀 수).
- * 얼굴 분할은 머리 덩어리만 잡아 정수리·옆으로 날린 올을 놓쳤다(칼로 오린 테두리, 염색하면 원래 색 올이 남음).
- * 머리(알파 0.5 이상)에서 reach 안, 얼굴·목(faceP 0.3 이상)이 아닌 곳에서, 매팅이 반투명(0.95 아래)인 픽셀만 본다
- * (옷·어깨는 매팅이 꽉 찬 덩어리라 빠짐). 다만 매팅은 512 해상도라 실제 올보다 넓고 흐리다: 그대로 쓰면 올이 없는 배경까지
- * 반쯤 머리로 잡혀 염색 뒤 머리 둘레에 하얀 테가 생겼다 → 매팅은 '올이 있는 자리'로만 쓰고, 머리 몫은 픽셀 밝기가 둘레 배경에서
- * 머리 쪽으로 간 비율(배경과 머리 밝기 차 25 넘을 때)로 정한다(둘 중 작은 쪽).
- */
-export function strandAlpha(rgba: Uint8ClampedArray, alpha: Float32Array, w: number, h: number, matte: Float32Array, faceP: Float32Array | null, reach: number): number {
-  const n = w * h;
-  const luma = new Float32Array(n);
-  for (let i = 0; i < n; i++) luma[i] = 0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2];
-  const core = new Float32Array(n), bgw = new Float32Array(n), bgv = new Float32Array(n);
-  const hs: number[] = [];
-  for (let i = 0; i < n; i++) {
-    if (alpha[i] >= 0.5) { core[i] = 1; if (alpha[i] >= 0.9 && i % 3 === 0) hs.push(luma[i]); }
-    // 배경: 머리·얼굴·목이 아니고 매팅도 거의 0 인 곳
-    else if (alpha[i] < 0.05 && matte[i] < 0.05 && !(faceP && faceP[i] > 0.3)) { bgw[i] = 1; bgv[i] = luma[i]; }
-  }
-  if (hs.length < 50) return 0;
-  hs.sort((p, q) => p - q);
-  const hL = hs[hs.length >> 1];
-  const near = boxBlur(core, w, h, Math.max(2, Math.round(reach)));
-  const rb = Math.max(4, Math.round(reach / 2));
-  const bN = boxBlur(bgw, w, h, rb), bS = boxBlur(bgv, w, h, rb);
-  let changed = 0;
-  for (let i = 0; i < n; i++) {
-    if (alpha[i] >= 0.5 || near[i] <= 0 || (faceP && faceP[i] >= 0.3)) continue;
-    const m = matte[i];
-    if (m < 0.04 || m >= 0.95 || bN[i] < 0.05) continue;
-    const bg = bS[i] / bN[i], c = bg - hL;
-    if (Math.abs(c) < 25) continue;
-    const t = Math.max(0, Math.min(1, ((bg - luma[i]) / c) * 1.2));
-    const a = Math.min(m, t);
-    if (a > alpha[i] + 0.02) { alpha[i] = a; changed++; }
-  }
-  return changed;
-}
-
-/**
  * 머리카락 알파의 '속'만 남긴다(둘레 r 칸 안이 모두 머리카락인 곳). 고른 사진 색 분포용:
  * 시스루 앞머리 사이로 보이는 이마, 날린 가닥 사이 배경이 머리색 분포의 밝은 쪽에 섞이면
  * 검은 머리 사진이 '하이라이트 머리'로 읽혀 내 머리에 피부·배경색 줄이 생긴다. 속이 너무 적으면(짧은·가는 머리) 그대로.
