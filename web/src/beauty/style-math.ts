@@ -119,3 +119,37 @@ export function isSkin(c: RGB): boolean {
   // 빨강이 가장 크고 파랑이 가장 작은 색상(주황~분홍)
   return g[0] >= g[1] && g[1] >= g[2] * 0.9;
 }
+
+/**
+ * 얼굴이 안 보이는 입술·립스틱 클로즈업(입술만 크게, 립스틱 제품)에서 립 색(sRGB 0~1). 얼굴 점을 못 찾아 '메이크업 없음'이 됐다.
+ * 붉은~분홍~코랄 쪽 색상(Lab 색상각 −25~55°)이고 채도가 높은(C 28 넘게) 픽셀이 사진의 4% 넘으면, 그중 채도가 높은 절반의 가운데 색.
+ * 피부(색상각 50~65°, C 15~25)·배경은 이 범위에 거의 안 든다. 없으면 null
+ */
+export function lipCloseup(d: Uint8ClampedArray, w: number, h: number): RGB | null {
+  const lab = new Float32Array(3);
+  const cand: { c: number; i: number }[] = [];
+  let n = 0;
+  for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
+    const o = (y * w + x) * 4;
+    n++;
+    rgb2labS(d[o], d[o + 1], d[o + 2], lab);
+    const C = Math.hypot(lab[1], lab[2]), hue = (Math.atan2(lab[2], lab[1]) * 180) / Math.PI;
+    if (lab[0] < 20 || lab[0] > 82 || C < 28 || hue < -25 || hue > 55) continue;
+    cand.push({ c: C, i: o });
+  }
+  if (cand.length < n * 0.04) return null;
+  cand.sort((p, q) => p.c - q.c);
+  const top = cand.slice(cand.length >> 1);
+  const ch = [0, 1, 2].map((k) => top.map((t) => d[t.i + k]).sort((p, q) => p - q)[top.length >> 1] / 255);
+  return ch as RGB;
+}
+
+function rgb2labS(r: number, g: number, b: number, out: Float32Array): void {
+  const f = (v: number) => { v /= 255; return v > 0.04045 ? ((v + 0.055) / 1.055) ** 2.4 : v / 12.92; };
+  const R = f(r), G = f(g), B = f(b);
+  const X = (0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047, Y = 0.2126 * R + 0.7152 * G + 0.0722 * B, Z = (0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883;
+  const t = (v: number) => (v > 0.008856 ? Math.cbrt(v) : 7.787 * v + 16 / 116);
+  out[0] = 116 * t(Y) - 16;
+  out[1] = 500 * (t(X) - t(Y));
+  out[2] = 200 * (t(Y) - t(Z));
+}

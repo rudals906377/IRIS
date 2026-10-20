@@ -161,7 +161,7 @@ test('타투 격자: 가로로 긴 도안은 팔을 따라 돌리고, 목에서�
 });
 
 // ---- 사진 → 설정 계산 ----
-import { dominantColors, gam, hairTarget, illumination, isSkin, lin, lipTarget, tintTarget, REF } from '../src/beauty/style-math.ts';
+import { dominantColors, gam, hairTarget, illumination, isSkin, lin, lipCloseup, lipTarget, tintTarget, REF } from '../src/beauty/style-math.ts';
 
 test('립 목표색: 기준 피부·중간 조명이면 사진 입술색이 그대로 목표색', () => {
   const lip = lin([0.8, 0.35, 0.35]);
@@ -475,4 +475,22 @@ test('무채색 잉크: 조명 색이 묻은 투과율(보라)을 밝기 그대�
   assert.ok(Math.abs(rgba[0] - L0) <= 1, `밝기 ${rgba[0]} vs ${L0}`);
   assert.equal(rgba[3], 255);
   assert.equal(rgba[4], 255);
+});
+
+test('입술 클로즈업: 얼굴이 안 보이는 립 사진에서 립 색을 읽고, 피부·흰 배경만 있는 사진은 null', () => {
+  const w = 100, h = 80, d = new Uint8ClampedArray(w * h * 4);
+  // 위 절반 흰 배경, 아래 왼쪽 피부, 가운데 코랄 립(입술 가운데는 더 진함)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const o = (y * w + x) * 4;
+    let c = [245, 243, 240];
+    if (y > 30) c = [228, 186, 164];
+    if (y > 40 && y < 70 && x > 25 && x < 85) c = x > 40 && x < 70 ? [232, 110, 100] : [236, 130, 116];
+    d.set([...c, 255], o);
+  }
+  const lip = lipCloseup(d, w, h)!;
+  assert.ok(lip, '립 색');
+  assert.ok(Math.abs(lip[0] * 255 - 232) < 8 && Math.abs(lip[1] * 255 - 110) < 12, `립 ${lip.map((v) => Math.round(v * 255))}`);
+  const skinOnly = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) skinOnly.set(i % 2 ? [228, 186, 164, 255] : [245, 243, 240, 255], i * 4);
+  assert.equal(lipCloseup(skinOnly, w, h), null);
 });

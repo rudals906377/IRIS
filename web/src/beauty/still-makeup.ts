@@ -153,6 +153,8 @@ export function transferMakeup(
   // → 바탕 색도가 진할수록, 블러셔가 잘 가지 않는 이마(눈썹 위)·턱(입술 아래) 피부의 가운데 색을 맨 피부 색으로 쓴다
   const cast = ramp(borderChroma(ref, rw, rh), 30, 50);
   const browTop = Math.min(...[...BROW_R_UPPER, ...BROW_L_UPPER].map((k) => dp[k].y));
+  const browIds = [...BROW_R_UPPER, ...BROW_L_UPPER, ...BROW_R_LOWER, ...BROW_L_LOWER];
+  const browMid = browIds.reduce((t, k) => t + dp[k].y, 0) / browIds.length;
   if (cast > 0) {
     const lipBot = Math.max(...LIPS_OUTER.map((k) => dp[k].y));
     const va: number[] = [];
@@ -214,8 +216,9 @@ export function transferMakeup(
       const rShade = (c === 0 ? 0.8 * ramp(shDark, 10, 20) : Math.max(0.7 * ramp(shDark, 4, 12), ramp(shDark, 10, 20))) * shNear;
       let v = (rfLow[c][i] - rfBase[c][i]) * (1 - rShade) - wm * (myLow[c][i] - myBase[c][i]) + Math.max(-3, Math.min(3, g * (rfBase[c][i] - myBase[c][i])));
       // 이마(눈썹 위)는 블러셔·립·섀도가 가지 않는 자리: 그곳의 색 차이는 화장보다 피부 상태·조명이다. 눈썹 왁싱 직후 사진의
-      // 붉어진 이마(a +10)가 내 이마 전체에 분홍 띠로 옮겨졌다 → 색(a·b)은 25% 만(밝기·하이라이트는 그대로)
-      if (c > 0) v *= 1 - 0.75 * ramp(browTop - ((i / w) | 0), fw * 0.02, fw * 0.07) * (1 - zm);
+      // 붉어진 이마(a +10)가 내 이마 전체에 분홍 띠로 옮겨졌다 → 색(a·b)은 25% 만(밝기·하이라이트는 그대로).
+      // 눈썹 높이 가운데부터 위로(미간·눈썹 바로 위도: 가장 높은 눈썹 끝부터 재면 그 아래 미간에 분홍이 남았다), 눈썹·눈가는 빼고
+      if (c > 0) v *= 1 - 0.75 * ramp(browMid - ((i / w) | 0), 0, fw * 0.05) * (1 - zm) * (1 - browM[i]);
       // 눈가에서 내 그늘(눈 안쪽 구석·눈 밑, 바탕보다 L 15~25 어두움)을 다 빼면 고른 사진에 그 그늘이 없는 자리가 +10~13 밝아진다:
       // 깊은 눈·어두운 피부(will1, 바탕 L 54)에서는 그늘이 사라진 주황 얼룩이 됐다. 컨실러도 그늘을 다 못 지우므로
       // 눈가의 순 밝힘은 고른 사진 자체의 밝힘(하이라이트) + 4 까지만

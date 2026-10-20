@@ -26,7 +26,7 @@ import { matchDarkness, matchLip, matchTint } from '../beauty/style-match.ts';
 import { analyzeStyle } from '../beauty/style-ai.ts';
 import { hintsFromStyleAI, promptFromStyleAI, type StyleHints } from '../beauty/style-attributes.ts';
 import { checkGenServer, generate as genGenerate, genServerUrl, setGenServerUrl, swapFaces, toDataUrl, type GenCategory } from '../beauty/gen-mode.ts';
-import { gam, lin, lipTarget, luma } from '../beauty/style-math.ts';
+import { gam, lin, lipCloseup, lipTarget, luma } from '../beauty/style-math.ts';
 import type { NailStyle } from '../beauty/nail.ts';
 import { BeautyEngine } from '../engine/engine.ts';
 import { fmt, summarize } from '../engine/stats.ts';
@@ -414,7 +414,8 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   strength = 1;
   amountEl.value = '1';
   const m = r.makeup;
-  if (m && lastSource) mkSource = lastSource;
+  // 립 색만 읽은 입술 사진은 얼굴이 없어 사진 화장 옮기기를 못 한다: 고른 립 색으로 칠한다
+  if (m && lastSource) mkSource = m.debug.lipOnly ? null : lastSource;
   if (m) {
     // 사진의 메이크업으로 바꾼다(사진에 없는 부위는 지움). 피부 보정은 사진이 보정된 경우가 많아 약하게 켠다
     for (const part of ['lip', 'blush', 'shadow', 'liner', 'brow', 'contour'] as const) {
@@ -537,6 +538,17 @@ function nailColorFromLabel(label: string | undefined): RGB | null {
   return null;
 }
 function applyHints(r: StyleResult, h: StyleHints): void {
+  // 얼굴 없는 입술·립스틱 클로즈업: 스타일 AI 가 메이크업이라 해도 얼굴 점이 없어 '찾지 못했어요'였다 → 립 색만 가져온다
+  // (다른 화장은 얼굴이 없어 못 읽는다고 알린다). 사진 화장 옮기기(얼굴 휘기)는 못 하므로 립 색으로 칠한다
+  if (h.category === 'makeup' && !r.makeup && !r.faces && r.thumb instanceof HTMLCanvasElement) {
+    const t = r.thumb;
+    const lip = lipCloseup(t.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, t.width, t.height).data, t.width, t.height);
+    if (lip) {
+      r.makeup = { lip: { color: lip, amount: 0.85, gloss: 0.3, style: 'full' }, debug: { lipOnly: 1 } };
+      r.missed = (r.missed ?? []).filter((x) => x !== '메이크업');
+      r.summary = '입술 사진에서 립 색만 가져왔어요(얼굴이 보이지 않아 다른 화장은 읽지 못했어요)';
+    }
+  }
   const m = r.makeup;
   if (m && h.makeup) {
     const k = h.makeup;
