@@ -301,6 +301,7 @@ function clearAll(): void {
   amountEl.value = '1';
   lastStyle = null;
   lastSource = null;
+  mkSource = null;
   refEl.hidden = true;
   applyAll();
   renderChips();
@@ -312,6 +313,9 @@ let photoAnalyzer: PhotoAnalyzer | null = null;
 let lastStyle: StyleResult | null = null;
 /** 마지막으로 고른 사진 원본(영역 고르기용) */
 let lastSource: ImageBitmap | null = null;
+/** 화장을 읽은 마지막 사진(원본). 다음에 고른 사진에 화장이 없으면(눈만 크게 찍은 사진·헤어 사진) 앞 사진 화장을 그대로 굽는다:
+ * 칩(립·섀도)은 앞 사진 것이 남는데 굽기만 '마지막 사진' 기준이라 빠지고 실시간 화장 셰이더로 떨어져 입술이 검게 칠해졌다 */
+let mkSource: ImageBitmap | null = null;
 
 /** 사진 속에 사람이 없고 바탕이 희거나 투명하면(도안 그림) 그대로 타투 도안으로 쓴다 */
 function looksLikeDesign(thumb: HTMLCanvasElement): boolean {
@@ -410,6 +414,7 @@ async function applyPhoto(source: ImageBitmap | HTMLImageElement, mode: PhotoMod
   strength = 1;
   amountEl.value = '1';
   const m = r.makeup;
+  if (m && lastSource) mkSource = lastSource;
   if (m) {
     // 사진의 메이크업으로 바꾼다(사진에 없는 부위는 지움). 피부 보정은 사진이 보정된 경우가 많아 약하게 켠다
     for (const part of ['lip', 'blush', 'shadow', 'liner', 'brow', 'contour'] as const) {
@@ -1348,7 +1353,7 @@ async function armTattooPlan(): Promise<TatPlan | null> {
 type MkPlan = { myPts: { x: number; y: number }[]; mySkin: Float32Array | null; ref: Uint8ClampedArray; rw: number; rh: number; refPts: { x: number; y: number }[]; refSkin: Float32Array | null; refHands: Float32Array | null };
 let mkPlan: { mine: ImageBitmap; ref: ImageBitmap; p: Promise<MkPlan | null>; ok: boolean } | null = null;
 function mkBaked(): boolean {
-  return !!(PHOTO_MODE && !swapMode && mkPlan?.ok && mkPlan.mine === photoOriginal && mkPlan.ref === lastSource);
+  return !!(PHOTO_MODE && !swapMode && mkPlan?.ok && mkPlan.mine === photoOriginal && mkPlan.ref === mkSource);
 }
 function mkAmounts(): MakeupAmounts {
   const has = (k: PartName) => !!(chosen[k].color && !off.has(k));
@@ -1356,7 +1361,7 @@ function mkAmounts(): MakeupAmounts {
   return { lip: has('lip') ? v : 0, eye: has('shadow') || has('liner') ? v : 0, skin: has('blush') || has('contour') || has('base') ? v : 0 };
 }
 async function makeupPlan(): Promise<MkPlan | null> {
-  const mine = photoOriginal, ref = lastSource;
+  const mine = photoOriginal, ref = mkSource;
   if (!mine || !ref) return null;
   if (mkPlan?.mine === mine && mkPlan.ref === ref) return mkPlan.p;
   const p = (async (): Promise<MkPlan | null> => {
@@ -1424,7 +1429,7 @@ async function updateStillHair(): Promise<void> {
   const placed = placeOn && !!plan;
   const mk = mkAmounts();
   // 고른 사진에서 화장을 읽었을 때만(얼굴이 보이는 사진)
-  const mkOn = !!(lastSource && lastStyle?.makeup && (mk.lip || mk.eye || mk.skin));
+  const mkOn = !!(mkSource && (mk.lip || mk.eye || mk.skin));
   const mkp = mkOn ? await makeupPlan() : null;
   const key = `${mkp ? `${mk.lip}:${mk.eye}:${mk.skin}` : 0}|${amount.toFixed(3)}|${lastSource ? 1 : 0}|${nailOn ? myNails.length + ':' + strength.toFixed(2) + ':' + nailGen + ':' + chosen.nail.color?.join(',') : 0}|${plan ? strength.toFixed(2) : 0}|${placed ? pk : ''}`;
   // 네일을 골랐는데 내 손톱을 하나도 못 찾았으면(손이 작게 나온 전신 사진 등) 굽기 끝에 안내가 지워져 아무 일도 없는 듯 보였다
