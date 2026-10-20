@@ -2,7 +2,7 @@
 // 사진 모드 염색(분위 대응 색 옮기기·가이디드 필터) 단위 테스트
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Q, colorGate, fillInterior, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture, earGate, edgeAlpha, softenLiftDetail } from '../src/beauty/still-hair.ts';
+import { Q, colorGate, fillInterior, flyaways, guidedFilter, hairDist, pureHair, skinGate, quantilePos, recolorHair, strandTexture, earGate, edgeAlpha, softenLiftDetail, rgb2lab } from '../src/beauty/still-hair.ts';
 
 // w×h 그림: 왼쪽 반은 머리카락(밝기 줄무늬), 오른쪽 반은 배경
 function picture(w: number, h: number, base: [number, number, number], stripe: number): { rgba: Uint8ClampedArray; alpha: Float32Array } {
@@ -531,4 +531,28 @@ test('밝게 염색한 머리 다듬기: 날카로운 흰 줄(은박) 대비는 
   const a0 = new Uint8ClampedArray(rgba);
   softenLiftDetail(a0, w, h, alpha, 1, 0);
   assert.equal(sd(a0).sd.toFixed(3), before.sd.toFixed(3));
+});
+
+test('검은 머리 밝게 염색: 내 머리 명암은 그대로 두고 색만 — 가는 윤기 반사가 흰 줄로 커지지 않고, 그늘은 남는다', () => {
+  // 한국인 검은 머리: 바탕 루마 22~26, 4줄마다 가는 윤기(루마 60), 오른쪽 절반은 넓은 그늘(바탕의 60%)
+  const w = 80, h = 60, n = w * h;
+  const rgba = new Uint8ClampedArray(n * 4), alpha = new Float32Array(n).fill(1);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const base = 22 + ((x * 3 + y) % 5);
+    let c = y % 4 === 0 ? 60 : base;
+    if (x >= 40) c = Math.round(c * 0.6);
+    rgba.set([c, c, c, 255], (y * w + x) * 4);
+  }
+  const ref = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) { const v = 150 + (i % 40); ref.set([v + 25, v, v - 15, 255], i * 4); }
+  const mine = hairDist(rgba, alpha, 0.6, 100)!, rd = hairDist(ref, new Float32Array(n).fill(1), 0.6, 100)!;
+  const out = recolorHair(rgba, w, h, alpha, mine, rd, 1);
+  const lab = new Float32Array(3);
+  const L = (x: number, y: number) => { const o = (y * w + x) * 4; rgb2lab(out[o], out[o + 1], out[o + 2], lab); return lab[0]; };
+  let glint = 0, plain = 0, shade = 0, k = 0;
+  for (let y = 12; y < 48; y += 4) for (let x = 10; x < 30; x++) { glint += L(x, y); plain += L(x, y + 2); shade += L(x + 40, y + 2); k++; }
+  glint /= k; plain /= k; shade /= k;
+  // 윤기는 밝힌 머리 위 반사 정도(L 15 안), 그늘 쪽은 여전히 어둡다(L 5 넘게)
+  assert.ok(glint - plain < 15, `윤기 ${glint.toFixed(0)}, 바탕 ${plain.toFixed(0)}`);
+  assert.ok(plain - shade > 5, `바탕 ${plain.toFixed(0)}, 그늘 ${shade.toFixed(0)}`);
 });

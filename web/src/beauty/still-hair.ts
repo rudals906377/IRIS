@@ -248,6 +248,8 @@ export function recolorHair(
   const blackRef = Math.max(0, Math.min(1, (28 - ref.L[Q / 2]) / 6));
   // ① 픽셀마다 순위(0~1)
   const U = new Float32Array(w * h).fill(-1);
+  // 리본이 민 몫(0~1): 크게 밝힐 때(아래 relight)는 순위 대신 이 몫으로 밝기 수준만 가닥 따라 올린다
+  const rib = ribbons ? new Float32Array(w * h) : null;
   // 내 머리 밝기 분포 위쪽(97%)보다 훨씬 밝은 픽셀은 머리카락이 아니라 가르마 두피·배경일 때가 많다(알파 줄일 몫, 0~1)
   const over = new Float32Array(w * h);
   const qHi = mine.L[Math.round(Q * 0.97)], qMid = mine.L[Q / 2];
@@ -270,6 +272,7 @@ export function recolorHair(
       // 리본 안을 가는 올 무늬로 끊는다: 한 덩어리로 밝히면 물감으로 칠한 띠처럼 평평하다(실제 하이라이트는 밝은 올 묶음)
       const tex = strands ? Math.max(0.3, Math.min(1, 0.65 + strands[i] * 0.7)) : 1;
       U[i] += wr * sm * tex * (1 - U[i]);
+      rib![i] = wr * sm * tex;
     }
   }
   // 순위를 머리 속(알파 0.9 넘는 곳) 기준으로 고르게 편다: 내 분포는 알파 0.6 넘는 가장자리·그늘까지 넣어 재므로 머리 속만 보면
@@ -360,6 +363,56 @@ export function recolorHair(
     }
   }
   // (리본은 순위를 위로만 미므로 다시 고르게 펴지 않는다: 펴면 가장 어두운 쪽이 다른 픽셀로 바뀌어 검은 점이 생긴다)
+  // 크게 밝히는 염색(고른 사진 가운데 밝기가 내 머리보다 L 12 넘게 밝음, 투톤·하이라이트 아님)은 '내 머리에서 색만' 바꾼다:
+  // 분위 대응은 픽셀마다 밝기 순위를 새로 매겨 검은 머리의 잡음·가는 윤기가 흰 줄이 되고 결이 새로 그린 듯 '사진을 덮어쓴' 느낌이었다
+  // (한국인 검은 머리 → 애쉬·밀크브라운). 내 머리의 넓은 명암 B(머리 크기 1/12 평균)와 잔결 비율 D = Y/B 를 그대로 두고
+  // 밝기 수준만 고른 사진 가운데로: Y' = Y_ref · (B / B 가운데) · D^0.8. 색(a·b)은 그 밝기의 고른 사진 분위 색
+  const relight = ref.L[Q / 2] > mine.L[Q / 2] + 12;
+  let relB: Float32Array | null = null, relBm = 1, relK = 1;
+  const yOfL = (l: number): number => { const f = (l + 16) / 116; return f > 6 / 29 ? f ** 3 : (f - 16 / 116) * 3 * (6 / 29) ** 2; };
+  // 내 픽셀의 명암 모양(1 근처): 넓은 명암은 그늘 쪽만 비율로(밝은 쪽은 로그로 눌러), 잔결은 그늘(1 아래)만 비율로.
+  // 가장자리(알파 0.95 아래)의 밝음은 배경 몫이라 1 까지(배경 몫은 아래 가장자리 합성이 맡는다).
+  // 새까만 픽셀(루마 24 아래, JPEG 잡음·깊은 틈)의 비는 믿을 수 없어 그대로 두면 밝힌 머리에 검은 점 → 어두울수록 비의 바닥을 올린다
+  const relShape = (i: number, Yp: number, Bp: number): number => {
+    const sB = Bp / relBm;
+    const floor = 0.05 + 0.55 * Math.max(0, Math.min(1, (24 - luma[i]) / 16));
+    const D = Math.max(floor, Math.min(1, Yp / Bp));
+    return Math.min(sB, 1 + 0.3 * Math.log(Math.max(1, sB))) * Math.pow(D, 0.8);
+  };
+  if (relight) {
+    const Yl = new Float32Array(w * h), wt = new Float32Array(w * h);
+    let bx0 = w, bx1 = 0, by0 = h, by1 = 0;
+    for (let i = 0; i < w * h; i++) {
+      // 넓은 명암은 속머리(알파 0.95 이상)로만 잰다: 배경이 섞인 가장자리가 끼면 둘레 B 가 부풀어 테가 밝아진다
+      if (alpha[i] < 0.95) continue;
+      wt[i] = alpha[i];
+      Yl[i] = (0.2126 * LIN[rgba[i * 4]] + 0.7152 * LIN[rgba[i * 4 + 1]] + 0.0722 * LIN[rgba[i * 4 + 2]]) * alpha[i];
+      if (alpha[i] > 0.5) { const x = i % w, y = (i / w) | 0; if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y; }
+    }
+    const rr = Math.max(3, Math.round(Math.max(bx1 - bx0, by1 - by0, 1) / 12));
+    const den = boxBlur(wt, w, h, rr);
+    // 가는 윤기가 평균을 끌어올리면 그 사이 바탕이 그늘(비 1 아래)로 읽혀 어두워지고 윤기가 상대로 도드라진다 → 윤기를 둘레 평균까지 깎고 다시 잰다
+    const num0 = boxBlur(Yl, w, h, rr);
+    for (let i = 0; i < w * h; i++) if (wt[i] > 0 && den[i] > 1e-3) Yl[i] = Math.min(Yl[i], (num0[i] / den[i]) * wt[i]);
+    const num = boxBlur(Yl, w, h, rr);
+    relB = new Float32Array(w * h);
+    const bs: number[] = [];
+    for (let i = 0; i < w * h; i++) {
+      relB[i] = den[i] > 1e-3 ? num[i] / den[i] : 0;
+      if (alpha[i] > 0.5 && i % 2 === 0) bs.push(relB[i]);
+    }
+    bs.sort((p, q) => p - q);
+    relBm = Math.max(1e-4, bs[bs.length >> 1] ?? 1e-4);
+    // 그늘만 남기면 모양의 가운데가 1 아래라 고른 사진보다 어두워진다(가운데 L 58 → 42) → 모양 가운데를 1 로
+    const ms: number[] = [];
+    for (let i = 0; i < w * h; i += 2) {
+      if (alpha[i] < 0.95) continue;
+      const Yp = 0.2126 * LIN[rgba[i * 4]] + 0.7152 * LIN[rgba[i * 4 + 1]] + 0.0722 * LIN[rgba[i * 4 + 2]];
+      ms.push(relShape(i, Yp, Math.max(1e-4, relB[i])));
+    }
+    ms.sort((p, q) => p - q);
+    relK = 1 / Math.max(0.05, ms[ms.length >> 1] ?? 1);
+  }
   // 머리카락 안쪽(둘레 알파가 꽉 찬 곳)의 어두운 픽셀은 알파가 덜 차도 원래 검정이 비쳐 얼룩이 된다 → 둘레 알파로 채운다
   const aBlur = boxBlur(alpha, w, h, 3);
   // 가장자리(알파 1 아래)는 머리카락과 배경이 섞인 픽셀: 픽셀 전체를 새 색 쪽으로 알파만큼 당기면 배경 몫까지 덜어져
@@ -390,7 +443,18 @@ export function recolorHair(
     }
     const bandAt = (key: 'L' | 'a' | 'b', tt = t): number => (mix ? at(mix[0][key], tt) * (1 - mix[2]) + at(mix[1][key], tt) * mix[2] : at(key === 'L' ? rL : key === 'a' ? ra : rb, tt));
     let L = bandAt('L');
-    if (strands && local) {
+    if (relB) {
+      // 검은 머리의 밝은 쪽(윤기)은 대부분 머리색과 상관없는 반사라 밝힌 뒤에도 같은 크기로 더해질 뿐이다: 비율로 곱하면 윤기가
+      // 밝힌 배수만큼 커져 은박·구리 같았다(결 세기 원본 3.6 → 9.4). 그늘만 비율로(relShape), 윤기(넘는 몫)는 원래 선형 밝기 차를 더한다.
+      // 밝기 수준은 고른 사진 가운데(투톤·옴브레는 내 세로 위치의 띠 가운데). 하이라이트(hl)는 바탕을 고른 사진 아래쪽 순위로 내리고
+      // 리본 가닥에서만 위쪽 순위로 올린다(가닥 모양은 리본, 명암은 내 머리)
+      const Yp = 0.2126 * LIN[rgba[o]] + 0.7152 * LIN[rgba[o + 1]] + 0.0722 * LIN[rgba[o + 2]];
+      const Bp = Math.max(1e-4, relB[i]);
+      const spec = alpha[i] < 0.95 ? 0 : Math.max(0, Bp - relBm) + Math.max(0, Yp - Bp);
+      const base = 0.5 - 0.1 * hl, lvT = Q * (base + (rib ? rib[i] : 0) * (0.93 - base));
+      const Yt = yOfL(bandAt('L', lvT)) * relK * relShape(i, Yp, Bp) + spec * 1.2;
+      L = Yt > 0.008856 ? 116 * Math.cbrt(Yt) - 16 : 903.3 * Yt;
+    } else if (strands && local) {
       // 원래 잔결이 약한 곳일수록(표준편차 루마 3 아래) 그린 올 무늬를 세게
       const weak = 1 - Math.max(0, Math.min(1, (Math.sqrt(local[i]) - 1.5) / 4));
       // 그린 올 무늬도 어두운 쪽은 반만(검은 점처럼 보이지 않게)
@@ -399,16 +463,16 @@ export function recolorHair(
     }
     // 잔결: 내 픽셀이 주변보다 밝거나 어두운 정도(L 단위 근사)
     // 크게 밝힐 때 원본 어두운 픽셀의 잡음(JPEG)이 그대로 검은 점이 되므로 살짝 흐린 밝기로 재고, 어둡게 하는 쪽은 4 까지만
-    const dl = (((lift > 0 ? blur2[i] : luma[i]) - box[i]) / 255) * 100 * detail;
+    const dl = relB ? 0 : (((lift > 0 ? blur2[i] : luma[i]) - box[i]) / 255) * 100 * detail;
     L += lift > 0 ? Math.max(-4, dl) : dl;
-    if (fine) {
+    if (fine && !relB) {
       // 크게 밝힐 때 올 결: 어두운 머리의 올 대비는 밝기 '차'로는 아주 작아 밝힌 뒤 평평한 물감처럼 된다
       // → 1px 흐린 밝기 / 3px 상자 평균의 '비'로 올 결을 되살린다(어둡게 하는 쪽은 60%: 검은 점 방지). 정보 없는 새까만 곳(루마 16 아래)은 빼고
       const rr = Math.max(-0.2, Math.min(0.12, Math.log((fine[i] + 6) / (box[i] + 6))));
       const info = Math.max(0, Math.min(1, (luma[i] - 16) / 16));
       L *= Math.exp((rr < 0 ? rr * 0.6 : rr) * 0.6 * lift * info);
     }
-    if (mid2 && mid8) {
+    if (mid2 && mid8 && !relB) {
       // 눌린 결을 되살릴 때는 어두운 쪽 폭을 더 둔다(흰머리 사이 검은 올의 비는 −0.6 까지: 그게 결이다)
       const r2 = Math.max(-0.25 - 0.35 * comp, Math.min(0.2 + 0.1 * comp, Math.log((mid2[i] + 6) / (mid8[i] + 6))));
       const info2 = Math.max(0, Math.min(1, (luma[i] - 6) / 12));
@@ -424,7 +488,7 @@ export function recolorHair(
     }
     // 흑발로 묶어 밝기를 내렸으면 색도 그 밝기에 해당하는 분위에서: 윤기 분위(고른 사진 정수리 반사, 라벤더 a +5~10·b −10)의
     // 색을 어두운 픽셀에 입히면 검은 머리가 보라빛이 됐다(sam1 × 19)
-    const tc = blackRef > 0 ? Math.max(TRIM, Math.min(Q - TRIM, quantilePos(rL, Math.max(0, Math.min(100, L))))) : t;
+    const tc = blackRef > 0 || relB ? Math.max(TRIM, Math.min(Q - TRIM, quantilePos(rL, Math.max(0, Math.min(100, L))))) : t;
     // 흑발은 L 20 아래의 어두운 픽셀일수록 색기가 적다(고른 사진 검은 머리의 a +3·b −5 는 조명 색): 어두운 만큼 색을 줄인다
     const kd = blackRef > 0 ? 1 - blackRef * (1 - Math.max(0, Math.min(1, L / 20))) : 1;
     lab2rgb(Math.max(0, Math.min(100, L)), bandAt('a', tc) * kd, bandAt('b', tc) * kd, tmp, 0);
@@ -440,7 +504,7 @@ export function recolorHair(
   const stretch = Math.max(0, Math.min(1, (refRange / mineRange - 1.3) / 1));
   // 하이라이트·발레아쥬 사진(밝은 가닥을 일부러 넣음)은 가닥 대비가 곧 모양이라 누르지 않는다
   const soft = Math.max(lift, stretch) * (1 - hl);
-  if (soft > 0.05) softenLiftDetail(out, w, h, alpha, amt, soft);
+  if (soft > 0.05 && !relight) softenLiftDetail(out, w, h, alpha, amt, soft);
   return out;
 }
 
@@ -777,6 +841,45 @@ export function flyaways(rgba: Uint8ClampedArray, w: number, h: number, alpha: F
     const prox = Math.min(1, near[i] * 20);
     alpha[i] = Math.max(alpha[i], s * prox);
   }
+}
+
+/**
+ * 머리 둘레의 가는 올(배경과 섞인 반투명 픽셀)을 인물 매팅(MODNet)으로 찾아 머리 알파에 보탠다(제자리 수정, 바뀐 픽셀 수).
+ * 얼굴 분할은 머리 덩어리만 잡아 정수리·옆으로 날린 올을 놓쳤다(칼로 오린 테두리, 염색하면 원래 색 올이 남음).
+ * 머리(알파 0.5 이상)에서 reach 안, 얼굴·목(faceP 0.3 이상)이 아닌 곳에서, 매팅이 반투명(0.95 아래)인 픽셀만 본다
+ * (옷·어깨는 매팅이 꽉 찬 덩어리라 빠짐). 다만 매팅은 512 해상도라 실제 올보다 넓고 흐리다: 그대로 쓰면 올이 없는 배경까지
+ * 반쯤 머리로 잡혀 염색 뒤 머리 둘레에 하얀 테가 생겼다 → 매팅은 '올이 있는 자리'로만 쓰고, 머리 몫은 픽셀 밝기가 둘레 배경에서
+ * 머리 쪽으로 간 비율(배경과 머리 밝기 차 25 넘을 때)로 정한다(둘 중 작은 쪽).
+ */
+export function strandAlpha(rgba: Uint8ClampedArray, alpha: Float32Array, w: number, h: number, matte: Float32Array, faceP: Float32Array | null, reach: number): number {
+  const n = w * h;
+  const luma = new Float32Array(n);
+  for (let i = 0; i < n; i++) luma[i] = 0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2];
+  const core = new Float32Array(n), bgw = new Float32Array(n), bgv = new Float32Array(n);
+  const hs: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (alpha[i] >= 0.5) { core[i] = 1; if (alpha[i] >= 0.9 && i % 3 === 0) hs.push(luma[i]); }
+    // 배경: 머리·얼굴·목이 아니고 매팅도 거의 0 인 곳
+    else if (alpha[i] < 0.05 && matte[i] < 0.05 && !(faceP && faceP[i] > 0.3)) { bgw[i] = 1; bgv[i] = luma[i]; }
+  }
+  if (hs.length < 50) return 0;
+  hs.sort((p, q) => p - q);
+  const hL = hs[hs.length >> 1];
+  const near = boxBlur(core, w, h, Math.max(2, Math.round(reach)));
+  const rb = Math.max(4, Math.round(reach / 2));
+  const bN = boxBlur(bgw, w, h, rb), bS = boxBlur(bgv, w, h, rb);
+  let changed = 0;
+  for (let i = 0; i < n; i++) {
+    if (alpha[i] >= 0.5 || near[i] <= 0 || (faceP && faceP[i] >= 0.3)) continue;
+    const m = matte[i];
+    if (m < 0.04 || m >= 0.95 || bN[i] < 0.05) continue;
+    const bg = bS[i] / bN[i], c = bg - hL;
+    if (Math.abs(c) < 25) continue;
+    const t = Math.max(0, Math.min(1, ((bg - luma[i]) / c) * 1.2));
+    const a = Math.min(m, t);
+    if (a > alpha[i] + 0.02) { alpha[i] = a; changed++; }
+  }
+  return changed;
 }
 
 /**
