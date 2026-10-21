@@ -972,12 +972,15 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   };
   const r = full ? (arm.rUp + arm.rLo) / 2 : rAt(0);
   // 실시간 타투(tattooMesh)와 같은 크기 규칙: 세로 = 부위 길이의 25~85%, 가로는 둘레 절반을 넘지 않게
-  const rotate = d.aspect > 1.3;
-  const aspect = rotate ? 1 / d.aspect : d.aspect;
   // 시트 전체(wrap)는 소매처럼 부위 길이의 95% 를 채우고 둘레를 감는다(앞에서는 가운데가 보임). 긴팔은 둘레 1.25바퀴까지
   // (팔 길이를 채우려면 시트 가로가 둘레보다 넓어진다: 뒤로 돌아간 부분은 안 보일 뿐 도안은 줄지 않게)
-  let h = segLen * (tattoo.wrap ? 0.95 : 0.25 + 0.6 * tattoo.size), w = h * aspect;
   const maxW = Math.PI * r * (full ? 2.5 : tattoo.wrap ? 2 : 0.9);
+  const h0 = segLen * (tattoo.wrap ? 0.95 : 0.25 + 0.6 * tattoo.size);
+  // 가로로 긴 도안은 팔을 따라 돌려 크게 넣는다. 다만 돌리지 않아도 절반 넘는 크기로 들어가면(손목 무한대·글자 같은 작은 도안)
+  // 고른 사진처럼 팔을 가로지르게 둔다(돌리면 무한대가 세로 8 자가 됐다)
+  const rotate = d.aspect > 1.3 && (tattoo.wrap || maxW / (h0 * d.aspect) < 0.5);
+  const aspect = rotate ? 1 / d.aspect : d.aspect;
+  let h = h0, w = h * aspect;
   if (w > maxW) { h *= maxW / w; w = maxW; }
   const lc = segStart + segLen * Math.min(0.92, Math.max(0.08, tattoo.along ?? 0.5));
   const th0 = Math.asin(Math.min(0.95, Math.max(-0.95, tattoo.across ?? 0)));
