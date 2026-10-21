@@ -922,9 +922,17 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   const legs = m[1] === 'thigh' || m[1] === 'calf';
   const a = armsOf(body.pose, body.skin, engine.source.width, engine.source.height, legs)[m[2] === 'L' ? 0 : 1];
   if (!a.seen || a.vis < 0.4) {
-    // 관절점은 있는데 피부가 안 보이면(긴소매·바지) 굽어도 안 보인다: 아무 변화 없이 끝나 무엇이 잘못됐는지 몰랐다
-    if (a.vis >= 0.4 && !a.seen) {
-      tatNote = `고른 타투 자리(${legs ? '다리' : '팔'})가 내 사진에선 옷에 가려 보이지 않아요. 📍 자리 고르기로 보이는 피부에 놓아 보세요`;
+    // 아래팔·손목 자리인데 팔꿈치 아래가 사진 밖이고(상반신 사진) 위팔은 보이면: 위팔에 미리 보여 주고 알린다
+    // (손목 타투를 민소매 상반신 사진에 고르면 아무것도 안 바뀌고 안내도 없었다)
+    if (m[1] === 'forearm' && a.upVis >= 0.5 && a.upSeen) {
+      tattoo.place = `upperArm${m[2]}` as typeof tattoo.place;
+      tattoo.along = tattoo.across = undefined;
+      tatNote = '고른 타투 자리(아래팔·손목)가 내 사진에선 보이지 않아요(사진 밖). 보이는 위팔에 미리 보여 드려요(📍 자리 고르기로 옮길 수 있어요)';
+      return placeTattooPlan();
+    }
+    // 관절점이 흐리거나(사진 밖) 피부가 안 보이면(긴소매·바지·재킷) 굽어도 안 보인다: 아무 변화 없이 끝나 무엇이 잘못됐는지 몰랐다
+    if (a.vis >= 0.4 || !a.seen) {
+      tatNote = `고른 타투 자리(${legs ? '다리' : '팔'})가 내 사진에선 보이지 않아요(사진 밖이거나 옷에 가려 있어요). 📍 자리 고르기로 보이는 피부에 놓아 보세요`;
       tatCoveredKey = placeKey();
       // 다시 굽기를 부르지 않게 실시간 타투만 끈다(applyTattooToEngine 은 다시 굽기를 예약한다)
       engine.tattoo = null;
@@ -1087,7 +1095,7 @@ function legSkin(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: F
 }
 
 /** 사진 관절점 → 팔(왼·오른, 사람 기준) */
-function armsOf(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Float32Array, W: number, H: number, legs = false): { arm: Arm; vis: number; seen: boolean }[] {
+function armsOf(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Float32Array, W: number, H: number, legs = false): { arm: Arm; vis: number; seen: boolean; upVis: number; upSeen: boolean }[] {
   // 다리도 같은 3점 사슬(엉덩이·무릎·발목)로 본다
   return (legs ? [[23, 25, 27], [24, 26, 28]] : [[11, 13, 15], [12, 14, 16]]).map(([s, e, w]) => {
     const P = pose.p;
@@ -1097,6 +1105,9 @@ function armsOf(pose: { p: { x: number; y: number }[]; vis: number[] }, skin: Fl
       arm: { s: P[s], e: P[e], w: P[w], rUp: ru ?? up * 0.2, rLo: rl ?? lo * 0.16 },
       vis: Math.min(pose.vis[s], pose.vis[e]),
       seen: ru !== null || rl !== null,
+      // 위팔(허벅지)만: 어깨가 확실하고 어깨~팔꿈치 피부가 보이는지(팔꿈치가 사진 끝에 걸린 사진)
+      upVis: pose.vis[s],
+      upSeen: ru !== null,
     };
   });
 }
@@ -1442,9 +1453,10 @@ async function updateStillHair(): Promise<void> {
     }
   }
   // 팔 대 팔이 안 되면 고른 자리에 굽는다
-  const pk = placeKey();
   const placeOn = !plan && !!tattoo.design && !off.has('tattoo');
   if (placeOn) plan = await placeTattooPlan();
+  // 자리를 위팔로 옮겼을 수 있으니 열쇠는 계획 뒤에
+  const pk = placeKey();
   const placed = placeOn && !!plan;
   const mk = mkAmounts();
   // 고른 사진에서 화장을 읽었을 때만(얼굴이 보이는 사진)
