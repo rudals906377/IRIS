@@ -252,15 +252,17 @@ export function proposeRect(src: InkSource, found = findInk(src)): Rect | null {
   const gm = new Uint8Array(ink.length);
   for (let i = 0; i < ink.length; i++) gm[i] = grown[i] > 0 ? 1 : 0;
   const { lab, n } = label(gm, w, h);
-  // 무리마다 잉크 양. 피부 가장자리 띠(짧은 변 2.5%)의 잉크는 1/4 만 센다: 손목 두 개의 작은 8 자보다 손등·청바지 경계의
-  // 어두운 조각 잉크가 많아 그 조각이 도안으로 뽑혔다(타투는 대개 피부 안쪽에 있다)
+  // 무리마다 잉크 양. 거의 다(70% 넘게) 피부 가장자리 띠(짧은 변 2.5%)에 있는 무리는 그 띠의 잉크를 1/4 만 센다:
+  // 손목 두 개의 작은 8 자보다 손등·청바지 경계의 어두운 조각 잉크가 많아 그 조각이 도안으로 뽑혔다.
+  // 안쪽에도 30% 넘게 있으면(목 가장자리에 걸친 버섯 타투) 진짜 타투라 다 센다(다 깎으면 턱 수염 자국이 뽑혔다)
   const skF = new Float32Array(ink.length);
   for (let i = 0; i < ink.length; i++) skF[i] = found.skin[i];
   const deep = boxBlur(skF, w, h, Math.max(2, short * 0.025));
-  const amt = new Int32Array(n + 1), score = new Float32Array(n + 1);
-  for (let i = 0; i < ink.length; i++) if (ink[i]) { amt[lab[i]]++; score[lab[i]] += deep[i] >= 0.97 ? 1 : 0.25; }
+  const amt = new Int32Array(n + 1), inner = new Int32Array(n + 1);
+  for (let i = 0; i < ink.length; i++) if (ink[i]) { amt[lab[i]]++; if (deep[i] >= 0.97) inner[lab[i]]++; }
+  const score = (c: number) => (inner[c] >= amt[c] * 0.3 ? amt[c] : inner[c] + (amt[c] - inner[c]) * 0.25);
   let best = 0;
-  for (let c = 1; c <= n; c++) if (score[c] > score[best]) best = c;
+  for (let c = 1; c <= n; c++) if (!best || score(c) > score(best)) best = c;
   if (!best || amt[best] < 20) return null;
   let x0 = w;
   let y0 = h;
