@@ -983,7 +983,30 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   let h = h0, w = h * aspect;
   if (w > maxW) { h *= maxW / w; w = maxW; }
   const lc = segStart + segLen * Math.min(0.92, Math.max(0.08, tattoo.along ?? 0.5));
-  const th0 = Math.asin(Math.min(0.95, Math.max(-0.95, tattoo.across ?? 0)));
+  // 자리를 손으로 옮기지 않았으면, 도안 높이에서 팔을 가로로 훑어 보이는 피부의 가운데로: 조끼·소매가 위팔 한쪽을 덮으면
+  // 관절선 가운데에 놓인 도안 한쪽이 옷 가장자리에 가렸다(위팔로 옮긴 손목 무한대의 왼쪽 고리)
+  let acrossAuto = 0;
+  if (tattoo.across === undefined && !full && !tattoo.wrap) {
+    const W = engine.source.width, H = engine.source.height;
+    let seen = 0, all = 0, sum = 0;
+    for (let k = -2; k <= 2; k++) {
+      const l = lc + k * 0.2 * h;
+      const upSeg = l < upLen;
+      const a0 = upSeg ? arm.s : arm.e, b0 = upSeg ? arm.e : arm.w, rr = upSeg ? arm.rUp : arm.rLo;
+      const t = upSeg ? l / upLen : (l - upLen) / loLen;
+      const dx = b0.x - a0.x, dy = b0.y - a0.y, L = Math.hypot(dx, dy) || 1;
+      for (let sv = -1.2; sv <= 1.2001; sv += 0.1) {
+        const x = Math.round(a0.x + dx * t + (-dy / L) * sv * rr), y = Math.round(a0.y + dy * t + (dx / L) * sv * rr);
+        all++;
+        if (x < 0 || y < 0 || x >= W || y >= H || skinM[y * W + x] < 0.5) continue;
+        seen++;
+        sum += sv;
+      }
+    }
+    // 보이는 곳이 85% 아래로 치우쳤을 때만(팔 양쪽이 다 보이면 그대로 가운데)
+    if (seen > all * 0.2 && seen < all * 0.85) acrossAuto = Math.max(-0.7, Math.min(0.7, sum / seen / 1.25));
+  }
+  const th0 = Math.asin(Math.min(0.95, Math.max(-0.95, tattoo.across ?? acrossAuto)));
   const c = d.canvas;
   const rgba = c.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, c.width, c.height).data;
   const ink: InkMap = { rgba, w: c.width, h: c.height, rect: { x: 0, y: 0, w: c.width, h: c.height } };
