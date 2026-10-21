@@ -118,6 +118,7 @@ export function findInk(src: InkSource): { ink: Uint8Array; skin: Uint8Array; L:
   const L = lumaOf(src);
   const skinRaw = new Float32Array(n);
   for (let i = 0; i < n; i++) skinRaw[i] = src.skin[i] > 0.6 && (src.avoid ? src.avoid[i] < 0.3 : true) ? 1 : 0;
+  fillSkinHoles(src, skinRaw);
   // 피부 가장자리(옷·머리 경계의 어두운 띠)는 잉크로 오인하기 쉬우므로 조금 깎는다
   const er = boxBlur(skinRaw, w, h, Math.max(1, short * 0.008));
   const skin = new Uint8Array(n);
@@ -165,7 +166,10 @@ export function findInk(src: InkSource): { ink: Uint8Array; skin: Uint8Array; L:
   for (let c = 1; c <= nc; c++) {
     if (area[c] < 4 || rim[c] <= area[c] * 0.8) continue;
     const diag = Math.hypot(bx1[c] - bx0[c] + 1, by1[c] - by0[c] + 1);
-    if (area[c] / diag < short * 0.012) line.add(c);
+    // 거의 다(95%) 가장자리 띠에 있고 아주 길쭉하면(대각선 / √넓이 6 넘게, 실제 10.5) 부드러운 그늘 윤곽선이라 굵기 기준을 두 배로:
+    // 베이지 벽 앞 손목 사진의 팔 윤곽 그늘(평균 굵기 5.7, 기준 5.69)이 남아 그것이 도안으로 뽑혔다(무한대 타투 대신 긴 사선)
+    const thin = rim[c] >= area[c] * 0.95 && diag / Math.sqrt(area[c]) > 6 ? short * 0.024 : short * 0.012;
+    if (area[c] / diag < thin) line.add(c);
   }
   const rimLine = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
@@ -174,6 +178,47 @@ export function findInk(src: InkSource): { ink: Uint8Array; skin: Uint8Array; L:
     if (c && (area[c] < 4 || drop.has(c) || line.has(c))) ink[i] = 0;
   }
   return { ink, skin, L, rimLine };
+}
+
+/**
+ * 피부 분할의 구멍(피부로 둘러싸인 작은 '피부 아님' 자리) 중 색이 둘레 피부와 비슷한 곳은 피부로 메운다(제자리 수정).
+ * 분할이 타투 둘레를 피부가 아니라고 보고 구멍을 내면 그 안의 선이 잉크로 안 잡혔다(무한대 타투 왼쪽 고리가 통째로 빠짐).
+ * 사진 가장자리에 닿거나 큰(그림의 3% 넘는) 구멍, 색이 다른 구멍(눈·입·옷)은 그대로
+ */
+function fillSkinHoles(src: InkSource, skinRaw: Float32Array): void {
+  const { w, h, d } = src;
+  const n = w * h;
+  const non = new Uint8Array(n);
+  for (let i = 0; i < n; i++) non[i] = skinRaw[i] ? 0 : 1;
+  const { lab, n: nc } = label(non, w, h);
+  if (!nc) return;
+  const area = new Int32Array(nc + 1), edge = new Uint8Array(nc + 1);
+  for (let i = 0; i < n; i++) {
+    const c = lab[i];
+    if (!c) continue;
+    area[c]++;
+    const x = i % w, y = (i / w) | 0;
+    if (x === 0 || y === 0 || x === w - 1 || y === h - 1) edge[c] = 1;
+  }
+  const t = new Float32Array(3);
+  const sk: number[][] = [[], [], []];
+  for (let i = 0; i < n; i += 7) if (skinRaw[i]) { rgb2lab(d[i * 4], d[i * 4 + 1], d[i * 4 + 2], t); sk[0].push(t[0]); sk[1].push(t[1]); sk[2].push(t[2]); }
+  if (sk[0].length < 50) return;
+  const med = (v: number[]) => v.sort((p, q) => p - q)[v.length >> 1];
+  const S = [med(sk[0]), med(sk[1]), med(sk[2])];
+  const cand = new Map<number, number[][]>();
+  for (let c = 1; c <= nc; c++) if (!edge[c] && area[c] >= 4 && area[c] < n * 0.03) cand.set(c, [[], [], []]);
+  if (!cand.size) return;
+  for (let i = 0; i < n; i++) {
+    const v = cand.get(lab[i]);
+    if (!v) continue;
+    rgb2lab(d[i * 4], d[i * 4 + 1], d[i * 4 + 2], t);
+    v[0].push(t[0]); v[1].push(t[1]); v[2].push(t[2]);
+  }
+  const fill = new Set<number>();
+  // 가운데 색(선이 지나가도 대부분 맨살)이 둘레 피부와 ΔE 12 안이면 메운다
+  for (const [c, v] of cand) if (Math.hypot(med(v[0]) - S[0], med(v[1]) - S[1], med(v[2]) - S[2]) < 12) fill.add(c);
+  for (let i = 0; i < n; i++) if (fill.has(lab[i])) skinRaw[i] = 1;
 }
 
 /** 흩어진 도안을 한 무리로 묶어 잉크가 가장 많은 무리의 영역을 제안한다. 없으면 null */

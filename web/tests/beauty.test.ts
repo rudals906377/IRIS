@@ -494,3 +494,21 @@ test('입술 클로즈업: 얼굴이 안 보이는 립 사진에서 립 색을 �
   for (let i = 0; i < w * h; i++) skinOnly.set(i % 2 ? [228, 186, 164, 255] : [245, 243, 240, 255], i * 4);
   assert.equal(lipCloseup(skinOnly, w, h), null);
 });
+
+test('타투 영역 고르기: 부드러운 팔 윤곽 그늘(굵기 5px, 길게)보다 작은 손목 타투를 고르고, 분할이 타투 둘레에 낸 구멍은 메운다', () => {
+  const w = 240, h = 240;
+  const d = new Uint8ClampedArray(w * h * 4);
+  const skin = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 30; x < 240; x++) skin[y * w + x] = 1;
+  for (let i = 0; i < w * h; i++) d.set(skin[i] ? [225, 175, 150, 255] : [235, 220, 205, 255], i * 4);
+  // 윤곽 그늘: 피부 왼쪽 가장자리에 붙은 5px 폭의 부드러운 어두운 띠(위에서 아래까지, 가는 선 기준 2.9px 보다 굵다)
+  for (let y = 0; y < h; y++) for (let x = 30; x < 35; x++) d.set([175, 130, 112, 255], (y * w + x) * 4);
+  // 작은 고리 두 개(무한대) — 왼쪽 고리 둘레는 분할이 피부가 아니라고 본 구멍
+  for (let t = 0; t < 360; t += 2) {
+    const a = (t * Math.PI) / 180;
+    for (const cx of [120, 150]) { const x = Math.round(cx + 13 * Math.cos(a)), y = Math.round(120 + 8 * Math.sin(a)); d.set([60, 45, 45, 255], (y * w + x) * 4); }
+  }
+  for (let y = 105; y < 136; y++) for (let x = 100; x < 136; x++) skin[y * w + x] = 0.2;
+  const r = proposeRect({ w, h, d, skin })!;
+  assert.ok(r && r.x > 90 && r.x < 115 && r.x + r.w > 160 && r.w < 90, `영역 ${JSON.stringify(r)}`);
+});
