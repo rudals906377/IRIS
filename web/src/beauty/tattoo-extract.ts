@@ -252,10 +252,15 @@ export function proposeRect(src: InkSource, found = findInk(src)): Rect | null {
   const gm = new Uint8Array(ink.length);
   for (let i = 0; i < ink.length; i++) gm[i] = grown[i] > 0 ? 1 : 0;
   const { lab, n } = label(gm, w, h);
-  const amt = new Int32Array(n + 1);
-  for (let i = 0; i < ink.length; i++) if (ink[i]) amt[lab[i]]++;
+  // 무리마다 잉크 양. 피부 가장자리 띠(짧은 변 2.5%)의 잉크는 1/4 만 센다: 손목 두 개의 작은 8 자보다 손등·청바지 경계의
+  // 어두운 조각 잉크가 많아 그 조각이 도안으로 뽑혔다(타투는 대개 피부 안쪽에 있다)
+  const skF = new Float32Array(ink.length);
+  for (let i = 0; i < ink.length; i++) skF[i] = found.skin[i];
+  const deep = boxBlur(skF, w, h, Math.max(2, short * 0.025));
+  const amt = new Int32Array(n + 1), score = new Float32Array(n + 1);
+  for (let i = 0; i < ink.length; i++) if (ink[i]) { amt[lab[i]]++; score[lab[i]] += deep[i] >= 0.97 ? 1 : 0.25; }
   let best = 0;
-  for (let c = 1; c <= n; c++) if (amt[c] > amt[best]) best = c;
+  for (let c = 1; c <= n; c++) if (score[c] > score[best]) best = c;
   if (!best || amt[best] < 20) return null;
   let x0 = w;
   let y0 = h;

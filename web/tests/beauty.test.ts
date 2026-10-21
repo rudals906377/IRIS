@@ -524,3 +524,20 @@ test('타투 영역 고르기: 피부 안에 검게 꽉 채운 블랙워크 면(
   const r = proposeRect({ w, h, d, skin })!;
   assert.ok(r && r.y <= 62 && r.y + r.h >= 148 && r.x <= 82 && r.x + r.w >= 118, `영역 ${JSON.stringify(r)}`);
 });
+
+test('타투 영역 고르기: 피부 가장자리의 어두운 조각(손등·청바지 경계, 잉크가 더 많음)보다 피부 안쪽의 작은 타투를 고른다', () => {
+  const w = 200, h = 200;
+  const d = new Uint8ClampedArray(w * h * 4);
+  const skin = new Float32Array(w * h);
+  for (let y = 0; y < 170; y++) for (let x = 40; x < 160; x++) skin[y * w + x] = 1;
+  for (let i = 0; i < w * h; i++) d.set(skin[i] ? [225, 180, 160, 255] : [60, 70, 110, 255], i * 4);
+  // 가운데 작은 8 자(두 고리)
+  for (let t = 0; t < 360; t += 3) {
+    const a = (t * Math.PI) / 180;
+    for (const cy of [80, 96]) d.set([50, 40, 40, 255], (Math.round(cy + 8 * Math.sin(a)) * w + Math.round(100 + 6 * Math.cos(a))) * 4);
+  }
+  // 피부 아래 가장자리에 붙은 어두운 조각(굵고 짧음, 잉크 양은 8 자보다 많다)
+  for (let y = 163; y < 170; y++) for (let x = 60; x < 90; x++) d.set([110, 80, 70, 255], (y * w + x) * 4);
+  const r = proposeRect({ w, h, d, skin })!;
+  assert.ok(r && r.x < 100 && r.x + r.w > 100 && r.y < 80 && r.y + r.h < 140, `영역 ${JSON.stringify(r)}`);
+});
