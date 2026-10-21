@@ -920,23 +920,29 @@ async function placeTattooPlan(): Promise<TatPlan | null> {
   const body = await myBodyOf();
   if (!body) return null;
   const legs = m[1] === 'thigh' || m[1] === 'calf';
-  const a = armsOf(body.pose, body.skin, engine.source.width, engine.source.height, legs)[m[2] === 'L' ? 0 : 1];
-  if (!a.seen || a.vis < 0.4) {
+  const both = armsOf(body.pose, body.skin, engine.source.width, engine.source.height, legs);
+  const a = both[m[2] === 'L' ? 0 : 1];
+  // 위팔·허벅지는 어깨(엉덩이)가 확실하고 그 피부가 보이면 된다: 팔꿈치가 사진 끝에 걸려 흐려도(상반신 사진) 위치는 거의 맞다
+  const upper = m[1] === 'upperArm' || m[1] === 'thigh';
+  if (upper ? !(a.upSeen && a.upVis >= 0.5) && (!a.seen || a.vis < 0.4) : !a.seen || a.vis < 0.4) {
     // 아래팔·손목 자리인데 팔꿈치 아래가 사진 밖이고(상반신 사진) 위팔은 보이면: 위팔에 미리 보여 주고 알린다
     // (손목 타투를 민소매 상반신 사진에 고르면 아무것도 안 바뀌고 안내도 없었다)
-    if (m[1] === 'forearm' && a.upVis >= 0.5 && a.upSeen) {
-      tattoo.place = `upperArm${m[2]}` as typeof tattoo.place;
+    // 같은 쪽 위팔이 덜 보이면(조끼에 거의 가림) 반대쪽 위팔
+    const upOk = (k: number) => both[k].upVis >= 0.5 && both[k].upSeen;
+    const side = m[2] === 'L' ? 0 : 1;
+    const to = upOk(side) ? side : upOk(1 - side) ? 1 - side : -1;
+    if (m[1] === 'forearm' && to >= 0) {
+      tattoo.place = `upperArm${to === 0 ? 'L' : 'R'}` as typeof tattoo.place;
       tattoo.along = tattoo.across = undefined;
       tatNote = '고른 타투 자리(아래팔·손목)가 내 사진에선 보이지 않아요(사진 밖). 보이는 위팔에 미리 보여 드려요(📍 자리 고르기로 옮길 수 있어요)';
       return placeTattooPlan();
     }
     // 관절점이 흐리거나(사진 밖) 피부가 안 보이면(긴소매·바지·재킷) 굽어도 안 보인다: 아무 변화 없이 끝나 무엇이 잘못됐는지 몰랐다
-    if (a.vis >= 0.4 || !a.seen) {
-      tatNote = `고른 타투 자리(${legs ? '다리' : '팔'})가 내 사진에선 보이지 않아요(사진 밖이거나 옷에 가려 있어요). 📍 자리 고르기로 보이는 피부에 놓아 보세요`;
-      tatCoveredKey = placeKey();
-      // 다시 굽기를 부르지 않게 실시간 타투만 끈다(applyTattooToEngine 은 다시 굽기를 예약한다)
-      engine.tattoo = null;
-    }
+    // (위팔로 옮겼는데 거기서도 안 되면 '위팔에 보여 드려요' 안내만 남고 아무것도 안 그려졌다 → 늘 이 안내로)
+    tatNote = `고른 타투 자리(${legs ? '다리' : '팔'})가 내 사진에선 보이지 않아요(사진 밖이거나 옷에 가려 있어요). 📍 자리 고르기로 보이는 피부에 놓아 보세요`;
+    tatCoveredKey = placeKey();
+    // 다시 굽기를 부르지 않게 실시간 타투만 끈다(applyTattooToEngine 은 다시 굽기를 예약한다)
+    engine.tattoo = null;
     return null;
   }
   const arm = a.arm;
