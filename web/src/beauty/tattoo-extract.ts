@@ -124,8 +124,14 @@ export function findInk(src: InkSource): { ink: Uint8Array; skin: Uint8Array; L:
   const skin = new Uint8Array(n);
   for (let i = 0; i < n; i++) skin[i] = er[i] > 0.97 ? 1 : 0;
   const local = blur2(L, w, h, Math.max(4, short * 0.06));
+  // 피부 가운데 밝기의 45% 보다 어두운 피부 안 픽셀도 잉크: 둘레 평균과만 비교하면 검게 꽉 채운 블랙워크(도끼 손잡이·날)의
+  // 안쪽은 둘레도 검어 빠지고 가장자리 조각만 남아 도안이 부서졌다
+  const sl: number[] = [];
+  for (let i = 0; i < n; i += 5) if (skin[i]) sl.push(L[i]);
+  sl.sort((a, b) => a - b);
+  const darkAbs = sl.length > 50 ? sl[sl.length >> 1] * 0.45 : -1;
   const ink = new Uint8Array(n);
-  for (let i = 0; i < n; i++) ink[i] = skin[i] && local[i] - L[i] > 0.1 ? 1 : 0;
+  for (let i = 0; i < n; i++) ink[i] = skin[i] && (local[i] - L[i] > 0.1 || L[i] < darkAbs) ? 1 : 0;
   // 작은 점 잡음, 새까맣고 큰 덩어리(끈·머리카락) 제거
   const { lab, n: nc } = label(ink, w, h);
   const area = new Int32Array(nc + 1);
@@ -141,10 +147,21 @@ export function findInk(src: InkSource): { ink: Uint8Array; skin: Uint8Array; L:
       a.push(L[i]);
     }
   }
+  // 새까맣고 큰 덩어리 중 피부 가장자리에 걸친 것(끈·머리카락은 피부 밖으로 이어진다)만 뺀다: 피부 안에 들어앉은 검은 면은 블랙워크
+  const deep0 = boxBlur(skinRaw, w, h, Math.max(2, short * 0.025));
+  // (사진 끝에 닿는 것도 끈·머리카락: 사진 밖으로 이어진다)
+  const edgeN = new Int32Array(nc + 1), border = new Uint8Array(nc + 1);
+  for (let i = 0; i < n; i++) {
+    const c = lab[i];
+    if (!c) continue;
+    if (deep0[i] < 0.97) edgeN[c]++;
+    const x = i % w, y = (i / w) | 0;
+    if (x === 0 || y === 0 || x === w - 1 || y === h - 1) border[c] = 1;
+  }
   const drop = new Set<number>();
   for (const [c, ls] of darkOf) {
     ls.sort((a, b) => a - b);
-    if (ls[Math.floor(ls.length * 0.2)] < 0.14) drop.add(c);
+    if (ls[Math.floor(ls.length * 0.2)] < 0.14 && (edgeN[c] > area[c] * 0.15 || border[c])) drop.add(c);
   }
   // 몸 윤곽선(피부와 배경·옷 경계의 어두운 그늘): 가는 선 덩어리 대부분(80% 넘게)이 피부 가장자리 띠(짧은 변 2.5%)에 있으면
   // 잉크에서 빼 rimLine 으로 따로 돌려준다(가슴 사이 가는 타투보다 몸 옆 윤곽선 잉크가 많아 윤곽선이 도안으로 뽑혔음).

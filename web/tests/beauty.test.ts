@@ -512,3 +512,15 @@ test('타투 영역 고르기: 부드러운 팔 윤곽 그늘(굵기 5px, 길게
   const r = proposeRect({ w, h, d, skin })!;
   assert.ok(r && r.x > 90 && r.x < 115 && r.x + r.w > 160 && r.w < 90, `영역 ${JSON.stringify(r)}`);
 });
+
+test('타투 영역 고르기: 피부 안에 검게 꽉 채운 블랙워크 면(끈처럼 사진 끝·피부 밖으로 이어지지 않음)은 잉크로 남겨 통째로 고른다', () => {
+  const w = 200, h = 200;
+  const d = new Uint8ClampedArray(w * h * 4);
+  const skin = new Float32Array(w * h).fill(1);
+  for (let i = 0; i < w * h; i++) d.set([220, 170, 150, 255], i * 4);
+  // 도끼 손잡이처럼 검게 채운 넓은 막대(40×90) + 위쪽 가는 테두리 선
+  for (let y = 60; y < 150; y++) for (let x = 80; x < 120; x++) d.set([15, 12, 12, 255], (y * w + x) * 4);
+  for (let x = 60; x < 140; x++) d.set([40, 30, 30, 255], (50 * w + x) * 4);
+  const r = proposeRect({ w, h, d, skin })!;
+  assert.ok(r && r.y <= 62 && r.y + r.h >= 148 && r.x <= 82 && r.x + r.w >= 118, `영역 ${JSON.stringify(r)}`);
+});
