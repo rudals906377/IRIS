@@ -673,3 +673,14 @@ test('어둡게 염색: 어두운 배경에 날린 옅은 금발 가닥은 밝�
   const v = lum(12 * W + 40);
   assert.ok(v < 36 && v >= 29, `염색 뒤 가닥 ${v.toFixed(0)}`);
 });
+
+test('머니피스 자리: 얼굴 양옆 앞머리 띠는 무게가 크고, 정수리·뒤쪽 머리·얼굴 가운데는 0', async () => {
+  const { frontBand } = await import('../src/beauty/still-hair.ts');
+  const w = 100, h = 120, face = new Float32Array(w * h);
+  for (let y = 40; y < 100; y++) for (let x = 35; x < 65; x++) face[y * w + x] = 1;
+  const b = frontBand(face, w, h)!;
+  assert.ok(b[60 * w + 33] > 0.9 && b[60 * w + 66] > 0.9, `옆 ${b[60 * w + 33]} ${b[60 * w + 66]}`);
+  assert.equal(b[10 * w + 50], 0, '정수리');
+  assert.equal(b[60 * w + 50], 0, '얼굴 가운데');
+  assert.equal(b[60 * w + 5], 0, '멀리 옆');
+});

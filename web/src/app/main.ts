@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { boxBlur, closeHoles, colorGate, earGate, edgeAlpha, fillInterior, flyaways, guidedFilter, hairBands, hairCore, pureHair, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, earGate, edgeAlpha, fillInterior, flyaways, frontBand, guidedFilter, hairBands, hairCore, pureHair, Q, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPolished, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { fillPoly, swapFace } from '../beauty/face-swap.ts';
@@ -680,14 +680,15 @@ const btnMyPhotoEl = $<HTMLButtonElement>('btn-myphoto');
  * 화장·네일·타투는 엔진이 그 위에 그대로 그린다.
  */
 let photoOriginal: ImageBitmap | null = null;
-let mineHair: { alpha: Float32Array; rgba: Uint8ClampedArray; w: number; h: number; dist: HairDist } | null = null;
+let mineHair: { alpha: Float32Array; rgba: Uint8ClampedArray; w: number; h: number; dist: HairDist; face: Float32Array } | null = null;
 /** 내 머리카락 매트를 못 만든 까닭(사용자 안내). 머리카락 픽셀이 300 도 안 되는 아주 짧은·탈색한 머리 */
 let mineHairNote = '';
 /** 이번 굽기에서 염색을 건너뛴 까닭(새까만 머리 + 밝은 염색). 굽기 끝에 안내가 지워지지 않게 남긴다 */
 let hairSkipNote = '';
 /** 화장 계획을 못 세운 까닭(얼굴 점 없음). 굽기 끝에 알린다 */
 let mkPlanNote = '';
-let refHair: { src: ImageBitmap; dist: HairDist | null; bands: HairBands | null } | null = null;
+/** front: 얼굴 양옆 앞머리만 뚜렷이 밝으면(머니피스) 그 띠의 색 분포 */
+let refHair: { src: ImageBitmap; dist: HairDist | null; bands: HairBands | null; front: HairDist | null } | null = null;
 let stillHairTimer = 0;
 let stillHairBusy: Promise<void> | null = null;
 let stillHairKey = '';
@@ -822,7 +823,7 @@ async function mineHairMatte(): Promise<typeof mineHair> {
     return null;
   }
   mineHairNote = '';
-  mineHair = { alpha, rgba, w: W, h: H, dist };
+  mineHair = { alpha, rgba, w: W, h: H, dist, face: faceP };
   return mineHair;
 }
 async function refHairDist(): Promise<HairDist | null> {
@@ -862,7 +863,19 @@ async function refHairDist(): Promise<HairDist | null> {
       console.log('[hair] 고른 사진 머리카락: 정밀 분할 대신 인물 분할로', dist ? '성공' : '실패');
     }
   }
-  refHair = { src, dist, bands };
+  // 머니피스: 얼굴 양옆 띠의 머리가 나머지 머리보다 L 15 넘게 밝으면 그 띠 색을 따로 둔다(얼굴 옆 앞머리만 밝게 탈색한 사진이
+  // 머리 전체의 한 분포로 섞여 내 머리는 평범한 갈색이 됐다)
+  let front: HairDist | null = null;
+  const fb = dist ? frontBand(face, p.size, p.size) : null;
+  if (fb) {
+    const fm = new Float32Array(core.length), rm = new Float32Array(core.length);
+    // 앞쪽은 깎지 않은 머리 확률로: 얼굴 경계에 붙은 가는 밝은 가닥은 머리 속(core)에서 빠지고, 피부색에 가까운 금발은 pureHair 가 뺐다
+    for (let i = 0; i < core.length; i++) { fm[i] = fb[i] > 0.5 && face[i] < 0.5 ? a[i] : 0; rm[i] = fb[i] < 0.05 ? core[i] : 0; }
+    const fd = hairDist(p.rgba, fm, 0.7, 150), rd = hairDist(p.rgba, rm, 0.7, 150);
+    if (fd && rd && fd.L[Q / 2] > rd.L[Q / 2] + 15) front = fd;
+    console.debug('[hair] 머니피스', fd && rd ? { front: +fd.L[Q / 2].toFixed(1), rest: +rd.L[Q / 2].toFixed(1) } : null, !!front);
+  }
+  refHair = { src, dist, bands, front };
   return refHair.dist;
 }
 // ---- 사진 모드 타투: 고른 사진의 팔 타투를 내 팔 같은 자리로(still-tattoo.ts) ----
@@ -1560,6 +1573,17 @@ async function updateStillHair(): Promise<void> {
           const rb = refHair?.bands;
           const span = rb?.ombre ? hairSpan(mine.alpha, mine.w) : null;
           out = recolorHair(mine.rgba, mine.w, mine.h, mine.alpha, mine.dist, ref, Math.min(1, amount), 1, rb && span ? { ref: rb, ...span } : null, rb?.lowSpread ?? null);
+          // 머니피스: 내 얼굴 양옆 앞머리 띠는 고른 사진의 밝은 앞머리 색으로(띠 끝은 부드럽게 섞음)
+          const fb = refHair?.front ? frontBand(mine.face, mine.w, mine.h) : null;
+          if (fb && refHair?.front) {
+            const fo = recolorHair(mine.rgba, mine.w, mine.h, mine.alpha, mine.dist, refHair.front, Math.min(1, amount), 1, null, null);
+            const fs = boxBlur(fb, mine.w, mine.h, Math.max(2, Math.round(Math.min(mine.w, mine.h) / 120)));
+            for (let i = 0; i < fs.length; i++) {
+              const k = fs[i];
+              if (k <= 0.01) continue;
+              for (let c = 0; c < 3; c++) out[i * 4 + c] += (fo[i * 4 + c] - out[i * 4 + c]) * k;
+            }
+          }
         }
       }
       if (mkp) {

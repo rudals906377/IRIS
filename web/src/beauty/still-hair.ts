@@ -1147,3 +1147,37 @@ export function skinGate(rgba: Uint8ClampedArray, alpha: Float32Array, faceP: Fl
     if (s > 0) alpha[i] *= 1 - s;
   }
 }
+
+/**
+ * 얼굴 양옆 앞머리 띠(머니피스 자리)의 무게(0~1, 그림 크기). face: 얼굴 확률(0~1). 얼굴 상자 위쪽(이마)부터 턱 조금 아래까지,
+ * 얼굴 왼쪽·오른쪽 가장자리에서 바깥으로 얼굴 폭 22%·안쪽으로 8% 까지(가운데일수록 1, 띠 끝에서 0). 얼굴이 없으면 null
+ */
+export function frontBand(face: ArrayLike<number>, w: number, h: number): Float32Array | null {
+  let x0 = w, x1 = -1, y0 = h, y1 = -1, n = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (face[y * w + x] < 0.5) continue;
+    n++;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  if (n < 50 || x1 - x0 < 8) return null;
+  const fw = x1 - x0, fh = y1 - y0;
+  const out = new Float32Array(w * h);
+  const out0 = fw * 0.22, in0 = fw * 0.08;
+  const yTop = y0 - fh * 0.05, yBot = y1 + fh * 0.25;
+  for (let y = Math.max(0, Math.floor(yTop)); y < Math.min(h, Math.ceil(yBot)); y++) {
+    // 위·아래 끝은 부드럽게
+    const vy = Math.min(1, (y - yTop) / (fh * 0.15), (yBot - y) / (fh * 0.2));
+    for (let x = 0; x < w; x++) {
+      const dl = x0 - x, dr = x - x1; // 바깥 쪽이 +
+      const d = Math.max(dl, dr);
+      if (d > out0 || d < -in0) continue;
+      // 띠 가운데 절반은 1, 바깥 절반에서 0 으로
+      const vx = d >= 0 ? (out0 - d) / (out0 * 0.5) : (in0 + d) / (in0 * 0.5);
+      out[y * w + x] = Math.max(0, Math.min(1, vx)) * Math.max(0, Math.min(1, vy));
+    }
+  }
+  return out;
+}
