@@ -871,9 +871,30 @@ async function refHairDist(): Promise<HairDist | null> {
     const fm = new Float32Array(core.length), rm = new Float32Array(core.length);
     // 앞쪽은 깎지 않은 머리 확률로: 얼굴 경계에 붙은 가는 밝은 가닥은 머리 속(core)에서 빠지고, 피부색에 가까운 금발은 pureHair 가 뺐다
     for (let i = 0; i < core.length; i++) { fm[i] = fb[i] > 0.5 && face[i] < 0.5 ? a[i] : 0; rm[i] = fb[i] < 0.05 ? core[i] : 0; }
-    const fd = hairDist(p.rgba, fm, 0.7, 150), rd = hairDist(p.rgba, rm, 0.7, 150);
-    if (fd && rd && fd.L[Q / 2] > rd.L[Q / 2] + 15) front = fd;
-    console.debug('[hair] 머니피스', fd && rd ? { front: +fd.L[Q / 2].toFixed(1), rest: +rd.L[Q / 2].toFixed(1) } : null, !!front);
+    const rd = hairDist(p.rgba, rm, 0.7, 150);
+    // 띠 안의 밝은 가닥(나머지 가운데보다 L 25 넘게)만 모아 그 색으로(어두운 머리가 섞이면 백금 머니피스가 옅은 갈색이 됐다).
+    // 그 가닥이 얼굴 아래쪽 절반(가운데~턱)까지 내려와야 머니피스: 아주 검은 짧은 머리의 구레나룻(피부 섞임, L +16)이 잘못 걸렸다
+    let fy0 = p.size, fy1 = 0, coreN = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (core[i] >= 0.7) coreN++;
+      if (face[i] < 0.5) continue;
+      const y = (i / p.size) | 0;
+      if (y < fy0) fy0 = y;
+      if (y > fy1) fy1 = y;
+    }
+    const midY = (fy0 + fy1) / 2;
+    const bm = new Float32Array(a.length), lab3 = new Float32Array(3);
+    let nB = 0, nLow = 0;
+    if (rd) for (let i = 0; i < a.length; i++) {
+      if (fm[i] < 0.7) continue;
+      rgb2lab(p.rgba[i * 4], p.rgba[i * 4 + 1], p.rgba[i * 4 + 2], lab3);
+      if (lab3[0] <= rd.L[Q / 2] + 25) continue;
+      bm[i] = 1;
+      nB++;
+      if ((i / p.size) > midY) nLow++;
+    }
+    if (rd && nB >= coreN * 0.01 && nLow >= coreN * 0.004) front = hairDist(p.rgba, bm, 0.5, 100);
+    console.debug('[hair] 머니피스', rd ? { rest: +rd.L[Q / 2].toFixed(1), bright: nB, low: nLow, core: coreN, front: front ? +front.L[Q / 2].toFixed(1) : null } : null);
   }
   refHair = { src, dist, bands, front };
   return refHair.dist;
