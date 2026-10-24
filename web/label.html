@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IRIS 손톱 라벨 도구</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; font-family: system-ui, sans-serif; background: #15171a; color: #eee; display: flex; flex-direction: column; height: 100vh; }
+      header { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #1f2227; flex-wrap: wrap; }
+      header button, header label.btn { background: #2d3139; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 14px; }
+      header button.primary { background: #f0a040; color: #111; border: none; font-weight: 700; }
+      header button:disabled { opacity: 0.4; cursor: default; }
+      #status { margin-left: auto; color: #aaa; font-size: 13px; }
+      main { flex: 1; display: flex; min-height: 0; }
+      #stage { flex: 1; position: relative; overflow: hidden; background: #000; }
+      #stage canvas { position: absolute; left: 0; top: 0; }
+      aside { width: 260px; background: #1a1d22; padding: 10px; overflow: auto; font-size: 13px; line-height: 1.5; border-left: 1px solid #333; }
+      aside h3 { margin: 8px 0 4px; font-size: 14px; }
+      #list { list-style: none; padding: 0; margin: 0; max-height: 40vh; overflow: auto; }
+      #list li { padding: 2px 6px; cursor: pointer; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #list li.cur { background: #2d3139; }
+      #list li.done::before { content: '✓ '; color: #7c6; }
+      kbd { background: #333; border-radius: 3px; padding: 0 4px; font-family: monospace; }
+      .muted { color: #999; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <label class="btn">📁 사진 열기<input id="files" type="file" accept="image/*" multiple hidden /></label>
+      <button id="prev">◀ 이전</button>
+      <button id="next">다음 ▶</button>
+      <button id="auto">🤖 자동 짐작</button>
+      <button id="add">＋ 손톱 추가</button>
+      <button id="del">🗑 선택 삭제</button>
+      <button id="done" class="primary">✓ 이 사진 완료</button>
+      <label class="btn">📥 라벨 불러오기<input id="import" type="file" accept="application/json" hidden /></label>
+      <button id="export">💾 라벨 저장(JSON)</button>
+      <span id="status">사진을 열어 주세요</span>
+    </header>
+    <main>
+      <div id="stage"><canvas id="cv"></canvas></div>
+      <aside>
+        <h3>사진 <span id="count" class="muted"></span></h3>
+        <ul id="list"></ul>
+        <h3>쓰는 법</h3>
+        <div>
+          1. <b>사진 열기</b>로 손 사진을 여러 장 고른다.<br />
+          2. 사진마다 손톱 자리에 자동으로 8각형이 그려진다. 꼭짓점을 <b>끌어서</b> 손톱 테두리에 맞춘다. 안쪽을 끌면 통째로 움직인다.<br />
+          3. 잘못 잡힌 건 클릭 후 <b>선택 삭제</b>, 빠진 손톱은 <b>손톱 추가</b>.<br />
+          4. <b>이 사진 완료</b> → 다음 사진. 작업은 브라우저에 자동 저장된다.<br />
+          5. 다 끝나면 <b>라벨 저장</b>으로 JSON 파일을 받아 사진 폴더에 함께 둔다.
+        </div>
+        <h3>단축키</h3>
+        <div><kbd>←</kbd><kbd>→</kbd> 이전·다음 · <kbd>Enter</kbd> 완료 · <kbd>Del</kbd> 삭제 · <kbd>A</kbd> 추가 · 휠 확대</div>
+        <h3 class="muted">주의</h3>
+        <div class="muted">손톱판(분홍·흰 부분)만 감싼다. 큐티클은 제외, 끝의 흰 부분은 포함. 안 보이는 손톱은 그리지 않는다.</div>
+      </aside>
+    </main>
+    <script type="module" src="./src/label/main.ts"></script>
+  </body>
+</html>

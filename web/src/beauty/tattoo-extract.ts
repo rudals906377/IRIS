@@ -1,0 +1,748 @@
+// 참고 사진에서 타투 도안 뽑기(순수 계산, 단위 테스트 대상).
+//
+// 1) 잉크 찾기: 피부 위에서 '주변 피부보다 뚜렷이 어두운' 픽셀(국소 대비). 전체 피부 평균과 비교하면
+//    그늘진 피부가 잉크로, 밝은 조명 아래 잉크가 피부로 잘못 잡힌다.
+// 2) 잘못 잡힌 것 빼기: 새까맣고 큰 덩어리(검은 끈·머리카락이 피부로 분류된 것). 잉크 선은 피부와 섞여 회색으로 찍힌다.
+// 3) 도안 묶기: 나비 여러 마리 + 점처럼 흩어진 도안을 넓혀서 한 무리로 묶고, 잉크가 가장 많은 무리를 고른다.
+//    사용자가 영역을 직접 고르면 이 단계를 건너뛴다.
+// 4) 도안 만들기: 픽셀마다 잉크 아래의 피부색(주변 피부로 추정)으로 나눈 '투과율'을 구해,
+//    내 피부에 곱하면 사진과 같은 비율로 어두워지고 색 잉크는 색이 남는다(RGB = 잉크 색, A = 잉크 양).
+
+import { rgb2lab } from './still-hair.ts';
+
+export interface InkSource {
+  w: number;
+  h: number;
+  /** RGBA 0~255 */
+  d: Uint8ClampedArray;
+  /** 피부 확률(0~1, w×h) */
+  skin: Float32Array;
+  /** 피부가 아닐 확률이 높은 곳(머리카락·옷 등, 0~1, w×h). 없으면 0 */
+  avoid?: Float32Array;
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface ExtractedDesign {
+  /** RGBA: RGB = 피부에 곱할 잉크 색(투과율), A = 잉크 양 */
+  rgba: Uint8ClampedArray<ArrayBuffer>;
+  w: number;
+  h: number;
+  /** 원본 사진에서의 영역 */
+  rect: Rect;
+  /** 원본 크기 잉크 양(0~1, 생성 서버에 참고 물체 마스크로 보낼 때 씀) */
+  inkMask: Float32Array;
+}
+
+const smooth = (e0: number, e1: number, x: number): number => {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
+
+/** 상자 흐림(가로·세로 누적합). 두 번 돌리면 가우시안에 가깝다 */
+export function boxBlur(src: Float32Array, w: number, h: number, r: number): Float32Array {
+  r = Math.max(1, Math.round(r));
+  const tmp = new Float32Array(src.length);
+  const out = new Float32Array(src.length);
+  const k = 2 * r + 1;
+  for (let y = 0; y < h; y++) {
+    let s = 0;
+    for (let x = -r; x <= r; x++) s += src[y * w + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) {
+      tmp[y * w + x] = s / k;
+      s += src[y * w + Math.min(w - 1, x + r + 1)] - src[y * w + Math.max(0, x - r)];
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let s = 0;
+    for (let y = -r; y <= r; y++) s += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) {
+      out[y * w + x] = s / k;
+      s += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+    }
+  }
+  return out;
+}
+
+const blur2 = (src: Float32Array, w: number, h: number, r: number): Float32Array => boxBlur(boxBlur(src, w, h, r / 2), w, h, r / 2);
+
+/** 8방향 연결 덩어리 번호(0 = 배경). 반환: 번호 배열과 덩어리 수 */
+export function label(mask: Uint8Array, w: number, h: number): { lab: Int32Array; n: number } {
+  const lab = new Int32Array(w * h);
+  let n = 0;
+  const stack: number[] = [];
+  for (let i = 0; i < w * h; i++) {
+    if (!mask[i] || lab[i]) continue;
+    n++;
+    lab[i] = n;
+    stack.push(i);
+    while (stack.length) {
+      const k = stack.pop()!;
+      const x = k % w;
+      const y = (k / w) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          const j = yy * w + xx;
+          if (mask[j] && !lab[j]) {
+            lab[j] = n;
+            stack.push(j);
+          }
+        }
+      }
+    }
+  }
+  return { lab, n };
+}
+
+/** 밝기(감마 공간 0~1) */
+function lumaOf(src: InkSource): Float32Array {
+  const L = new Float32Array(src.w * src.h);
+  for (let i = 0; i < L.length; i++) L[i] = (0.299 * src.d[i * 4] + 0.587 * src.d[i * 4 + 1] + 0.114 * src.d[i * 4 + 2]) / 255;
+  return L;
+}
+
+/** 잉크 후보(0/1)와 피부 마스크 */
+export function findInk(src: InkSource): { ink: Uint8Array; skin: Uint8Array; L: Float32Array; rimLine: Uint8Array } {
+  const { w, h } = src;
+  const n = w * h;
+  const short = Math.min(w, h);
+  const L = lumaOf(src);
+  const skinRaw = new Float32Array(n);
+  for (let i = 0; i < n; i++) skinRaw[i] = src.skin[i] > 0.6 && (src.avoid ? src.avoid[i] < 0.3 : true) ? 1 : 0;
+  fillSkinHoles(src, skinRaw);
+  // 피부 가장자리(옷·머리 경계의 어두운 띠)는 잉크로 오인하기 쉬우므로 조금 깎는다
+  const er = boxBlur(skinRaw, w, h, Math.max(1, short * 0.008));
+  const skin = new Uint8Array(n);
+  for (let i = 0; i < n; i++) skin[i] = er[i] > 0.97 ? 1 : 0;
+  const local = blur2(L, w, h, Math.max(4, short * 0.06));
+  // 피부 가운데 밝기의 45% 보다 어두운 피부 안 픽셀도 잉크: 둘레 평균과만 비교하면 검게 꽉 채운 블랙워크(도끼 손잡이·날)의
+  // 안쪽은 둘레도 검어 빠지고 가장자리 조각만 남아 도안이 부서졌다
+  const sl: number[] = [];
+  for (let i = 0; i < n; i += 5) if (skin[i]) sl.push(L[i]);
+  sl.sort((a, b) => a - b);
+  const darkAbs = sl.length > 50 ? sl[sl.length >> 1] * 0.45 : -1;
+  const ink = new Uint8Array(n);
+  for (let i = 0; i < n; i++) ink[i] = skin[i] && (local[i] - L[i] > 0.1 || L[i] < darkAbs) ? 1 : 0;
+  // 작은 점 잡음, 새까맣고 큰 덩어리(끈·머리카락) 제거
+  const { lab, n: nc } = label(ink, w, h);
+  const area = new Int32Array(nc + 1);
+  for (let i = 0; i < n; i++) area[lab[i]]++;
+  const big = new Set<number>();
+  for (let c = 1; c <= nc; c++) if (area[c] > n * 0.003) big.add(c);
+  const darkOf = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const c = lab[i];
+    if (c && big.has(c)) {
+      let a = darkOf.get(c);
+      if (!a) darkOf.set(c, (a = []));
+      a.push(L[i]);
+    }
+  }
+  // 새까맣고 큰 덩어리 중 피부 가장자리에 걸친 것(끈·머리카락은 피부 밖으로 이어진다)만 뺀다: 피부 안에 들어앉은 검은 면은 블랙워크
+  const deep0 = boxBlur(skinRaw, w, h, Math.max(2, short * 0.025));
+  // (사진 끝에 닿는 것도 끈·머리카락: 사진 밖으로 이어진다)
+  const edgeN = new Int32Array(nc + 1), border = new Uint8Array(nc + 1);
+  for (let i = 0; i < n; i++) {
+    const c = lab[i];
+    if (!c) continue;
+    if (deep0[i] < 0.97) edgeN[c]++;
+    const x = i % w, y = (i / w) | 0;
+    if (x === 0 || y === 0 || x === w - 1 || y === h - 1) border[c] = 1;
+  }
+  const drop = new Set<number>();
+  for (const [c, ls] of darkOf) {
+    ls.sort((a, b) => a - b);
+    if (ls[Math.floor(ls.length * 0.2)] < 0.14 && (edgeN[c] > area[c] * 0.15 || border[c])) drop.add(c);
+  }
+  // 몸 윤곽선(피부와 배경·옷 경계의 어두운 그늘): 가는 선 덩어리 대부분(80% 넘게)이 피부 가장자리 띠(짧은 변 2.5%)에 있으면
+  // 잉크에서 빼 rimLine 으로 따로 돌려준다(가슴 사이 가는 타투보다 몸 옆 윤곽선 잉크가 많아 윤곽선이 도안으로 뽑혔음).
+  // 무리 묶기에서는 이음새로만 쓴다(팔 가장자리 선이 소매 위아래 그림을 한 무리로 이어 주던 것은 그대로)
+  const deep = boxBlur(skinRaw, w, h, Math.max(2, short * 0.025));
+  // 선처럼 가는 것만(넓이 / 상자 대각선 = 평균 굵기가 짧은 변 1.2% 아래): 빽빽한 소매 타투 덩어리는 팔 가장자리에 걸려도 남긴다
+  const rim = new Int32Array(nc + 1), line = new Set<number>();
+  const bx0 = new Int32Array(nc + 1).fill(w), by0 = new Int32Array(nc + 1).fill(h), bx1 = new Int32Array(nc + 1), by1 = new Int32Array(nc + 1);
+  for (let i = 0; i < n; i++) {
+    const c = lab[i];
+    if (!c) continue;
+    if (deep[i] < 0.97) rim[c]++;
+    const x = i % w, y = (i / w) | 0;
+    if (x < bx0[c]) bx0[c] = x;
+    if (x > bx1[c]) bx1[c] = x;
+    if (y < by0[c]) by0[c] = y;
+    if (y > by1[c]) by1[c] = y;
+  }
+  for (let c = 1; c <= nc; c++) {
+    if (area[c] < 4 || rim[c] <= area[c] * 0.8) continue;
+    const diag = Math.hypot(bx1[c] - bx0[c] + 1, by1[c] - by0[c] + 1);
+    // 거의 다(95%) 가장자리 띠에 있고 아주 길쭉하면(대각선 / √넓이 6 넘게, 실제 10.5) 부드러운 그늘 윤곽선이라 굵기 기준을 두 배로:
+    // 베이지 벽 앞 손목 사진의 팔 윤곽 그늘(평균 굵기 5.7, 기준 5.69)이 남아 그것이 도안으로 뽑혔다(무한대 타투 대신 긴 사선)
+    const thin = rim[c] >= area[c] * 0.95 && diag / Math.sqrt(area[c]) > 6 ? short * 0.024 : short * 0.012;
+    if (area[c] / diag < thin) line.add(c);
+  }
+  const rimLine = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const c = lab[i];
+    if (c && line.has(c) && !drop.has(c)) rimLine[i] = 1;
+    if (c && (area[c] < 4 || drop.has(c) || line.has(c))) ink[i] = 0;
+  }
+  return { ink, skin, L, rimLine };
+}
+
+/**
+ * 피부 분할의 구멍(피부로 둘러싸인 작은 '피부 아님' 자리) 중 색이 둘레 피부와 비슷한 곳은 피부로 메운다(제자리 수정).
+ * 분할이 타투 둘레를 피부가 아니라고 보고 구멍을 내면 그 안의 선이 잉크로 안 잡혔다(무한대 타투 왼쪽 고리가 통째로 빠짐).
+ * 사진 가장자리에 닿거나 큰(그림의 3% 넘는) 구멍, 색이 다른 구멍(눈·입·옷)은 그대로
+ */
+function fillSkinHoles(src: InkSource, skinRaw: Float32Array): void {
+  const { w, h, d } = src;
+  const n = w * h;
+  const non = new Uint8Array(n);
+  for (let i = 0; i < n; i++) non[i] = skinRaw[i] ? 0 : 1;
+  const { lab, n: nc } = label(non, w, h);
+  if (!nc) return;
+  const area = new Int32Array(nc + 1), edge = new Uint8Array(nc + 1);
+  for (let i = 0; i < n; i++) {
+    const c = lab[i];
+    if (!c) continue;
+    area[c]++;
+    const x = i % w, y = (i / w) | 0;
+    if (x === 0 || y === 0 || x === w - 1 || y === h - 1) edge[c] = 1;
+  }
+  const t = new Float32Array(3);
+  const sk: number[][] = [[], [], []];
+  for (let i = 0; i < n; i += 7) if (skinRaw[i]) { rgb2lab(d[i * 4], d[i * 4 + 1], d[i * 4 + 2], t); sk[0].push(t[0]); sk[1].push(t[1]); sk[2].push(t[2]); }
+  if (sk[0].length < 50) return;
+  const med = (v: number[]) => v.sort((p, q) => p - q)[v.length >> 1];
+  const S = [med(sk[0]), med(sk[1]), med(sk[2])];
+  const cand = new Map<number, number[][]>();
+  for (let c = 1; c <= nc; c++) if (!edge[c] && area[c] >= 4 && area[c] < n * 0.03) cand.set(c, [[], [], []]);
+  if (!cand.size) return;
+  for (let i = 0; i < n; i++) {
+    const v = cand.get(lab[i]);
+    if (!v) continue;
+    rgb2lab(d[i * 4], d[i * 4 + 1], d[i * 4 + 2], t);
+    v[0].push(t[0]); v[1].push(t[1]); v[2].push(t[2]);
+  }
+  const fill = new Set<number>();
+  // 가운데 색(선이 지나가도 대부분 맨살)이 둘레 피부와 ΔE 12 안이면 메운다
+  for (const [c, v] of cand) if (Math.hypot(med(v[0]) - S[0], med(v[1]) - S[1], med(v[2]) - S[2]) < 12) fill.add(c);
+  for (let i = 0; i < n; i++) if (fill.has(lab[i])) skinRaw[i] = 1;
+}
+
+/** 흩어진 도안을 한 무리로 묶어 잉크가 가장 많은 무리의 영역을 제안한다. 없으면 null */
+export function proposeRect(src: InkSource, found = findInk(src)): Rect | null {
+  const { w, h } = src;
+  const short = Math.min(w, h);
+  const { ink } = found;
+  let total = 0;
+  for (let i = 0; i < ink.length; i++) total += ink[i];
+  if (total < short * 0.5) return null;
+  const f = new Float32Array(ink.length);
+  for (let i = 0; i < ink.length; i++) f[i] = ink[i] || found.rimLine[i];
+  const grown = boxBlur(f, w, h, Math.max(2, short * 0.02));
+  const gm = new Uint8Array(ink.length);
+  for (let i = 0; i < ink.length; i++) gm[i] = grown[i] > 0 ? 1 : 0;
+  const { lab, n } = label(gm, w, h);
+  // 무리마다 잉크 양. 거의 다(70% 넘게) 피부 가장자리 띠(짧은 변 2.5%)에 있는 무리는 그 띠의 잉크를 1/4 만 센다:
+  // 손목 두 개의 작은 8 자보다 손등·청바지 경계의 어두운 조각 잉크가 많아 그 조각이 도안으로 뽑혔다.
+  // 안쪽에도 30% 넘게 있으면(목 가장자리에 걸친 버섯 타투) 가장자리 잉크를 0.6 로 센다(1/4 로 깎으면 턱 수염 자국이 뽑혔고,
+  // 다 세면 털 많은 팔 아래쪽 주름 그늘(안쪽 36%)이 작은 선인장(안쪽 100%)을 이겼다)
+  const skF = new Float32Array(ink.length);
+  for (let i = 0; i < ink.length; i++) skF[i] = found.skin[i];
+  const deep = boxBlur(skF, w, h, Math.max(2, short * 0.025));
+  const amt = new Int32Array(n + 1), inner = new Int32Array(n + 1);
+  for (let i = 0; i < ink.length; i++) if (ink[i]) { amt[lab[i]]++; if (deep[i] >= 0.97) inner[lab[i]]++; }
+  const score = (c: number) => inner[c] + (amt[c] - inner[c]) * (inner[c] >= amt[c] * 0.3 ? 0.6 : 0.25);
+  let best = 0;
+  for (let c = 1; c <= n; c++) if (!best || score(c) > score(best)) best = c;
+  if (!best || amt[best] < 20) return null;
+  let x0 = w;
+  let y0 = h;
+  let x1 = 0;
+  let y1 = 0;
+  for (let i = 0; i < ink.length; i++) {
+    if (!ink[i] || lab[i] !== best) continue;
+    const x = i % w;
+    const y = (i / w) | 0;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  const pad = Math.round(Math.max(x1 - x0, y1 - y0) * 0.06) + 2;
+  x0 = Math.max(0, x0 - pad);
+  y0 = Math.max(0, y0 - pad);
+  x1 = Math.min(w - 1, x1 + pad);
+  y1 = Math.min(h - 1, y1 + pad);
+  return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+/** 도안 시트인가: 한 장에 도안 수십 개가 빽빽한 플래시 시트. 잉크를 2% 넓히면 전부 한 덩어리(그림의 절반 넘게)인데
+ * 0.8% 만 넓히면 여섯 덩어리 넘게 갈라진다. 또는 도안이 띄엄띄엄 놓여 2% 넓혀도 큰 덩어리 다섯 개 넘게 따로 선다. 그중 하나를 자동으로 고르면 색 채움이 잉크로 안 잡혀 조각난 도안이 되므로,
+ * 시트 전체를 한 작품(긴팔·등판처럼)으로 크게 감아 입히고 하나만 쓰려면 사용자가 ✂️ 로 고르게 한다 */
+export function isDesignSheet(src: InkSource, found = findInk(src)): boolean {
+  const { w, h } = src;
+  const short = Math.min(w, h);
+  const { ink } = found;
+  const f = new Float32Array(ink.length);
+  for (let i = 0; i < ink.length; i++) f[i] = ink[i] || found.rimLine[i];
+  let total = 0;
+  for (let i = 0; i < ink.length; i++) if (ink[i]) total++;
+  const parts = (growFrac: number): { n: number; bigBox: number; major: number } => {
+    const grown = boxBlur(f, w, h, Math.max(2, short * growFrac));
+    const gm = new Uint8Array(ink.length);
+    for (let i = 0; i < ink.length; i++) gm[i] = grown[i] > 0 ? 1 : 0;
+    const { lab, n } = label(gm, w, h);
+    const amt = new Int32Array(n + 1);
+    const x0 = new Int32Array(n + 1).fill(w), y0 = new Int32Array(n + 1).fill(h), x1 = new Int32Array(n + 1), y1 = new Int32Array(n + 1);
+    for (let i = 0; i < ink.length; i++) {
+      if (!ink[i]) continue;
+      const c = lab[i], x = i % w, y = (i / w) | 0;
+      amt[c]++;
+      if (x < x0[c]) x0[c] = x;
+      if (x > x1[c]) x1[c] = x;
+      if (y < y0[c]) y0[c] = y;
+      if (y > y1[c]) y1[c] = y;
+    }
+    let cnt = 0, bigBox = 0, major = 0;
+    for (let c = 1; c <= n; c++) {
+      if (amt[c] < 20) continue;
+      cnt++;
+      if (amt[c] > total * 0.02) major++;
+      bigBox = Math.max(bigBox, (x1[c] - x0[c] + 1) * (y1[c] - y0[c] + 1));
+    }
+    return { n: cnt, bigBox, major };
+  };
+  const coarse = parts(0.02);
+  // 흰 바탕에 도안이 띄엄띄엄 놓인 시트(올드스쿨 시트 18번): 2% 넓혀도 한 덩어리가 안 되고 큰 도안 다섯 개 넘게 따로 선다
+  if (coarse.major >= 5 && coarse.n >= 10) return true;
+  if (coarse.bigBox <= w * h * 0.5) return false;
+  return parts(0.008).n >= 6;
+}
+
+/**
+ * 잉크 맵(RGB = 피부에 곱할 투과율)을 무채색으로(제자리 수정): 블랙·블랙앤그레이 타투인데 고른 사진의 색 조명(보라·주황 조명)이
+ * 잉크 투과율에 묻어 내 팔에 보라 얼룩이 생겼다(10번 블랙앤그레이 소매, 자홍 조명). 밝기(루마)는 그대로 둔다
+ */
+export function neutralInk(rgba: Uint8ClampedArray): void {
+  for (let i = 0; i < rgba.length; i += 4) {
+    const g = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+    rgba[i] = rgba[i + 1] = rgba[i + 2] = g;
+  }
+}
+
+/**
+ * 빽빽한 컬러 소매(팔 전체가 타투)용 잉크 맵: 선만 뽑는 `extractDesign` 은 피부 분할이 거부한 채움(노랑·빨강·크림색 바탕)을
+ * 놓쳐 소매가 선 조각만 남았다(02번: 팔 픽셀의 9% 만 잉크). 팔의 모든 픽셀을 둘레 맨살 색(잉크 곁이 아닌 확실한 피부를
+ * 얼굴 폭만큼 넓게 평균, 없으면 더 넓게)으로 나눈 투과율(곱하기 색)로 옮긴다: 맨살은 1(그대로), 노란 채움은 파랑만 낮아 노랗게.
+ * 영역: 몸(피부이거나 옷·머리가 아님) 중 잉크 기미(둘레보다 어둡거나 채도 높음) 4% 안 또는 확실한 피부.
+ * 피부 결·잡티는 투과율 0.92 위를 1 로 올려 옮기지 않는다.
+ */
+export function sleeveInk(src: InkSource, rect: Rect, maxSide = 1600): ExtractedDesign | null {
+  const { w, h, d } = src;
+  const n = w * h, short = Math.min(w, h);
+  const rx = Math.max(0, Math.round(rect.x)), ry = Math.max(0, Math.round(rect.y));
+  const R = { x: rx, y: ry, w: Math.min(w - rx, Math.round(rect.x + rect.w) - rx), h: Math.min(h - ry, Math.round(rect.y + rect.h) - ry) };
+  if (R.w < 8 || R.h < 8) return null;
+  const found = findInk(src);
+  const inkD = boxBlur(Float32Array.from(found.ink), w, h, Math.max(2, Math.round(short * 0.006)));
+  const wS = new Float32Array(n);
+  for (let i = 0; i < n; i++) wS[i] = found.skin[i] && inkD[i] === 0 ? 1 : 0;
+  const R1 = Math.max(4, Math.round(short * 0.05)), R2 = Math.max(8, Math.round(short * 0.15));
+  const b1 = blur2(wS, w, h, R1 * 2), b2 = blur2(wS, w, h, R2 * 2);
+  let gs = [0, 0, 0], gn = 0;
+  for (let i = 0; i < n; i += 3) if (wS[i]) { gs = [gs[0] + d[i * 4], gs[1] + d[i * 4 + 1], gs[2] + d[i * 4 + 2]]; gn++; }
+  if (gn < 50) return null;
+  const ref: Float32Array[] = [];
+  for (let c = 0; c < 3; c++) {
+    const v = new Float32Array(n);
+    for (let i = 0; i < n; i++) v[i] = d[i * 4 + c] * wS[i];
+    const a1 = blur2(v, w, h, R1 * 2), a2 = blur2(v, w, h, R2 * 2);
+    const o = new Float32Array(n);
+    for (let i = 0; i < n; i++) o[i] = b1[i] > 0.05 ? a1[i] / b1[i] : b2[i] > 0.002 ? a2[i] / b2[i] : gs[c] / gn;
+    ref.push(o);
+  }
+  const L = found.L;
+  const rl = Math.max(2, Math.round(short * 0.03));
+  const loc = blur2(L, w, h, rl * 2);
+  const anyInk = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2];
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    anyInk[i] = loc[i] - L[i] > 0.1 || (mx > 0 && (mx - mn) / mx > 0.55) ? 1 : 0;
+  }
+  const near = boxBlur(anyInk, w, h, Math.max(2, Math.round(short * 0.04)));
+  const reg = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const body = Math.max(src.skin[i], src.avoid ? 1 - src.avoid[i] : 0) > 0.5;
+    reg[i] = body && (near[i] > 0.02 || src.skin[i] > 0.6) ? 1 : 0;
+  }
+  const regS = boxBlur(reg, w, h, 2);
+  const s = Math.min(1, maxSide / Math.max(R.w, R.h));
+  const tw = Math.max(1, Math.round(R.w * s)), th = Math.max(1, Math.round(R.h * s));
+  const rgba = new Uint8ClampedArray(tw * th * 4);
+  const inkMask = new Float32Array(n);
+  for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) {
+    const X = Math.min(w - 1, R.x + Math.floor((x + 0.5) / s)), Y = Math.min(h - 1, R.y + Math.floor((y + 0.5) / s));
+    const i = Y * w + X, o = (y * tw + x) * 4;
+    for (let c = 0; c < 3; c++) rgba[o + c] = Math.round(Math.min(1, Math.min(1, d[i * 4 + c] / Math.max(1, ref[c][i])) / 0.92) * 255);
+    rgba[o + 3] = Math.round(regS[i] * 255);
+  }
+  for (let y = R.y; y < R.y + R.h; y++) for (let x = R.x; x < R.x + R.w; x++) {
+    const i = y * w + x;
+    let tmin = 1;
+    for (let c = 0; c < 3; c++) tmin = Math.min(tmin, Math.min(1, d[i * 4 + c] / Math.max(1, ref[c][i]) / 0.92));
+    inkMask[i] = regS[i] * (1 - tmin);
+  }
+  return { rgba, w: tw, h: th, rect: R, inkMask };
+}
+
+/** 팔이 빽빽한 타투인가: 팔 영역 중 피부 분할이 피부로 못 본(옷·머리도 아닌) 몸 부분이 15% 넘음(맨살 팔의 작은 타투는 거의 0) */
+export function denseSleeve(src: InkSource, region: Float32Array): boolean {
+  let all = 0, notSkin = 0;
+  for (let i = 0; i < region.length; i++) {
+    if (region[i] <= 0.5) continue;
+    all++;
+    if (src.skin[i] < 0.5 && (!src.avoid || src.avoid[i] < 0.5)) notSkin++;
+  }
+  return all > 0 && notSkin > all * 0.15;
+}
+
+/**
+ * 도안 시트 전체를 한 작품으로 쓸 때의 영역: 위·아래 띠의 가게 이름 글씨·제목 장식(가로로 길고 납작한 덩어리: 너비 40% 넘고 높이 12% 아래)과
+ * 그보다 바깥(위 띠면 위쪽)의 덩어리를 빼고 남은 도안들을 감싼다. 시트가 아니거나 남는 것이 없으면 null
+ */
+export function sheetRect(src: InkSource, found = findInk(src)): Rect | null {
+  const { w, h } = src;
+  const short = Math.min(w, h);
+  const { ink } = found;
+  const f = new Float32Array(ink.length);
+  for (let i = 0; i < ink.length; i++) f[i] = ink[i] || found.rimLine[i];
+  const grown = boxBlur(f, w, h, Math.max(2, short * 0.008));
+  const gm = new Uint8Array(ink.length);
+  for (let i = 0; i < ink.length; i++) gm[i] = grown[i] > 0 ? 1 : 0;
+  const { lab, n } = label(gm, w, h);
+  const amt = new Int32Array(n + 1);
+  const x0 = new Int32Array(n + 1).fill(w), y0 = new Int32Array(n + 1).fill(h), x1 = new Int32Array(n + 1), y1 = new Int32Array(n + 1);
+  for (let i = 0; i < ink.length; i++) {
+    if (!ink[i]) continue;
+    const c = lab[i], x = i % w, y = (i / w) | 0;
+    amt[c]++;
+    if (x < x0[c]) x0[c] = x;
+    if (x > x1[c]) x1[c] = x;
+    if (y < y0[c]) y0[c] = y;
+    if (y > y1[c]) y1[c] = y;
+  }
+  // 위·아래 25% 안의 납작하고 긴 띠(글씨·장식 줄)가 끝나는 곳을 자르는 선으로
+  let cutTop = -1, cutBot = h;
+  for (let c = 1; c <= n; c++) {
+    if (amt[c] < 20) continue;
+    const bw = x1[c] - x0[c] + 1, bh = y1[c] - y0[c] + 1;
+    if (bw < w * 0.4 || bh > h * 0.12) continue;
+    if (y1[c] < h * 0.25) cutTop = Math.max(cutTop, y1[c]);
+    else if (y0[c] > h * 0.75) cutBot = Math.min(cutBot, y0[c]);
+  }
+  let rx0 = w, ry0 = h, rx1 = -1, ry1 = -1;
+  for (let c = 1; c <= n; c++) {
+    if (amt[c] < 20) continue;
+    const cy = (y0[c] + y1[c]) / 2;
+    if (cy <= cutTop || cy >= cutBot) continue;
+    rx0 = Math.min(rx0, x0[c]); ry0 = Math.min(ry0, y0[c]); rx1 = Math.max(rx1, x1[c]); ry1 = Math.max(ry1, y1[c]);
+  }
+  if (rx1 < rx0) return null;
+  // 자르는 선 바로 아래까지(선 위 잉크가 섞이지 않게)
+  ry0 = Math.max(ry0, cutTop + 1);
+  ry1 = Math.min(ry1, cutBot - 1);
+  const pad = Math.round(Math.max(rx1 - rx0, ry1 - ry0) * 0.02) + 2;
+  const X0 = Math.max(0, rx0 - pad), Y0 = Math.max(cutTop + 1, ry0 - pad), X1 = Math.min(w - 1, rx1 + pad), Y1 = Math.min(cutBot - 1, ry1 + pad);
+  return { x: X0, y: Y0, w: X1 - X0 + 1, h: Y1 - Y0 + 1 };
+}
+
+/**
+ * 영역 안의 도안을 뽑는다. rect 가 없으면 자동 제안 영역.
+ * maxSide: 도안 텍스처 최대 변(GPU 업로드 크기)
+ */
+export function extractDesign(src: InkSource, rect?: Rect | null, maxSide = 512): ExtractedDesign | null {
+  const { w, h, d } = src;
+  const n = w * h;
+  const short = Math.min(w, h);
+  const found = findInk(src);
+  const R0 = rect ?? proposeRect(src, found);
+  if (!R0) return null;
+  // 정수 칸으로(배율을 곱한 영역은 소수라 배열 번호가 소수가 되어 도안 전체가 빈칸이 되던 것) + 그림 안으로
+  const rx = Math.max(0, Math.round(R0.x)), ry = Math.max(0, Math.round(R0.y));
+  const R = { x: rx, y: ry, w: Math.min(w - rx, Math.round(R0.x + R0.w) - rx), h: Math.min(h - ry, Math.round(R0.y + R0.h) - ry) };
+  if (R.w < 4 || R.h < 4) return null;
+  // 잉크 아래 피부색 추정: 잉크(조금 넓힘)가 아닌 피부 픽셀만 넓게 흐려 평균
+  const inkF = new Float32Array(n);
+  for (let i = 0; i < n; i++) inkF[i] = found.ink[i];
+  const inkWide = boxBlur(inkF, w, h, Math.max(1, short * 0.006));
+  const wgt = new Float32Array(n);
+  for (let i = 0; i < n; i++) wgt[i] = src.skin[i] > 0.5 && inkWide[i] === 0 ? 1 : 0;
+  const r = Math.max(4, short * 0.05);
+  const den = blur2(wgt, w, h, r);
+  const ch: Float32Array[] = [];
+  let gs = [0, 0, 0];
+  let gn = 0;
+  for (let c = 0; c < 3; c++) {
+    const v = new Float32Array(n);
+    for (let i = 0; i < n; i++) v[i] = (d[i * 4 + c] / 255) * wgt[i];
+    ch.push(blur2(v, w, h, r));
+  }
+  for (let i = 0; i < n; i += 3) {
+    if (!wgt[i]) continue;
+    gs = [gs[0] + d[i * 4] / 255, gs[1] + d[i * 4 + 1] / 255, gs[2] + d[i * 4 + 2] / 255];
+    gn++;
+  }
+  if (!gn) return null;
+  const glob = gs.map((v) => v / gn);
+  // 잉크로 찾은 곳 둘레(짧은 변 1.5%)만 도안: 영역 가장자리에 걸린 옷 밑단 그늘·니트 결처럼 '피부보다 어둡기만 한' 곳은 뺀다
+  // (선 사이 명암·색 채움은 선 둘레라 남는다)
+  const inkNear = boxBlur(inkF, w, h, Math.max(2, short * 0.015));
+  const ow = R.w;
+  const oh = R.h;
+  const inkMask = new Float32Array(n);
+  const full = new Float32Array(ow * oh * 4);
+  // 잉크 찾기가 옅은 타투를 거의 못 잡았으면(거른 양이 30% 미만) 거르지 않고 다시
+  for (let gate = 1; gate >= 0; gate--) {
+    let sumG = 0, sumR = 0;
+    for (let y = 0; y < oh; y++) {
+      for (let x = 0; x < ow; x++) {
+        const i = (R.y + y) * w + (R.x + x);
+        const o = (y * ow + x) * 4;
+        // 주변 피부 정보가 적으면 전체 피부 평균 쪽으로
+        const conf = Math.min(1, den[i] / 0.15);
+        const bg = [0, 1, 2].map((c) => (den[i] > 1e-4 ? ch[c][i] / den[i] : glob[c]) * conf + glob[c] * (1 - conf));
+        const T = [0, 1, 2].map((c) => Math.min(1, (d[i * 4 + c] / 255 + 0.01) / (bg[c] + 0.01)));
+        const lumT = 0.299 * T[0] + 0.587 * T[1] + 0.114 * T[2];
+        const dark = smooth(0.06, 0.3, 1 - lumT);
+        const tint = smooth(0.08, 0.22, Math.max(Math.abs(T[0] - lumT), Math.abs(T[1] - lumT), Math.abs(T[2] - lumT)));
+        // 피부가 아닌 곳(옷·머리카락·배경)은 도안이 아니다
+        const onSkin = src.avoid ? 1 - smooth(0.3, 0.6, src.avoid[i]) : 1;
+        const a0 = Math.max(dark, tint * 0.8) * onSkin;
+        const a = gate ? a0 * smooth(0, 0.04, inkNear[i]) : a0;
+        sumG += a;
+        sumR += a0;
+        inkMask[i] = a;
+        // 다 덮였을 때의 잉크 색: 섞인 비율만큼 되돌린다
+        const k = Math.max(a, 0.25);
+        for (let c = 0; c < 3; c++) full[o + c] = Math.min(1, Math.max(0, 1 - (1 - T[c]) / k));
+        full[o + 3] = a;
+      }
+    }
+    if (sumG >= sumR * 0.3) break;
+  }
+  // 옷 곁(짧은 변 2%): 옷 밑단 그늘 조각 가려내기용
+  let cloth: Float32Array | undefined;
+  if (src.avoid) {
+    const av = new Float32Array(n);
+    for (let i = 0; i < n; i++) av[i] = src.avoid[i] > 0.5 ? 1 : 0;
+    const avN = boxBlur(av, w, h, Math.max(2, short * 0.02));
+    cloth = new Float32Array(ow * oh);
+    for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) cloth[y * ow + x] = avN[(R.y + y) * w + R.x + x] > 0.05 ? 1 : 0;
+  }
+  dropEdgeBits(full, ow, oh, cloth);
+  const s = Math.min(1, maxSide / Math.max(ow, oh));
+  const tw = Math.max(1, Math.round(ow * s));
+  const th = Math.max(1, Math.round(oh * s));
+  const rgba = new Uint8ClampedArray(tw * th * 4);
+  // 줄일 때는 잉크 양으로 가중 평균(잉크 없는 픽셀의 흰 색이 섞여 선이 옅어지지 않게)
+  for (let y = 0; y < th; y++) {
+    const sy0 = Math.floor(y / s);
+    const sy1 = Math.max(sy0 + 1, Math.floor((y + 1) / s));
+    for (let x = 0; x < tw; x++) {
+      const sx0 = Math.floor(x / s);
+      const sx1 = Math.max(sx0 + 1, Math.floor((x + 1) / s));
+      let sa = 0;
+      let sr = 0;
+      let sg = 0;
+      let sb = 0;
+      let cnt = 0;
+      for (let yy = sy0; yy < Math.min(oh, sy1); yy++) {
+        for (let xx = sx0; xx < Math.min(ow, sx1); xx++) {
+          const o = (yy * ow + xx) * 4;
+          const a = full[o + 3];
+          sa += a;
+          sr += full[o] * a;
+          sg += full[o + 1] * a;
+          sb += full[o + 2] * a;
+          cnt++;
+        }
+      }
+      const o = (y * tw + x) * 4;
+      const a = cnt ? sa / cnt : 0;
+      rgba[o] = sa > 1e-4 ? (sr / sa) * 255 : 255;
+      rgba[o + 1] = sa > 1e-4 ? (sg / sa) * 255 : 255;
+      rgba[o + 2] = sa > 1e-4 ? (sb / sa) * 255 : 255;
+      rgba[o + 3] = a * 255;
+    }
+  }
+  return { rgba, w: tw, h: th, rect: R, inkMask };
+}
+
+/**
+ * 도안 한 덩어리(잉크 60% 이상)에서 떨어져(긴 변 1.5% 넘게) 영역 가장자리나 옷(cloth > 0) 곁에 걸린 작은 조각(잉크 10% 미만)을 지운다:
+ * 옷 밑단 바로 아래 그늘·주름 조각(팔에 옮기면 도안 위에 얼룩으로 뜬다).
+ * 소매처럼 여러 그림이 흩어진 도안은 한 덩어리가 60%가 안 되어 그대로 둔다. full: [r,g,b,a]×w×h(0~1), 제자리에서 고친다.
+ */
+export function dropEdgeBits(full: Float32Array, w: number, h: number, cloth?: Float32Array): void {
+  const n = w * h;
+  const a = new Float32Array(n);
+  for (let i = 0; i < n; i++) a[i] = full[i * 4 + 3];
+  // 가는 선 사이 틈은 이어 보도록 조금 넓혀서 덩어리를 나눈다
+  const wide = boxBlur(a, w, h, Math.max(1, Math.round(Math.max(w, h) * 0.01)));
+  const lab = new Int32Array(n).fill(-1);
+  const mass: number[] = [], edge: boolean[] = [];
+  const st: number[] = [];
+  for (let i0 = 0; i0 < n; i0++) {
+    if (lab[i0] >= 0 || wide[i0] < 0.03) continue;
+    const id = mass.length;
+    let m = 0, e = false;
+    lab[i0] = id;
+    st.push(i0);
+    while (st.length) {
+      const i = st.pop()!;
+      const x = i % w, y = (i / w) | 0;
+      m += a[i];
+      if (x < 2 || y < 2 || x >= w - 2 || y >= h - 2 || (cloth && cloth[i] > 0)) e = true;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const X = x + dx, Y = y + dy;
+        if (X < 0 || Y < 0 || X >= w || Y >= h) continue;
+        const j = Y * w + X;
+        if (lab[j] < 0 && wide[j] >= 0.03) { lab[j] = id; st.push(j); }
+      }
+    }
+    mass.push(m);
+    edge.push(e);
+  }
+  const tot = mass.reduce((s, v) => s + v, 0);
+  if (tot <= 0) return;
+  const big = mass.indexOf(Math.max(...mass));
+  if (mass[big] < tot * 0.6) return;
+  // 큰 덩어리에서 긴 변의 1.5% 넘게 떨어진 것만(도안에 붙은 장식·점은 남긴다)
+  const mainM = new Float32Array(n);
+  for (let i = 0; i < n; i++) mainM[i] = lab[i] === big ? 1 : 0;
+  const near = boxBlur(mainM, w, h, Math.max(1, Math.round(Math.max(w, h) * 0.015)));
+  const touch = mass.map(() => false);
+  for (let i = 0; i < n; i++) if (lab[i] >= 0 && near[i] > 0) touch[lab[i]] = true;
+  const drop = mass.map((m, k) => k !== big && edge[k] && !touch[k] && m < tot * 0.1);
+  if (!drop.some(Boolean)) return;
+  for (let i = 0; i < n; i++) if (lab[i] >= 0 && drop[lab[i]]) full[i * 4 + 3] = 0;
+}
+
+/**
+ * 색만으로 잡은 피부(0/1). 팔을 가까이 찍은 타투 사진은 몸 분할이 팔을 거의 못 잡는다(벌새 타투: 팔이 사진 절반 넘는데 몸 4%).
+ * 피부색(YCbCr) 픽셀이 사진의 15% 넘을 때만, 그 가운데 색(a·b)에서 9 안인 픽셀을 피부로 보고, 닫기로 잉크 선 구멍을 메운 뒤
+ * 피부에 둘러싸인 구멍(색 타투 덩어리)도 채운다. 피부색이 적으면 null.
+ */
+export function colorSkin(d: Uint8ClampedArray, w: number, h: number): Float32Array | null {
+  const n = w * h;
+  const lab = new Float32Array(3);
+  const av: number[] = [], bv: number[] = [];
+  let cnt = 0;
+  for (let i = 0; i < n; i++) {
+    const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2];
+    const Y = 0.299 * r + 0.587 * g + 0.114 * b, Cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b, Cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b;
+    if (!(Y > 60 && Cr > 135 && Cr < 175 && Cb > 85 && Cb < 128 && r > g)) continue;
+    cnt++;
+    if (i % 3 === 0) { rgb2lab(r, g, b, lab); av.push(lab[1]); bv.push(lab[2]); }
+  }
+  if (cnt < n * 0.15 || av.length < 50) return null;
+  const med = (v: number[]) => v.sort((p, q) => p - q)[v.length >> 1];
+  const a0 = med(av), b0 = med(bv);
+  const raw = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    rgb2lab(d[i * 4], d[i * 4 + 1], d[i * 4 + 2], lab);
+    raw[i] = lab[0] > 15 && Math.hypot(lab[1] - a0, lab[2] - b0) < 9 ? 1 : 0;
+  }
+  const r = Math.max(2, Math.round(Math.min(w, h) * 0.012));
+  const grow = boxBlur(raw, w, h, r);
+  for (let i = 0; i < n; i++) grow[i] = grow[i] > 0.02 ? 1 : 0;
+  const shrink = boxBlur(grow, w, h, r);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = shrink[i] > 0.98 ? 1 : 0;
+  // 사진 가장자리와 이어지지 않은 비피부 구멍은 피부(그 위 타투)
+  const seen = new Uint8Array(n), st: number[] = [];
+  for (let x = 0; x < w; x++) for (const y of [0, h - 1]) { const i = y * w + x; if (!out[i] && !seen[i]) { seen[i] = 1; st.push(i); } }
+  for (let y = 0; y < h; y++) for (const x of [0, w - 1]) { const i = y * w + x; if (!out[i] && !seen[i]) { seen[i] = 1; st.push(i); } }
+  while (st.length) {
+    const i = st.pop()!, x = i % w, y = (i - x) / w;
+    for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) {
+      if (j < 0 || seen[j] || out[j]) continue;
+      seen[j] = 1;
+      st.push(j);
+    }
+  }
+  for (let i = 0; i < n; i++) if (!out[i] && !seen[i]) out[i] = 1;
+  return out;
+}
+
+/**
+ * 몸 분할이 사람을 놓친 사진(복잡한 배경 등)용 피부 확률: 몸 관절점 둘레(팔·다리·몸통·목)에서
+ * 피부색(얼굴 볼, 없으면 팔다리 가운데의 피부다운 색)과 색감이 가까운 곳. 잉크 선이 구멍이 되지 않게 닫기(넓혔다 줄이기)를 한다.
+ * pose: MediaPipe Pose 33점(px), vis: 보임 정도. cheeks: 얼굴 볼 점(px, 없으면 빈 배열)
+ */
+export function poseSkin(d: Uint8ClampedArray, w: number, h: number, pose: { x: number; y: number }[], vis: number[], cheeks: { x: number; y: number }[]): Float32Array {
+  const lab = new Float32Array(3);
+  const sampleAt = (p: { x: number; y: number }, out: number[][]) => {
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const x = Math.round(p.x + dx), y = Math.round(p.y + dy);
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      const o = (y * w + x) * 4;
+      rgb2lab(d[o], d[o + 1], d[o + 2], lab);
+      out.push([lab[0], lab[1], lab[2]]);
+    }
+  };
+  const SEGS = [[11, 13], [13, 15], [12, 14], [14, 16], [23, 25], [25, 27], [24, 26], [26, 28]];
+  let samples: number[][] = [];
+  for (const c of cheeks) sampleAt(c, samples);
+  // 볼이 없으면 팔다리 가운데에서, 피부다운 색만
+  if (samples.length < 20) {
+    for (const [a, b] of SEGS) if ((vis[a] ?? 0) > 0.5 && (vis[b] ?? 0) > 0.5) sampleAt({ x: (pose[a].x + pose[b].x) / 2, y: (pose[a].y + pose[b].y) / 2 }, samples);
+    samples = samples.filter(([L, a, b]) => L > 20 && L < 95 && a > 3 && a < 32 && b > 4 && b < 38);
+  }
+  if (samples.length < 10) return new Float32Array(w * h);
+  const med = (k: number) => samples.map((s) => s[k]).sort((p, q) => p - q)[Math.floor(samples.length / 2)];
+  const a0 = med(1), b0 = med(2);
+  // 둘레 제한: 관절 마디 캡슐 + 몸통
+  const sw = Math.hypot(pose[11].x - pose[12].x, pose[11].y - pose[12].y) || Math.min(w, h) * 0.2;
+  const near = new Uint8Array(w * h);
+  const capsule = (A: { x: number; y: number }, B: { x: number; y: number }, r: number) => {
+    const x0 = Math.max(0, Math.floor(Math.min(A.x, B.x) - r)), x1 = Math.min(w - 1, Math.ceil(Math.max(A.x, B.x) + r));
+    const y0 = Math.max(0, Math.floor(Math.min(A.y, B.y) - r)), y1 = Math.min(h - 1, Math.ceil(Math.max(A.y, B.y) + r));
+    const dx = B.x - A.x, dy = B.y - A.y, L2 = dx * dx + dy * dy || 1;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const t = Math.max(0, Math.min(1, ((x - A.x) * dx + (y - A.y) * dy) / L2));
+      if ((x - A.x - t * dx) ** 2 + (y - A.y - t * dy) ** 2 <= r * r) near[y * w + x] = 1;
+    }
+  };
+  for (const [a, b] of SEGS) if ((vis[a] ?? 0) > 0.3 && (vis[b] ?? 0) > 0.3) capsule(pose[a], pose[b], sw * (a >= 23 ? 0.32 : 0.24));
+  // 손목 너머 손, 몸통(어깨~엉덩이), 목
+  for (const [a, b] of [[15, 19], [16, 20], [11, 24], [12, 23], [11, 12], [23, 24]]) if ((vis[a] ?? 0) > 0.3 && (vis[b] ?? 0) > 0.3) capsule(pose[a], pose[b], sw * 0.3);
+  const neck = { x: (pose[11].x + pose[12].x) / 2, y: (pose[11].y + pose[12].y) / 2 };
+  capsule(neck, pose[0], sw * 0.22);
+  const raw = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    if (!near[i]) continue;
+    rgb2lab(d[i * 4], d[i * 4 + 1], d[i * 4 + 2], lab);
+    const dd = Math.hypot(lab[1] - a0, lab[2] - b0);
+    raw[i] = lab[0] > 15 && dd < 9 ? 1 : 0;
+  }
+  // 닫기: 넓혔다 줄여 잉크 선 구멍을 메운다
+  const r = Math.max(2, Math.round(Math.min(w, h) * 0.012));
+  const grow = boxBlur(raw, w, h, r);
+  for (let i = 0; i < grow.length; i++) grow[i] = grow[i] > 0.02 ? 1 : 0;
+  const shrink = boxBlur(grow, w, h, r);
+  const out = new Float32Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = near[i] && shrink[i] > 0.98 ? 1 : 0;
+  return out;
+}
