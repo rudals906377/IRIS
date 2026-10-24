@@ -33,7 +33,7 @@ import { fmt, summarize } from '../engine/stats.ts';
 import { DEFAULT_TRACKER_CONFIG, type Delegate, type TrackerConfig } from '../engine/tracker.ts';
 import { StickerGL } from '../engine/sticker-gl.ts';
 import { parseFace } from '../beauty/face-parse.ts';
-import { boxBlur, closeHoles, colorGate, earGate, edgeAlpha, fillInterior, flyaways, frontBand, guidedFilter, hairBands, hairCore, pureHair, Q, rgb2lab, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
+import { boxBlur, closeHoles, colorGate, earGate, edgeAlpha, faceBox, fillInterior, flyaways, frontBand, guidedFilter, hairBands, hairCore, pureHair, Q, rgb2lab, sideRuns, skinGate, hairDist, hairSpan, recolorHair, type HairBands, type HairDist } from '../beauty/still-hair.ts';
 import { growNailMask, hullFill, maskContrast, nailFrame, rimContrast, splitPolished, syntheticNail, transferNail, type NailFrame } from '../beauty/still-nail.ts';
 import { samImage, type SamImage } from '../beauty/sam.ts';
 import { fillPoly, swapFace } from '../beauty/face-swap.ts';
@@ -740,6 +740,8 @@ async function mineHairMatte(): Promise<typeof mineHair> {
   // 512 확률 → 처리 해상도(상자 밖은 0) → 내 사진 밝기로 가이디드 필터
   const coarse = new Float32Array(W * H);
   const faceP = new Float32Array(W * H);
+  // 얼굴만(목·옷 빼고): 머니피스 띠를 얼굴 상자 양옆에 두는 데 쓴다(목·옷까지 넣으면 상자가 몸통까지 커져 띠가 넓은 판이 됐다)
+  const faceOnly = new Float32Array(W * H);
   const N = p.size;
   for (let y = Math.max(0, Math.floor(rect.y)); y < Math.min(H, Math.ceil(rect.y + rect.size)); y++) {
     const v = ((y - rect.y) / rect.size) * N - 0.5;
@@ -753,7 +755,9 @@ async function mineHairMatte(): Promise<typeof mineHair> {
       coarse[y * W + x] = ((h[y0 * N + x0] * (1 - tx) + h[y0 * N + x0 + 1] * tx) * (1 - ty) + (h[(y0 + 1) * N + x0] * (1 - tx) + h[(y0 + 1) * N + x0 + 1] * tx) * ty) / 255;
       const f = p.face, b = p.body;
       const j = y0 * N + x0;
-      faceP[y * W + x] = Math.max(f[j], b[j], f[j + 1], b[j + 1], f[j + N], b[j + N], f[j + N + 1], b[j + N + 1]) / 255;
+      const mf = Math.max(f[j], f[j + 1], f[j + N], f[j + N + 1]);
+      faceOnly[y * W + x] = mf / 255;
+      faceP[y * W + x] = Math.max(mf, b[j], b[j + 1], b[j + N], b[j + N + 1]) / 255;
     }
   }
   // 긴 머리는 머리 상자 밖(어깨 아래)까지 내려온다: 상자 밖은 사진 전체 머리카락 분할로, 상자 아래쪽 가장자리는 둘을 섞는다
@@ -823,7 +827,7 @@ async function mineHairMatte(): Promise<typeof mineHair> {
     return null;
   }
   mineHairNote = '';
-  mineHair = { alpha, rgba, w: W, h: H, dist, face: faceP };
+  mineHair = { alpha, rgba, w: W, h: H, dist, face: faceOnly };
   return mineHair;
 }
 async function refHairDist(): Promise<HairDist | null> {
@@ -874,14 +878,10 @@ async function refHairDist(): Promise<HairDist | null> {
     const rd = hairDist(p.rgba, rm, 0.7, 150);
     // 띠 안의 밝은 가닥(나머지 가운데보다 L 25 넘게)만 모아 그 색으로(어두운 머리가 섞이면 백금 머니피스가 옅은 갈색이 됐다).
     // 그 가닥이 얼굴 아래쪽 절반(가운데~턱)까지 내려와야 머니피스: 아주 검은 짧은 머리의 구레나룻(피부 섞임, L +16)이 잘못 걸렸다
-    let fy0 = p.size, fy1 = 0, coreN = 0;
-    for (let i = 0; i < a.length; i++) {
-      if (core[i] >= 0.7) coreN++;
-      if (face[i] < 0.5) continue;
-      const y = (i / p.size) | 0;
-      if (y < fy0) fy0 = y;
-      if (y > fy1) fy1 = y;
-    }
+    // fb 가 있으면 얼굴 상자도 있다
+    const { y0: fy0, y1: fy1, cx: fcx } = faceBox(face, p.size, p.size)!;
+    let coreN = 0;
+    for (let i = 0; i < a.length; i++) if (core[i] >= 0.7) coreN++;
     const midY = (fy0 + fy1) / 2;
     const bm = new Float32Array(a.length), lab3 = new Float32Array(3);
     let nB = 0, nLow = 0;
@@ -893,8 +893,14 @@ async function refHairDist(): Promise<HairDist | null> {
       nB++;
       if ((i / p.size) > midY) nLow++;
     }
-    if (rd && nB >= coreN * 0.01 && nLow >= coreN * 0.004) front = hairDist(p.rgba, bm, 0.5, 100);
-    console.debug('[hair] 머니피스', rd ? { rest: +rd.L[Q / 2].toFixed(1), bright: nB, low: nLow, core: coreN, front: front ? +front.L[Q / 2].toFixed(1) : null } : null);
+    // 밝은 가닥이 얼굴 옆을 타고 길게 내려와야(양쪽 줄기 합이 얼굴 높이의 42% 넘게): 검은 머리 윤기·이마 위 손·피부 섞인
+    // 가장자리 조각(합 0.2~0.36)이 머니피스로 읽혔다(진짜 머니피스 7장은 0.46~1.8)
+    const [runL, runR] = sideRuns(bm, p.size, p.size, fy0, fy1, fcx);
+    if (rd && nB >= coreN * 0.01 && nLow >= coreN * 0.004 && runL + runR >= 0.42) front = hairDist(p.rgba, bm, 0.5, 100);
+    // 탈색한 가닥이면 적어도 밝은 갈색(L 44 넘게): 아주 검은 머리(L 5~10)의 윤기는 '나머지 +25' 를 넘어도 L 37~41 에 머물렀다
+    // (진짜 머니피스 7장은 47~74)
+    if (front && front.L[Q / 2] < 44) front = null;
+    console.debug('[hair] 머니피스', rd ? { front: front ? +front.L[Q / 2].toFixed(1) : null, rest: +rd.L[Q / 2].toFixed(1), run: +(runL + runR).toFixed(2), bright: nB, low: nLow, core: coreN } : null);
   }
   refHair = { src, dist, bands, front };
   return refHair.dist;

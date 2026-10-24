@@ -684,3 +684,35 @@ test('머니피스 자리: 얼굴 양옆 앞머리 띠는 무게가 크고, 정�
   assert.equal(b[60 * w + 50], 0, '얼굴 가운데');
   assert.equal(b[60 * w + 5], 0, '멀리 옆');
 });
+
+test('머니피스 자리: 얼굴 상자를 절반도 못 채우는 얼굴(뒷모습의 귀·목)은 띠 없음', async () => {
+  const { frontBand } = await import('../src/beauty/still-hair.ts');
+  const w = 100, h = 120, face = new Float32Array(w * h);
+  // 귀 한 조각 + 목 한 조각이 멀리 떨어져 큰 상자를 만든다
+  for (let y = 30; y < 45; y++) for (let x = 20; x < 28; x++) face[y * w + x] = 1;
+  for (let y = 90; y < 110; y++) for (let x = 60; x < 75; x++) face[y * w + x] = 1;
+  assert.equal(frontBand(face, w, h), null);
+});
+
+test('머니피스 가닥 길이: 얼굴 옆을 타고 내려오는 띠는 길고, 윤기 조각은 짧다', async () => {
+  const { sideRuns } = await import('../src/beauty/still-hair.ts');
+  const w = 100, h = 120, m = new Float32Array(w * h);
+  // 왼쪽: 이마~턱 아래로 이어진 띠(중간 3줄 빔), 오른쪽: 짧은 윤기 조각 둘
+  for (let y = 40; y < 105; y++) if (y < 70 || y > 72) for (let x = 28; x < 33; x++) m[y * w + x] = 1;
+  for (let y = 50; y < 56; y++) for (let x = 68; x < 72; x++) m[y * w + x] = 1;
+  for (let y = 80; y < 86; y++) for (let x = 68; x < 72; x++) m[y * w + x] = 1;
+  const [l, r] = sideRuns(m, w, h, 40, 100, 50);
+  assert.ok(l > 1, `왼쪽 ${l}`);
+  assert.ok(r < 0.15, `오른쪽 ${r}`);
+});
+
+test('얼굴 상자: 목 아래 가슴 피부(얼굴로 읽힘)와 앞머리 위 이마 조각은 빼고 얼굴만', async () => {
+  const { faceBox, frontBand } = await import('../src/beauty/still-hair.ts');
+  const w = 100, h = 160, face = new Float32Array(w * h);
+  for (let y = 10; y < 13; y++) for (let x = 40; x < 60; x++) face[y * w + x] = 1; // 앞머리 위 이마 조각
+  for (let y = 30; y < 80; y++) for (let x = 35; x < 65; x++) face[y * w + x] = 1; // 얼굴
+  for (let y = 95; y < 160; y++) for (let x = 50 - (y - 95) / 2; x < 50 + (y - 95) / 2; x++) face[y * w + x] = 1; // V넥 가슴
+  const b = faceBox(face, w, h)!;
+  assert.deepEqual([b.y0, b.y1, b.x0, b.x1], [30, 79, 35, 64]);
+  assert.ok(frontBand(face, w, h), '가슴이 상자를 늘려도 채움 때문에 띠가 사라지지 않음');
+});

@@ -1149,21 +1149,54 @@ export function skinGate(rgba: Uint8ClampedArray, alpha: Float32Array, faceP: Fl
 }
 
 /**
- * 얼굴 양옆 앞머리 띠(머니피스 자리)의 무게(0~1, 그림 크기). face: 얼굴 확률(0~1). 얼굴 상자 위쪽(이마)부터 턱 조금 아래까지,
- * 얼굴 왼쪽·오른쪽 가장자리에서 바깥으로 얼굴 폭 22%·안쪽으로 8% 까지(가운데일수록 1, 띠 끝에서 0). 얼굴이 없으면 null
+ * 얼굴 확률(0.5 넘는 픽셀)의 상자와 가로 가운데. 위에서부터 내려가며 그때까지 가장 넓은 줄의 15% 아래로 줄면(목: 얼굴 분할은
+ * 목을 따로 나눈다) 그 위까지만 얼굴로 본다: V넥 사이 가슴 피부를 얼굴로 읽어 상자가 가슴까지 늘었다(머니피스 띠가 내 사진에서 빠짐).
+ * 얼굴이 없으면 null
  */
-export function frontBand(face: ArrayLike<number>, w: number, h: number): Float32Array | null {
-  let x0 = w, x1 = -1, y0 = h, y1 = -1, n = 0;
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+export function faceBox(face: ArrayLike<number>, w: number, h: number): { x0: number; x1: number; y0: number; y1: number; n: number; cx: number } | null {
+  const cnt = new Int32Array(h);
+  let y0 = -1, y1 = -1, wide = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) if (face[y * w + x] >= 0.5) cnt[y]++;
+    if (y0 < 0) {
+      if (cnt[y] > 0) y0 = y;
+      else continue;
+    }
+    if (y > y0 + 4 && cnt[y] < wide * 0.15) {
+      // 얼굴보다 납작한 위쪽 조각(앞머리 위로 보이는 이마 한 줄 등)은 버리고 다시 찾는다
+      if (y1 - y0 >= wide * 0.5) break;
+      y0 = y1 = -1;
+      wide = 0;
+      continue;
+    }
+    if (cnt[y] > 0) y1 = y;
+    if (cnt[y] > wide) wide = cnt[y];
+  }
+  if (y0 < 0) return null;
+  let x0 = w, x1 = -1, n = 0, sx = 0;
+  for (let y = y0; y <= y1; y++) for (let x = 0; x < w; x++) {
     if (face[y * w + x] < 0.5) continue;
     n++;
+    sx += x;
     if (x < x0) x0 = x;
     if (x > x1) x1 = x;
-    if (y < y0) y0 = y;
-    if (y > y1) y1 = y;
   }
+  return { x0, x1, y0, y1, n, cx: sx / n };
+}
+
+/**
+ * 얼굴 양옆 앞머리 띠(머니피스 자리)의 무게(0~1, 그림 크기). face: 얼굴 확률(0~1). 얼굴 상자 위쪽(이마)부터 턱 조금 아래까지,
+ * 얼굴 왼쪽·오른쪽 가장자리에서 바깥으로 얼굴 폭 22%·안쪽으로 8% 까지(가운데일수록 1, 띠 끝에서 0). 얼굴이 없으면 null.
+ * 얼굴 픽셀이 얼굴 상자의 절반도 못 채우면(뒷모습의 귀·목, 손이나 머리에 가린 옆얼굴) 띠를 정할 얼굴이 아니라 null:
+ * 뒷모습 염색 사진 5장의 하이라이트가 머니피스로 읽혔다(채움 0.03~0.3, 앞얼굴 사진은 0.58~0.83)
+ */
+export function frontBand(face: ArrayLike<number>, w: number, h: number): Float32Array | null {
+  const box = faceBox(face, w, h);
+  if (!box) return null;
+  const { x0, x1, y0, y1, n } = box;
   if (n < 50 || x1 - x0 < 8) return null;
   const fw = x1 - x0, fh = y1 - y0;
+  if (n < 0.5 * (fw + 1) * (fh + 1)) return null;
   const out = new Float32Array(w * h);
   const out0 = fw * 0.22, in0 = fw * 0.08;
   const yTop = y0 - fh * 0.05, yBot = y1 + fh * 0.25;
@@ -1180,4 +1213,27 @@ export function frontBand(face: ArrayLike<number>, w: number, h: number): Float3
     }
   }
   return out;
+}
+
+/**
+ * 머리 가닥 표시(mask>0)가 얼굴 왼쪽(x<cx)·오른쪽에서 각각 세로로 얼마나 길게 이어지는지(가장 긴 줄기의 길이 / 얼굴 높이).
+ * y0..y1: 얼굴 위~아래, 그 아래 얼굴 높이 25% 까지 본다. 한 줄에 2픽셀 넘으면 이어진 것으로, 4줄까지 비어도 같은 줄기로 본다.
+ * 머니피스는 얼굴 옆을 타고 내려오는 긴 띠고, 검은 머리 윤기·이마의 손·피부 섞인 가장자리는 짧은 조각이다
+ */
+export function sideRuns(mask: ArrayLike<number>, w: number, h: number, y0: number, y1: number, cx: number): [number, number] {
+  const fh = Math.max(1, y1 - y0), yEnd = Math.min(h, Math.ceil(y1 + fh * 0.25));
+  const run = (left: boolean) => {
+    let best = 0, cur = 0, gap = 0;
+    for (let y = Math.max(0, y0); y < yEnd; y++) {
+      let c = 0;
+      for (let x = 0; x < w; x++) if (mask[y * w + x] > 0 && (x < cx) === left) c++;
+      if (c >= 2) {
+        cur += cur > 0 ? 1 + gap : 1;
+        gap = 0;
+        if (cur > best) best = cur;
+      } else if (++gap > 4) cur = gap = 0;
+    }
+    return best / fh;
+  };
+  return [run(true), run(false)];
 }
